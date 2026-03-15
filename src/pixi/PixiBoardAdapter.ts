@@ -150,10 +150,12 @@ const selectLabelFit = (
   const maxLineWidth = cellW / visualScale
   const maxLines = GRID_ROWS
 
-  // Apparent text size on screen depends on both local text scale and camera zoom.
+  // apparentScale = how many screen pixels per font-size unit.
+  // Use it only for the MINIMUM threshold (readability floor).
+  // maxFontSize is capped by what fits in the world-space box, not by zoom.
   const apparentScale = Math.max(0.01, visualScale * zoom)
   const minFontSize = Math.max(1, Math.ceil(minVisiblePx / apparentScale))
-  const maxFontSize = Math.max(minFontSize, Math.floor(maxVisiblePx / apparentScale))
+  const maxFontSize = Math.max(minFontSize, Math.floor(maxVisiblePx / visualScale))
 
   const widthBucket = Math.max(0, Math.round(availableWorldWidth))
   const heightBucket = Math.max(0, Math.round(availableWorldHeight))
