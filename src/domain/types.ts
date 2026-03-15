@@ -22,6 +22,8 @@ export type ItemDefinition = {
   readonly kind: ItemKind
   readonly sixthsPerUnit?: number
   readonly armorClass?: number
+  /** Price in gp (1 pp = 10 gp = 100 sp = 1000 cp). Convert for display only. */
+  readonly priceInGp?: number
 }
 
 export type InventoryEntry = {

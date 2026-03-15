@@ -12,27 +12,27 @@ describe('label engine', () => {
   it('generates torch label ladder', () => {
     expect(buildLabelLadder('Torch')).toEqual({
       micro: 'T',
-      short: 'TR',
-      medium: 'TRCH',
-      full: 'TORCH',
+      short: 'Tr',
+      medium: 'Trch',
+      full: 'Torch',
     })
   })
 
   it('generates plate armor ladder', () => {
     expect(buildLabelLadder('Plate Armor')).toEqual({
       micro: 'P',
-      short: 'PL',
-      medium: 'PLATE',
-      full: 'PLATE ARMOR',
+      short: 'Pl',
+      medium: 'Plate',
+      full: 'Plate Armor',
     })
   })
 
   it('generates varangian silk cloth ladder', () => {
     expect(buildLabelLadder('Varangian Silk Cloth')).toEqual({
-      micro: 'CLTH',
-      short: 'SLK CLTH',
-      medium: 'VAR SILK CLTH',
-      full: 'VARANGIAN SILK CLOTH',
+      micro: 'Clth',
+      short: 'Slk Clth',
+      medium: 'Var Silk Clth',
+      full: 'Varangian Silk Cloth',
     })
   })
 })

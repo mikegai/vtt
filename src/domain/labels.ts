@@ -38,6 +38,16 @@ export const consonantSkeleton = (input: string): string => {
 
 const clampWord = (word: string, max: number): string => word.slice(0, max)
 
+/** Initial cap: first letter uppercase, rest lowercase. */
+const toInitialCap = (s: string): string =>
+  s.length === 0 ? s : s[0].toUpperCase() + s.slice(1).toLowerCase()
+
+/** Title case for display: "Iron rations" not "IRON RATIONS". */
+const toTitleCase = (words: string[]): string =>
+  words
+    .map((w) => toInitialCap(w))
+    .join(' ')
+
 export const buildLabelLadder = (canonicalName: string): LabelLadder => {
   const allWords = normalizeWords(canonicalName)
   const significant = allWords.filter((word) => !stopwords.has(word))
@@ -51,23 +61,29 @@ export const buildLabelLadder = (canonicalName: string): LabelLadder => {
   const keySkeleton = consonantSkeleton(keyNoun)
   const modifiers = words.slice(0, -1)
 
-  const micro = words.length === 1 ? keyNoun[0] : clampWord(keySkeleton, 4)
-  const short = words.length === 1
+  const microRaw = words.length === 1 ? keyNoun[0] : clampWord(keySkeleton, 4)
+  const micro = toInitialCap(microRaw)
+
+  const shortRaw = words.length === 1
     ? clampWord(keySkeleton, 2)
     : `${clampWord(consonantSkeleton(modifiers[modifiers.length - 1]), 3)} ${clampWord(keySkeleton, 4)}`
+  const short = shortRaw.includes(' ')
+    ? toTitleCase(shortRaw.split(' '))
+    : toInitialCap(shortRaw)
 
-  const medium = (() => {
+  const mediumRaw = (() => {
     if (words.length === 1) {
       return keySkeleton.length >= 4 ? clampWord(keySkeleton, 4) : keyNoun
     }
     const mediumModifiers = modifiers.slice(-2).map((word) => (word.length <= 4 ? word : clampWord(word, 3)))
     return [...mediumModifiers, clampWord(keySkeleton, 4)].join(' ')
   })()
+  const medium = toTitleCase(mediumRaw.split(' '))
 
   return {
     micro,
     short,
     medium,
-    full: allWords.join(' '),
+    full: toTitleCase(allWords),
   }
 }

@@ -51,7 +51,8 @@ const getZoomTier = (zoom: number): ZoomTier => {
 }
 
 const TEXT_SCALE_STEPS = [2.2, 1.9, 1.6, 1.35, 1.2, 1.05, 0.92, 0.82, 0.74, 0.66]
-const TEXT_FONT_STEPS = [12, 11, 10, 9, 8, 7]
+const TEXT_FONT_STEPS = [12, 11, 10, 9, 8, 7, 6, 5]
+const MIN_VISIBLE_PX = 6
 
 /** Keep text fairly fixed size across zoom - clamp to narrow range so it stays legible. */
 const getTextCompensationScale = (zoom: number): number => {
@@ -73,7 +74,8 @@ const compactToken = (label: string, maxChars: number): string => {
   const noVowels = collapsed.replace(/[aeiou]/gi, '')
   const source = noVowels.length > 0 ? noVowels : collapsed
   const picked = source.slice(0, maxChars)
-  return picked.length > 0 ? picked.toUpperCase() : label.slice(0, maxChars).toUpperCase()
+  const raw = picked.length > 0 ? picked : label.slice(0, maxChars)
+  return raw.length === 0 ? '' : raw[0].toUpperCase() + raw.slice(1).toLowerCase()
 }
 
 const measureTextWidth = (text: string, fontSize: number, fontFamily = 'monospace', fontWeight = '600'): number => {
@@ -144,16 +146,19 @@ const selectLabelFit = (
   const maxLineWidth = cellW / textCompensationScale
   const maxLines = GRID_ROWS
 
+  const minFontSize = Math.max(1, Math.ceil(MIN_VISIBLE_PX / textCompensationScale))
+  const allowedFontSizes = TEXT_FONT_STEPS.filter((fs) => fs >= minFontSize)
+
   const widthBucket = Math.max(0, Math.round(availableWorldWidth))
   const heightBucket = Math.max(0, Math.round(availableWorldHeight))
   const scaleBucket = Math.round(textCompensationScale * 100)
-  const cacheKey = `${segment.fullLabel}|${segment.mediumLabel}|${segment.shortLabel}|${widthBucket}|${heightBucket}|${scaleBucket}`
+  const cacheKey = `${segment.fullLabel}|${segment.mediumLabel}|${segment.shortLabel}|${widthBucket}|${heightBucket}|${scaleBucket}|${minFontSize}`
   const cached = textFitCache.get(cacheKey)
   if (cached) return cached
 
   const steps = uniqueTextSteps(segment)
   for (const stepText of steps) {
-    for (const fontSize of TEXT_FONT_STEPS) {
+    for (const fontSize of allowedFontSizes) {
       const lineHeight = fontSize * 1.14
       const wrapped = wrapTextByWidth(stepText, maxLineWidth, fontSize, maxLines)
       if (!wrapped) continue
@@ -169,7 +174,10 @@ const selectLabelFit = (
     }
   }
 
-  const fallback = { text: steps[steps.length - 1] ?? '?', fontSize: TEXT_FONT_STEPS[TEXT_FONT_STEPS.length - 1] ?? 7 }
+  const fallback = {
+    text: steps[steps.length - 1] ?? '?',
+    fontSize: Math.max(minFontSize, TEXT_FONT_STEPS[TEXT_FONT_STEPS.length - 1] ?? 5),
+  }
   textFitCache.set(cacheKey, fallback)
   return fallback
 }
@@ -332,7 +340,13 @@ const drawSegmentBlock = (
       useConnectedChain,
       !useConnectedChain,
     )
-    block.rect(startX, METER_Y, width, STONE_H)
+    const first = sixthToCellLocal(segment.startSixth)
+    const last = sixthToCellLocal(segment.startSixth + segment.sizeSixths - 1)
+    const hitX = METER_X + Math.min(first.x, last.x)
+    const hitY = METER_Y + Math.min(first.y, last.y)
+    const hitW = Math.max(first.x, last.x) + STONE_W - Math.min(first.x, last.x)
+    const hitH = Math.max(first.y, last.y) + CELL_H - Math.min(first.y, last.y)
+    block.rect(hitX, hitY, hitW, hitH)
     block.fill({ color: 0xffffff, alpha: 0.001 })
     container.addChild(block)
   }

@@ -228,6 +228,7 @@ export const adventuringSourceItems: readonly SourceItem[] = [
   mk('adventuring-equipment', 'Prosthesis, Leg', '-'),
   mk('adventuring-equipment', 'Quill, writing', '-'),
   mk('adventuring-equipment', 'Quintain', '20'),
+  mk('adventuring-equipment', 'Rations, Iron (one day)', '1/6'),
   mk('adventuring-equipment', 'Rations, Iron (one week)', '1'),
   mk('adventuring-equipment', 'Rations, Standard (one week)', '1'),
   mk('adventuring-equipment', "Rope, 50'", '1'),

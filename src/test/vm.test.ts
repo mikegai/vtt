@@ -7,7 +7,7 @@ describe('board view model', () => {
     const board = buildBoardVM(sampleState)
     expect(board.rows.length).toBe(4)
     expect(board.partyPace.explorationFeet).toBe(30)
-    expect(board.partyPace.limitedByActorId).toBe('exorcist')
+    expect(board.partyPace.limitedByActorId).toBe('templar')
   })
 
   it('uses template names from sample actors', () => {
