@@ -37,6 +37,13 @@ const SPEED_COLORS: Record<string, number> = {
   red: 0xc93d4e,
 }
 
+const fixedSlotBandColor = (stoneIndex: number, greenSlots: number): number => {
+  if (stoneIndex < greenSlots) return SPEED_COLORS.green
+  if (stoneIndex < greenSlots + 2) return SPEED_COLORS.yellow
+  if (stoneIndex < greenSlots + 5) return SPEED_COLORS.orange
+  return SPEED_COLORS.red
+}
+
 const getZoomTier = (zoom: number): ZoomTier => {
   if (zoom < 0.55) return 'far'
   if (zoom < 1.4) return 'medium'
@@ -178,6 +185,12 @@ const METER_WIDTH = SLOT_COUNT * (STONE_W + STONE_GAP) - STONE_GAP
 const isMultiStone = (segment: SceneSegmentVM): boolean =>
   segment.sizeSixths >= 6 && segment.sizeSixths % 6 === 0
 
+const isBookLikeChainable = (segment: SceneSegmentVM): boolean => {
+  const title = segment.tooltip.title.toLowerCase()
+  if (!title.includes('book')) return false
+  return title.includes('holy') || title.includes('spell')
+}
+
 const stoneToX = (stoneIndex: number): number => stoneIndex * (STONE_W + STONE_GAP)
 
 const sixthToCellLocal = (sixthIndex: number): { x: number; y: number } => {
@@ -228,21 +241,6 @@ const localToSixth = (localX: number, localY: number): number => {
   return TOTAL_SIXTHS
 }
 
-const drawStoneSlotOutline = (g: Graphics, sx: number, sy: number, tier: ZoomTier): void => {
-  g.roundRect(sx, sy, STONE_W, STONE_H, 4)
-
-  if (tier === 'close') {
-    for (let row = 1; row < SIXTH_ROWS; row += 1) {
-      g.moveTo(sx, sy + row * CELL_H)
-      g.lineTo(sx + STONE_W, sy + row * CELL_H)
-    }
-    for (let row = 0; row < SIXTH_ROWS; row += 1) {
-      const cy = sy + row * CELL_H + 0.8
-      g.roundRect(sx + 1.4, cy, STONE_W - 2.8, CELL_H - 1.6, 1.6)
-    }
-  }
-}
-
 const drawMultiItemChain = (
   container: Container,
   startSixth: number,
@@ -251,6 +249,8 @@ const drawMultiItemChain = (
   sizeSixths: number,
   color: number,
   alpha: number,
+  connectEdges: boolean,
+  compactCells: boolean,
 ): void => {
   let previousCenter: { x: number; y: number } | null = null
   for (let i = 0; i < sizeSixths; i += 1) {
@@ -258,13 +258,15 @@ const drawMultiItemChain = (
     const x = baseX + slot.x
     const y = baseY + slot.y
     const cellGraphic = new Graphics()
-    cellGraphic.roundRect(x + 1.2, y + 0.6, STONE_W - 2.4, CELL_H - 1.2, 1.8)
+    const padX = compactCells ? 4.2 : 1.2
+    const padY = compactCells ? 2.1 : 0.6
+    cellGraphic.roundRect(x + padX, y + padY, STONE_W - padX * 2, CELL_H - padY * 2, 1.8)
     cellGraphic.fill({ color, alpha })
     container.addChild(cellGraphic)
 
     const centerX = x + STONE_W / 2
     const centerY = y + CELL_H / 2
-    if (previousCenter) {
+    if (connectEdges && previousCenter) {
       const edge = new Graphics()
       edge.setStrokeStyle({ width: 1.2, color, alpha: Math.min(1, alpha + 0.15) })
       edge.moveTo(previousCenter.x, previousCenter.y)
@@ -295,6 +297,8 @@ const drawSegmentBlock = (
   const width = (endStone - startStone) * (STONE_W + STONE_GAP) - STONE_GAP
   const color = segment.isOverflow ? 0x932d4e : hovered ? 0x5cadee : 0x3d9ac9
   const alpha = segment.isOverflow ? 0.58 : 0.82
+  const useConnectedChain = !isMultiStone(segment) && isBookLikeChainable(segment)
+  const renderDiscreteCells = !isMultiStone(segment) && segment.sizeSixths > 1 && !useConnectedChain
 
   const block = new Graphics()
   block.eventMode = 'static'
@@ -323,14 +327,41 @@ const drawSegmentBlock = (
     block.fill({ color, alpha })
     container.addChild(block)
   } else if (tier === 'close') {
-    drawMultiItemChain(container, segment.startSixth, METER_X, METER_Y, segment.sizeSixths, color, alpha)
+    drawMultiItemChain(
+      container,
+      segment.startSixth,
+      METER_X,
+      METER_Y,
+      segment.sizeSixths,
+      color,
+      alpha,
+      useConnectedChain,
+      !useConnectedChain,
+    )
     block.rect(startX, METER_Y, width, STONE_H)
     block.fill({ color: 0xffffff, alpha: 0.001 })
     container.addChild(block)
   } else {
-    block.roundRect(startX + 0.5, METER_Y + 8.5, width - 1, STONE_H - 17, 4)
-    block.fill({ color, alpha: 0.78 })
-    container.addChild(block)
+    if (renderDiscreteCells) {
+      drawMultiItemChain(
+        container,
+        segment.startSixth,
+        METER_X,
+        METER_Y,
+        segment.sizeSixths,
+        color,
+        0.78,
+        false,
+        true,
+      )
+      block.rect(startX, METER_Y, width, STONE_H)
+      block.fill({ color: 0xffffff, alpha: 0.001 })
+      container.addChild(block)
+    } else {
+      block.roundRect(startX + 0.5, METER_Y + 8.5, width - 1, STONE_H - 17, 4)
+      block.fill({ color, alpha: 0.78 })
+      container.addChild(block)
+    }
   }
 
   if (segment.sizeSixths >= 1) {
@@ -357,7 +388,18 @@ const drawSegmentBlock = (
     })
     const zoomReadableScale = zoom < 0.45 ? 1.14 : 1
     txt.scale.set(textCompensationScale * zoomReadableScale)
+    const fitX = availableWorldWidth / Math.max(1, txt.width)
+    const fitY = availableWorldHeight / Math.max(1, txt.height)
+    const hardFitScale = Math.min(1, fitX, fitY)
+    txt.scale.set(txt.scale.x * hardFitScale)
+
     txt.position.set(centerX - txt.width / 2, centerY - txt.height / 2)
+
+    const clip = new Graphics()
+    clip.rect(centerX - availableWorldWidth / 2, centerY - availableWorldHeight / 2, availableWorldWidth, availableWorldHeight)
+    clip.fill({ color: 0xffffff, alpha: 0.001 })
+    container.addChild(clip)
+    txt.mask = clip
     container.addChild(txt)
   }
 }
@@ -544,7 +586,7 @@ export class PixiBoardAdapter {
       rect.stroke({ width: 1, color: 0xd3ebff, alpha: 0.7 })
       ghost.addChild(rect)
     } else {
-      drawMultiItemChain(ghost, 0, 0, 0, segment.sizeSixths, color, alpha)
+      drawMultiItemChain(ghost, 0, 0, 0, segment.sizeSixths, color, alpha, isBookLikeChainable(segment), !isBookLikeChainable(segment))
       const stroke = new Graphics()
       const span = segmentStoneSpan(0, segment.sizeSixths)
       const w = (span.endStone - span.startStone) * (STONE_W + STONE_GAP) - STONE_GAP
@@ -646,40 +688,19 @@ export class PixiBoardAdapter {
     const brightAlpha = tier === 'far' ? 0.36 : 0.48
     for (let stone = 0; stone < SLOT_COUNT; stone += 1) {
       const sx = METER_X + stoneToX(stone)
-      if (tier === 'close') {
-        for (let row = 0; row < SIXTH_ROWS; row += 1) {
-          const sixth = stone * 6 + row
-          const filled = occupiedSixths.has(sixth)
-          const cy = METER_Y + row * CELL_H
-          slotFillLayer.roundRect(sx + 1.6, cy + 0.8, STONE_W - 3.2, CELL_H - 1.6, 1.6)
-          slotFillLayer.fill({
-            color: speedColor,
-            alpha: filled ? brightAlpha : dimAlpha,
-          })
-        }
-      } else {
-        let filledCount = 0
-        for (let row = 0; row < SIXTH_ROWS; row += 1) {
-          if (occupiedSixths.has(stone * 6 + row)) filledCount += 1
-        }
-        const fillRatio = filledCount / 6
-        slotFillLayer.roundRect(sx + 1.4, METER_Y + 1.4, STONE_W - 2.8, STONE_H - 2.8, 3)
+      const slotBandColor = fixedSlotBandColor(stone, node.fixedGreenStoneSlots)
+      for (let row = 0; row < SIXTH_ROWS; row += 1) {
+        const sixth = stone * 6 + row
+        const filled = occupiedSixths.has(sixth)
+        const cy = METER_Y + row * CELL_H
+        slotFillLayer.roundRect(sx + 1.6, cy + 0.8, STONE_W - 3.2, CELL_H - 1.6, 1.6)
         slotFillLayer.fill({
-          color: speedColor,
-          alpha: dimAlpha + (brightAlpha - dimAlpha) * fillRatio,
+          color: slotBandColor,
+          alpha: filled ? brightAlpha : dimAlpha,
         })
       }
     }
     root.addChild(slotFillLayer)
-
-    const slotGraphics = new Graphics()
-    slotGraphics.setStrokeStyle({ width: tier === 'close' ? 1.05 : 0.7, color: 0x2a4170, alpha: 0.72 })
-    for (let stone = 0; stone < SLOT_COUNT; stone += 1) {
-      const sx = METER_X + stoneToX(stone)
-      drawStoneSlotOutline(slotGraphics, sx, METER_Y, tier)
-    }
-    slotGraphics.stroke()
-    root.addChild(slotGraphics)
 
     const segmentContainer = new Container()
     node.segments.forEach((segment) => {

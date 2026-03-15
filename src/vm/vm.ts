@@ -3,7 +3,7 @@ import { packDeterministic, type PackInput } from '../domain/packing'
 import {
   capacitySixthsForStrengthMod,
   encumbranceCostSixths,
-  sixthsToStone,
+  formatSixthsAsStone,
   speedProfileForSixths,
 } from '../domain/rules'
 import { BASE_CAPACITY_SIXTHS, SIXTHS_PER_STONE, type Actor, type CanonicalState, type InventoryEntry } from '../domain/types'
@@ -73,7 +73,7 @@ const toSegmentVM = (
 ): SegmentVM => {
   const labels = buildLabelLadder(canonicalName)
   const zoneLabel = packedSegment.zone[0].toUpperCase() + packedSegment.zone.slice(1)
-  const stoneText = `${packedSegment.sizeSixths}/${SIXTHS_PER_STONE} stone`
+  const stoneText = formatSixthsAsStone(packedSegment.sizeSixths)
 
   return {
     id: packedSegment.inventoryEntryId,
@@ -154,8 +154,8 @@ const buildRow = (
     slots: buildSlots(capacitySixths, segments),
     segments,
     summary: {
-      usedStoneText: `${sixthsToStone(encumbranceSixths)} stone`,
-      capacityStoneText: `${sixthsToStone(capacitySixths)} stone`,
+      usedStoneText: formatSixthsAsStone(encumbranceSixths),
+      capacityStoneText: formatSixthsAsStone(capacitySixths),
       overflowSixths,
     },
     childRows: [],

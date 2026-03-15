@@ -16,6 +16,15 @@ export const sixthsToStone = (sixths: number): number => sixths / SIXTHS_PER_STO
 
 export const stoneToSixths = (stone: number): number => stone * SIXTHS_PER_STONE
 
+/** Format sixths as "X stone" or "X Y/6 stone" (e.g. "9 4/6 stone") to avoid decimal display. */
+export const formatSixthsAsStone = (sixths: number): string => {
+  const n = Math.round(sixths)
+  const whole = Math.floor(n / SIXTHS_PER_STONE)
+  const frac = n % SIXTHS_PER_STONE
+  if (frac === 0) return `${whole} stone`
+  return `${whole} ${frac}/6 stone`
+}
+
 export const armorAcToSixths = (armorClass: number): number => stoneToSixths(armorClass)
 
 export const coinsToSixths = (coins: number): number => Math.ceil(coins / 167)

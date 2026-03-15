@@ -4,6 +4,7 @@ import {
   capacitySixthsForStrengthMod,
   coinsToSixths,
   encumbranceCostSixths,
+  formatSixthsAsStone,
   speedBandForSixths,
   stoneToSixths,
 } from '../domain/rules'
@@ -39,5 +40,12 @@ describe('ACKS rules', () => {
     expect(armorAcToSixths(6)).toBe(stoneToSixths(6))
     const plate: ItemDefinition = { id: 'plate', canonicalName: 'Plate Armor', kind: 'armor', armorClass: 6 }
     expect(encumbranceCostSixths(plate, 1)).toBe(stoneToSixths(6))
+  })
+
+  it('formats sixths as stone with fractional sixths (no decimals)', () => {
+    expect(formatSixthsAsStone(6)).toBe('1 stone')
+    expect(formatSixthsAsStone(58)).toBe('9 4/6 stone')
+    expect(formatSixthsAsStone(37)).toBe('6 1/6 stone')
+    expect(formatSixthsAsStone(0)).toBe('0 stone')
   })
 })

@@ -6,7 +6,7 @@ describe('board view model', () => {
   it('builds rows and party pace from canonical state', () => {
     const board = buildBoardVM(sampleState)
     expect(board.rows.length).toBe(4)
-    expect(board.partyPace.explorationFeet).toBe(60)
+    expect(board.partyPace.explorationFeet).toBe(30)
     expect(board.partyPace.limitedByActorId).toBe('exorcist')
   })
 

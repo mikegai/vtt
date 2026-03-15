@@ -2,6 +2,7 @@ import './style.css'
 import { parseInventoryImportPlan } from './domain/inventory-import-plan'
 import { parseInventoryText } from './domain/inventory-text-parser'
 import { allSourceItems, itemSourceCatalog, type EncumbranceExpr } from './domain/item-source-catalog'
+import { formatSixthsAsStone } from './domain/rules'
 import { createSourceItemSearchIndex } from './domain/item-source-search'
 import { PixiBoardAdapter } from './pixi/PixiBoardAdapter'
 import { sampleState } from './sample-data'
@@ -13,9 +14,10 @@ if (!app) throw new Error('App root missing')
 const sourceItemSearch = createSourceItemSearchIndex()
 
 const formatEncumbrance = (enc: EncumbranceExpr): string => {
-  if (enc.kind === 'fixed') return `${enc.sixths}/6 st`
-  if (enc.kind === 'range') return `${enc.minSixths / 6}-${enc.maxSixths / 6} st`
-  if (enc.kind === 'at-least') return `${enc.minSixths / 6}+ st`
+  const st = (s: string) => s.replace(' stone', ' st')
+  if (enc.kind === 'fixed') return st(formatSixthsAsStone(enc.sixths))
+  if (enc.kind === 'range') return `${st(formatSixthsAsStone(enc.minSixths))}–${st(formatSixthsAsStone(enc.maxSixths))}`
+  if (enc.kind === 'at-least') return st(formatSixthsAsStone(enc.minSixths)) + '+'
   if (enc.kind === 'by-weight') return 'By weight'
   if (enc.kind === 'varies') return 'Varies'
   return '-'

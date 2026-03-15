@@ -16,6 +16,7 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
 
   const allRows = board.rows.flatMap((row) => [row, ...row.childRows])
   allRows.forEach((row, index) => {
+    const actor = worldState.actors[row.actorId]
     const fallback = {
       x: 80,
       y: 80 + index * 104,
@@ -32,6 +33,7 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
       height: baseNodeHeight,
       speedFeet: row.speed.explorationFeet,
       speedBand: row.speedBand.band,
+      fixedGreenStoneSlots: actor?.stats.hasLoadBearing ? 7 : 5,
       usedSixths: row.encumbranceSixths,
       usedStoneText: row.summary.usedStoneText,
       capacityStoneText: row.summary.capacityStoneText,

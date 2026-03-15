@@ -27,6 +27,7 @@ export type SceneNodeVM = {
   readonly height: number
   readonly speedFeet: number
   readonly speedBand: string
+  readonly fixedGreenStoneSlots: number
   readonly usedSixths: number
   readonly usedStoneText: string
   readonly capacityStoneText: string
