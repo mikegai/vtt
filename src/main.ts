@@ -56,6 +56,19 @@ app.innerHTML = `
         <div id="bulk-results" class="parsed-list"></div>
       </section>
 
+      <section class="tool-panel">
+        <label for="label-min-visible-px" class="tool-label">Settings</label>
+        <select id="label-min-visible-px" class="tool-input">
+          <option value="4">Label minimum text size: 4 px</option>
+          <option value="5">Label minimum text size: 5 px</option>
+          <option value="6" selected>Label minimum text size: 6 px</option>
+          <option value="7">Label minimum text size: 7 px</option>
+          <option value="8">Label minimum text size: 8 px</option>
+          <option value="9">Label minimum text size: 9 px</option>
+          <option value="10">Label minimum text size: 10 px</option>
+        </select>
+      </section>
+
       <div class="tool-meta">
         ${allSourceItems.length} source items &bull; ${itemSourceCatalog.armorAndBarding.length} armor &bull; ${itemSourceCatalog.weapons.length} weapons &bull; ${itemSourceCatalog.adventuringEquipment.length} gear
       </div>
@@ -113,6 +126,7 @@ const parseInputEl = document.querySelector<HTMLTextAreaElement>('#parse-input')
 const parseResultsEl = document.querySelector<HTMLElement>('#parse-results')!
 const bulkInputEl = document.querySelector<HTMLTextAreaElement>('#bulk-input')!
 const bulkResultsEl = document.querySelector<HTMLElement>('#bulk-results')!
+const labelMinVisiblePxEl = document.querySelector<HTMLSelectElement>('#label-min-visible-px')!
 
 const escapeRegex = (v: string): string => v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 const appendToken = (q: string, t: string): string => (q.trim().length === 0 ? `${t} ` : `${q.trim()} ${t} `)
@@ -189,3 +203,8 @@ parseInputEl.addEventListener('input', () => renderParsed(parseInputEl.value))
 bulkInputEl.value = `Fighter:\nplate armor, shield, spear\n\nLoot Pile - Crypt Chest:\n2 sacks, 14 torches and 3 flasks of oil`
 renderBulkImport(bulkInputEl.value)
 bulkInputEl.addEventListener('input', () => renderBulkImport(bulkInputEl.value))
+
+pixiAdapter.setLabelMinVisiblePx(Number(labelMinVisiblePxEl.value))
+labelMinVisiblePxEl.addEventListener('change', () => {
+  pixiAdapter.setLabelMinVisiblePx(Number(labelMinVisiblePxEl.value))
+})

@@ -51,8 +51,8 @@ const getZoomTier = (zoom: number): ZoomTier => {
 }
 
 const TEXT_SCALE_STEPS = [2.2, 1.9, 1.6, 1.35, 1.2, 1.05, 0.92, 0.82, 0.74, 0.66]
-const TEXT_FONT_STEPS = [12, 11, 10, 9, 8, 7, 6, 5]
-const MIN_VISIBLE_PX = 6
+const DEFAULT_MIN_VISIBLE_PX = 6
+const DEFAULT_MAX_VISIBLE_PX = 12
 
 /** Keep text fairly fixed size across zoom - clamp to narrow range so it stays legible. */
 const getTextCompensationScale = (zoom: number): number => {
@@ -95,6 +95,7 @@ const measureTextWidth = (text: string, fontSize: number, fontFamily = 'monospac
 
 const uniqueTextSteps = (segment: SceneSegmentVM): string[] => {
   const steps = [
+    segment.tooltip.title,
     segment.fullLabel,
     segment.mediumLabel,
     segment.shortLabel,
@@ -131,41 +132,47 @@ const wrapTextByWidth = (text: string, maxWidth: number, fontSize: number, maxLi
   return lines
 }
 
-/** 2 columns × 3 rows grid - single letter legible when zoomed out. */
-const GRID_COLS = 2
+/** Use denser 2x3 layout only when zoomed far out. */
 const GRID_ROWS = 3
 
 const selectLabelFit = (
   segment: SceneSegmentVM,
-  _tier: ZoomTier,
+  tier: ZoomTier,
   availableWorldWidth: number,
   availableWorldHeight: number,
-  textCompensationScale: number,
+  visualScale: number,
+  zoom: number,
+  minVisiblePx: number,
+  maxVisiblePx: number,
 ): { text: string; fontSize: number } => {
-  const cellW = availableWorldWidth / GRID_COLS
-  const maxLineWidth = cellW / textCompensationScale
+  const gridCols = tier === 'far' ? 2 : 1
+  const cellW = availableWorldWidth / gridCols
+  const maxLineWidth = cellW / visualScale
   const maxLines = GRID_ROWS
 
-  const minFontSize = Math.max(1, Math.ceil(MIN_VISIBLE_PX / textCompensationScale))
-  const allowedFontSizes = TEXT_FONT_STEPS.filter((fs) => fs >= minFontSize)
+  // Apparent text size on screen depends on both local text scale and camera zoom.
+  const apparentScale = Math.max(0.01, visualScale * zoom)
+  const minFontSize = Math.max(1, Math.ceil(minVisiblePx / apparentScale))
+  const maxFontSize = Math.max(minFontSize, Math.floor(maxVisiblePx / apparentScale))
 
   const widthBucket = Math.max(0, Math.round(availableWorldWidth))
   const heightBucket = Math.max(0, Math.round(availableWorldHeight))
-  const scaleBucket = Math.round(textCompensationScale * 100)
-  const cacheKey = `${segment.fullLabel}|${segment.mediumLabel}|${segment.shortLabel}|${widthBucket}|${heightBucket}|${scaleBucket}|${minFontSize}`
+  const scaleBucket = Math.round(visualScale * 100)
+  const zoomBucket = Math.round(zoom * 100)
+  const cacheKey = `${segment.tooltip.title}|${segment.fullLabel}|${segment.mediumLabel}|${segment.shortLabel}|${tier}|${gridCols}|${widthBucket}|${heightBucket}|${scaleBucket}|${zoomBucket}|${minFontSize}|${maxFontSize}`
   const cached = textFitCache.get(cacheKey)
   if (cached) return cached
 
   const steps = uniqueTextSteps(segment)
   for (const stepText of steps) {
-    for (const fontSize of allowedFontSizes) {
+    for (let fontSize = maxFontSize; fontSize >= minFontSize; fontSize -= 1) {
       const lineHeight = fontSize * 1.14
       const wrapped = wrapTextByWidth(stepText, maxLineWidth, fontSize, maxLines)
       if (!wrapped) continue
       const widestLine = wrapped.reduce((max, line) => Math.max(max, measureTextWidth(line, fontSize)), 0)
       const totalHeight = wrapped.length * lineHeight
-      const worldWidth = widestLine * textCompensationScale
-      const worldHeight = totalHeight * textCompensationScale
+      const worldWidth = widestLine * visualScale
+      const worldHeight = totalHeight * visualScale
       if (worldWidth <= availableWorldWidth && worldHeight <= availableWorldHeight) {
         const fit = { text: wrapped.join('\n'), fontSize }
         textFitCache.set(cacheKey, fit)
@@ -176,7 +183,7 @@ const selectLabelFit = (
 
   const fallback = {
     text: steps[steps.length - 1] ?? '?',
-    fontSize: Math.max(minFontSize, TEXT_FONT_STEPS[TEXT_FONT_STEPS.length - 1] ?? 5),
+    fontSize: minFontSize,
   }
   textFitCache.set(cacheKey, fallback)
   return fallback
@@ -289,6 +296,8 @@ const drawSegmentBlock = (
   hovered: boolean,
   handlers: AdapterHandlers,
   textCompensationScale: number,
+  minVisibleLabelPx: number,
+  maxVisibleLabelPx: number,
   onTooltipEnter?: (segment: SceneSegmentVM, globalX: number, globalY: number) => void,
   onTooltipMove?: (globalX: number, globalY: number) => void,
   onTooltipLeave?: () => void,
@@ -368,17 +377,23 @@ const drawSegmentBlock = (
       availableWorldWidth = Math.max(8, maxX - minX - 6)
       availableWorldHeight = Math.max(8, maxY - minY - 6)
     }
-    const fit = selectLabelFit(segment, tier, availableWorldWidth, availableWorldHeight, textCompensationScale)
+    const zoomReadableScale = zoom < 0.45 ? 1.14 : 1
+    const visualScale = textCompensationScale * zoomReadableScale
+    const fit = selectLabelFit(
+      segment,
+      tier,
+      availableWorldWidth,
+      availableWorldHeight,
+      visualScale,
+      zoom,
+      minVisibleLabelPx,
+      maxVisibleLabelPx,
+    )
     const txt = new Text({
       text: fit.text,
       style: { fill: '#f0f8ff', fontSize: fit.fontSize, fontFamily: 'monospace', fontWeight: '600', align: 'center' },
     })
-    const zoomReadableScale = zoom < 0.45 ? 1.14 : 1
-    txt.scale.set(textCompensationScale * zoomReadableScale)
-    const fitX = availableWorldWidth / Math.max(1, txt.width)
-    const fitY = availableWorldHeight / Math.max(1, txt.height)
-    const hardFitScale = Math.max(0.8, Math.min(1, fitX, fitY))
-    txt.scale.set(txt.scale.x * hardFitScale)
+    txt.scale.set(visualScale)
 
     txt.position.set(centerX - txt.width / 2, centerY - txt.height / 2)
 
@@ -406,6 +421,8 @@ export class PixiBoardAdapter {
   private readonly tooltipText: Text
   private currentScene: SceneVM | null = null
   private segmentDrag: SegmentDragState | null = null
+  private minVisibleLabelPx = DEFAULT_MIN_VISIBLE_PX
+  private readonly maxVisibleLabelPx = DEFAULT_MAX_VISIBLE_PX
 
   constructor(host: HTMLElement, handlers: AdapterHandlers) {
     this.handlers = handlers
@@ -530,6 +547,12 @@ export class PixiBoardAdapter {
 
   private hideTooltip(): void {
     this.tooltipLayer.visible = false
+  }
+
+  setLabelMinVisiblePx(value: number): void {
+    this.minVisibleLabelPx = Math.max(4, Math.min(12, Math.round(value)))
+    textFitCache.clear()
+    if (this.currentScene) this.rebuildAllNodes(this.currentScene)
   }
 
   private screenToWorld(clientX: number, clientY: number): { x: number; y: number } {
@@ -700,6 +723,8 @@ export class PixiBoardAdapter {
         hovered,
         this.handlers,
         textCompensationScale,
+        this.minVisibleLabelPx,
+        this.maxVisibleLabelPx,
         (seg, x, y) => this.showTooltip(seg, x, y),
         (x, y) => this.moveTooltip(x, y),
         () => this.hideTooltip(),
