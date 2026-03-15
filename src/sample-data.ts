@@ -64,7 +64,7 @@ export const sampleState: CanonicalState = {
     warhammer: { id: 'warhammer', canonicalName: 'Warhammer', kind: 'bulky' },
     steelShield: { id: 'steelShield', canonicalName: 'Steel shield', kind: 'bulky' },
     bandedPlateArmor: { id: 'bandedPlateArmor', canonicalName: 'Banded plate armor', kind: 'armor', armorClass: 6 },
-    holyWater: { id: 'holyWater', canonicalName: 'Flask of holy water', kind: 'standard', sixthsPerUnit: 2 },
+    holyWater: { id: 'holyWater', canonicalName: 'Flask of holy water', kind: 'standard', sixthsPerUnit: 1 },
     manacles: { id: 'manacles', canonicalName: 'Manacles', kind: 'standard', sixthsPerUnit: 1 },
     polishedSword: { id: 'polishedSword', canonicalName: 'Polished sword', kind: 'bulky' },
     ridingSaddleTack: { id: 'ridingSaddleTack', canonicalName: 'Riding saddle and tack', kind: 'standard', sixthsPerUnit: 4 },

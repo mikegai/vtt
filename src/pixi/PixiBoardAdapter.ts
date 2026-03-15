@@ -53,11 +53,13 @@ const getZoomTier = (zoom: number): ZoomTier => {
 const TEXT_SCALE_STEPS = [2.2, 1.9, 1.6, 1.35, 1.2, 1.05, 0.92, 0.82, 0.74, 0.66]
 const TEXT_FONT_STEPS = [12, 11, 10, 9, 8, 7]
 
+/** Keep text fairly fixed size across zoom - clamp to narrow range so it stays legible. */
 const getTextCompensationScale = (zoom: number): number => {
   const raw = 1 / zoom
-  return TEXT_SCALE_STEPS.reduce((best, step) => {
+  const matched = TEXT_SCALE_STEPS.reduce((best, step) => {
     return Math.abs(step - raw) < Math.abs(best - raw) ? step : best
   }, TEXT_SCALE_STEPS[0] ?? 1)
+  return Math.min(1.1, Math.max(0.85, matched))
 }
 
 const widthMeasureCanvas =
@@ -89,44 +91,30 @@ const measureTextWidth = (text: string, fontSize: number, fontFamily = 'monospac
   return measured
 }
 
-const uniqueTextSteps = (segment: SceneSegmentVM, tier: ZoomTier): string[] => {
-  const micro = compactToken(segment.shortLabel, tier === 'far' ? 2 : 3)
+const uniqueTextSteps = (segment: SceneSegmentVM): string[] => {
   const steps = [
     segment.fullLabel,
     segment.mediumLabel,
     segment.shortLabel,
-    micro,
+    compactToken(segment.shortLabel, 4),
+    compactToken(segment.shortLabel, 3),
+    compactToken(segment.shortLabel, 2),
     compactToken(segment.shortLabel, 1),
   ]
   return steps.filter((value, index) => steps.indexOf(value) === index)
 }
 
-const breakWordToFit = (word: string, maxWidth: number, fontSize: number): string[] => {
-  const chunks: string[] = []
-  let current = ''
-  for (const ch of word) {
-    const next = `${current}${ch}`
-    if (measureTextWidth(next, fontSize) <= maxWidth || current.length === 0) {
-      current = next
-      continue
-    }
-    chunks.push(current)
-    current = ch
-  }
-  if (current.length > 0) chunks.push(current)
-  return chunks.length > 0 ? chunks : [word]
-}
-
+/** Wrap at word boundaries only - never mid-letter. Returns null if any word exceeds maxWidth. */
 const wrapTextByWidth = (text: string, maxWidth: number, fontSize: number, maxLines: number): string[] | null => {
   const words = text.trim().split(/\s+/).filter((part) => part.length > 0)
   if (words.length === 0) return null
-  const expandedWords = words.flatMap((word) =>
-    measureTextWidth(word, fontSize) <= maxWidth ? [word] : breakWordToFit(word, maxWidth, fontSize),
-  )
+  for (const word of words) {
+    if (measureTextWidth(word, fontSize) > maxWidth) return null
+  }
 
   const lines: string[] = []
   let line = ''
-  for (const word of expandedWords) {
+  for (const word of words) {
     const candidate = line.length === 0 ? word : `${line} ${word}`
     if (measureTextWidth(candidate, fontSize) <= maxWidth) {
       line = candidate
@@ -141,26 +129,33 @@ const wrapTextByWidth = (text: string, maxWidth: number, fontSize: number, maxLi
   return lines
 }
 
+/** 2 columns × 3 rows grid - single letter legible when zoomed out. */
+const GRID_COLS = 2
+const GRID_ROWS = 3
+
 const selectLabelFit = (
   segment: SceneSegmentVM,
-  tier: ZoomTier,
+  _tier: ZoomTier,
   availableWorldWidth: number,
   availableWorldHeight: number,
   textCompensationScale: number,
 ): { text: string; fontSize: number } => {
+  const cellW = availableWorldWidth / GRID_COLS
+  const maxLineWidth = cellW / textCompensationScale
+  const maxLines = GRID_ROWS
+
   const widthBucket = Math.max(0, Math.round(availableWorldWidth))
   const heightBucket = Math.max(0, Math.round(availableWorldHeight))
   const scaleBucket = Math.round(textCompensationScale * 100)
-  const cacheKey = `${segment.fullLabel}|${segment.mediumLabel}|${segment.shortLabel}|${tier}|${widthBucket}|${heightBucket}|${scaleBucket}`
+  const cacheKey = `${segment.fullLabel}|${segment.mediumLabel}|${segment.shortLabel}|${widthBucket}|${heightBucket}|${scaleBucket}`
   const cached = textFitCache.get(cacheKey)
   if (cached) return cached
 
-  const steps = uniqueTextSteps(segment, tier)
+  const steps = uniqueTextSteps(segment)
   for (const stepText of steps) {
     for (const fontSize of TEXT_FONT_STEPS) {
       const lineHeight = fontSize * 1.14
-      const maxLines = Math.max(1, Math.min(3, Math.floor(availableWorldHeight / (lineHeight * textCompensationScale))))
-      const wrapped = wrapTextByWidth(stepText, availableWorldWidth / textCompensationScale, fontSize, maxLines)
+      const wrapped = wrapTextByWidth(stepText, maxLineWidth, fontSize, maxLines)
       if (!wrapped) continue
       const widestLine = wrapped.reduce((max, line) => Math.max(max, measureTextWidth(line, fontSize)), 0)
       const totalHeight = wrapped.length * lineHeight
@@ -298,7 +293,6 @@ const drawSegmentBlock = (
   const color = segment.isOverflow ? 0x932d4e : hovered ? 0x5cadee : 0x3d9ac9
   const alpha = segment.isOverflow ? 0.58 : 0.82
   const useConnectedChain = !isMultiStone(segment) && isBookLikeChainable(segment)
-  const renderDiscreteCells = !isMultiStone(segment) && segment.sizeSixths > 1 && !useConnectedChain
 
   const block = new Graphics()
   block.eventMode = 'static'
@@ -326,7 +320,7 @@ const drawSegmentBlock = (
     block.roundRect(startX + 0.5, METER_Y + 2.5, width - 1, STONE_H - 5, 5)
     block.fill({ color, alpha })
     container.addChild(block)
-  } else if (tier === 'close') {
+  } else {
     drawMultiItemChain(
       container,
       segment.startSixth,
@@ -341,27 +335,6 @@ const drawSegmentBlock = (
     block.rect(startX, METER_Y, width, STONE_H)
     block.fill({ color: 0xffffff, alpha: 0.001 })
     container.addChild(block)
-  } else {
-    if (renderDiscreteCells) {
-      drawMultiItemChain(
-        container,
-        segment.startSixth,
-        METER_X,
-        METER_Y,
-        segment.sizeSixths,
-        color,
-        0.78,
-        false,
-        true,
-      )
-      block.rect(startX, METER_Y, width, STONE_H)
-      block.fill({ color: 0xffffff, alpha: 0.001 })
-      container.addChild(block)
-    } else {
-      block.roundRect(startX + 0.5, METER_Y + 8.5, width - 1, STONE_H - 17, 4)
-      block.fill({ color, alpha: 0.78 })
-      container.addChild(block)
-    }
   }
 
   if (segment.sizeSixths >= 1) {
@@ -369,7 +342,7 @@ const drawSegmentBlock = (
     let availableWorldHeight = Math.max(8, STONE_H - 8)
     let centerX = startX + width / 2
     let centerY = METER_Y + STONE_H / 2
-    if (!isMultiStone(segment) && tier === 'close') {
+    if (!isMultiStone(segment)) {
       const first = sixthToCellLocal(segment.startSixth)
       const last = sixthToCellLocal(segment.startSixth + segment.sizeSixths - 1)
       const minX = METER_X + Math.min(first.x, last.x)
@@ -390,7 +363,7 @@ const drawSegmentBlock = (
     txt.scale.set(textCompensationScale * zoomReadableScale)
     const fitX = availableWorldWidth / Math.max(1, txt.width)
     const fitY = availableWorldHeight / Math.max(1, txt.height)
-    const hardFitScale = Math.min(1, fitX, fitY)
+    const hardFitScale = Math.max(0.8, Math.min(1, fitX, fitY))
     txt.scale.set(txt.scale.x * hardFitScale)
 
     txt.position.set(centerX - txt.width / 2, centerY - txt.height / 2)
