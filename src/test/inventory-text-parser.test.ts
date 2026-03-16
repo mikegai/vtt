@@ -18,6 +18,34 @@ describe('inventory text parser', () => {
     })
   })
 
+  it('extracts and strips stone/weight notation', () => {
+    expect(extractQuantityAndName('mysterious artifact (4 st.)')).toEqual({
+      quantity: 1,
+      candidateName: 'mysterious artifact',
+      stoneOverride: 4,
+    })
+    expect(extractQuantityAndName('chest weighing 4 stone')).toEqual({
+      quantity: 1,
+      candidateName: 'chest',
+      stoneOverride: 4,
+    })
+    expect(extractQuantityAndName('heavy box 2 st')).toEqual({
+      quantity: 1,
+      candidateName: 'heavy box',
+      stoneOverride: 2,
+    })
+    expect(extractQuantityAndName('small item 1/6 stone')).toEqual({
+      quantity: 1,
+      candidateName: 'small item',
+      stoneOverride: 1 / 6,
+    })
+    expect(extractQuantityAndName('2 torches (1 st.)')).toEqual({
+      quantity: 2,
+      candidateName: 'torches',
+      stoneOverride: 1,
+    })
+  })
+
   it('resolves obvious catalog items and keeps unknowns', () => {
     const parsed = parseInventoryText('plate armor, shield, short sword, 2 sacks of silver dust')
     expect(parsed.chunks.length).toBe(4)

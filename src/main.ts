@@ -2,7 +2,7 @@ import './style.css'
 import { parseInventoryImportPlan } from './domain/inventory-import-plan'
 import { parseInventoryText } from './domain/inventory-text-parser'
 import { allSourceItems, itemSourceCatalog, type EncumbranceExpr, type SourceItem } from './domain/item-source-catalog'
-import { formatSixthsAsStone } from './domain/rules'
+import { formatSixthsAsStone, stoneToSixths } from './domain/rules'
 import { createSourceItemSearchIndex } from './domain/item-source-search'
 import { getWieldOptions } from './domain/weapon-metadata'
 import { PixiBoardAdapter } from './pixi/PixiBoardAdapter'
@@ -381,6 +381,13 @@ const showCanvasContextMenu = (worldX: number, worldY: number, clientX: number, 
 const escapeAttr = (s: string): string =>
   s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
+const CUSTOM_ITEM_ID = '__custom__'
+const slugify = (s: string): string =>
+  s
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/(^-|-$)/g, '')
+
 type ParsedSpawnItem = {
   id: string
   raw: string
@@ -390,6 +397,7 @@ type ParsedSpawnItem = {
   itemDefId: string | null
   itemName: string
   sizeSixths: number
+  sixthsPerUnit?: number
   alternatives: readonly { itemId: string; itemName: string }[]
 }
 
@@ -533,8 +541,10 @@ const pixiAdapter = new PixiBoardAdapter(canvasHost, {
     activeParsedDrag = null
     if (!item.itemDefId) return
     if (!targetNodeId && (x == null || y == null)) return
-    const sourceItem = item.itemDefId ? sourceItemById.get(item.itemDefId) : null
-    const derived = sourceItem ? deriveItemKind(sourceItem) : { kind: 'standard', sixthsPerUnit: 1 }
+    const sourceItem = item.itemDefId.startsWith('custom:') ? null : sourceItemById.get(item.itemDefId)
+    const derived = sourceItem
+      ? deriveItemKind(sourceItem)
+      : { kind: 'standard' as const, sixthsPerUnit: item.sixthsPerUnit ?? SIXTHS_PER_STONE }
     const segmentIds = freeSegmentPositions
       ? Array.from({ length: item.quantity }, (_, i) => `ext-${item.id}-${i}`)
       : undefined
@@ -548,7 +558,7 @@ const pixiAdapter = new PixiBoardAdapter(canvasHost, {
         x,
         y,
         itemName: item.itemName,
-        sixthsPerUnit: derived.sixthsPerUnit,
+        sixthsPerUnit: item.sixthsPerUnit ?? derived.sixthsPerUnit,
         itemKind: derived.kind,
         armorClass: derived.armorClass,
         segmentIds,
@@ -651,12 +661,41 @@ const renderParsed = (text: string): void => {
   const parsed = parseInventoryText(text, sourceItemSearch)
   parsedSpawnItems = parsed.chunks.map((c, idx) => {
     const override = disambiguationOverrides[c.raw]
-    const itemDefId = override ?? c.resolvedItemId ?? null
-    const itemName = override
-      ? (c.alternatives.find((a) => a.itemId === override)?.itemName ?? c.candidateName)
-      : (c.resolvedItemName ?? c.candidateName)
-    const sourceItem = itemDefId ? sourceItemById.get(itemDefId) : null
-    const perUnitSixths = sourceItem ? perUnitSixthsFromSource(sourceItem) : 1
+    const isCustom = override === CUSTOM_ITEM_ID
+    let customSlug = slugify(c.candidateName) || slugify(c.raw) || 'custom-item'
+    if (isCustom && c.stoneOverride != null) {
+      const sixths = Math.round(stoneToSixths(c.stoneOverride))
+      customSlug = `${customSlug}-${sixths}`
+    }
+    const customDefId = `custom:${customSlug}`
+
+    let itemDefId: string | null
+    let itemName: string
+    let perUnitSixths: number
+    let sixthsPerUnit: number | undefined
+
+    if (isCustom) {
+      itemDefId = customDefId
+      itemName = c.candidateName || c.raw || 'Custom item'
+      if (c.stoneOverride != null) {
+        perUnitSixths = Math.max(1, Math.round(stoneToSixths(c.stoneOverride)))
+      } else if (c.alternatives.length > 0) {
+        const best = sourceItemById.get(c.alternatives[0].itemId)
+        perUnitSixths = best ? perUnitSixthsFromSource(best) : SIXTHS_PER_STONE
+      } else {
+        perUnitSixths = SIXTHS_PER_STONE
+      }
+      sixthsPerUnit = perUnitSixths
+    } else {
+      itemDefId = override ?? c.resolvedItemId ?? null
+      itemName = override
+        ? (c.alternatives.find((a) => a.itemId === override)?.itemName ?? c.candidateName)
+        : (c.resolvedItemName ?? c.candidateName)
+      const sourceItem = itemDefId ? sourceItemById.get(itemDefId) : null
+      perUnitSixths = sourceItem ? perUnitSixthsFromSource(sourceItem) : 1
+    }
+
+    const alts = c.alternatives.map((a) => ({ itemId: a.itemId, itemName: a.itemName }))
     return {
       id: `${idx}`,
       raw: c.raw,
@@ -666,22 +705,22 @@ const renderParsed = (text: string): void => {
       itemDefId,
       itemName,
       sizeSixths: Math.max(1, perUnitSixths * c.quantity),
-      alternatives: c.alternatives.map((a) => ({ itemId: a.itemId, itemName: a.itemName })),
+      ...(sixthsPerUnit != null && { sixthsPerUnit }),
+      alternatives: alts,
     }
   })
 
   parseResultsEl.innerHTML = parsedSpawnItems
     .filter((item) => !consumedParsedIds.has(item.id))
     .map((item) => {
-      const altsHtml =
-        item.alternatives.length > 0
-          ? `<div class="alt-pills">${item.alternatives
-              .map(
-                (a) =>
-                  `<button class="alt-pill ${a.itemId === item.itemDefId ? 'alt-pill-selected' : ''}" data-raw="${escapeHtml(item.raw)}" data-item-id="${escapeHtml(a.itemId)}" type="button">${escapeHtml(a.itemName)}</button>`,
-              )
-              .join('')}</div>`
-          : ''
+      const catalogPills = item.alternatives
+        .map(
+          (a) =>
+            `<button class="alt-pill ${a.itemId === item.itemDefId ? 'alt-pill-selected' : ''}" data-raw="${escapeHtml(item.raw)}" data-item-id="${escapeHtml(a.itemId)}" type="button">${escapeHtml(a.itemName)}</button>`,
+        )
+        .join('')
+      const customPill = `<button class="alt-pill ${item.itemDefId?.startsWith('custom:') ? 'alt-pill-selected' : ''}" data-raw="${escapeHtml(item.raw)}" data-item-id="${escapeHtml(CUSTOM_ITEM_ID)}" type="button">As-is</button>`
+      const altsHtml = `<div class="alt-pills">${catalogPills}${customPill}</div>`
       const draggableClass = item.itemDefId ? ' parsed-item-draggable' : ''
       return `<div class="parsed-item${draggableClass} status-${item.status}" data-parsed-id="${escapeAttr(item.id)}" data-raw="${escapeHtml(item.raw)}">
         <div class="parsed-head">
@@ -798,8 +837,10 @@ document.addEventListener('pointermove', (e) => {
       activeParsedDrag.ghost.remove()
       activeParsedDrag.enteredCanvas = true
       const item = activeParsedDrag.parsedItem
-      const sourceItem = item.itemDefId ? sourceItemById.get(item.itemDefId) : null
-      const perUnitSixths = sourceItem ? perUnitSixthsFromSource(sourceItem) : 1
+      const sourceItem = item.itemDefId?.startsWith('custom:') ? null : (item.itemDefId ? sourceItemById.get(item.itemDefId) : null)
+      const perUnitSixths = sourceItem
+        ? perUnitSixthsFromSource(sourceItem)
+        : (item.sixthsPerUnit ?? SIXTHS_PER_STONE)
       const syntheticSegments: SceneSegmentVM[] = []
       for (let i = 0; i < item.quantity; i++) {
         syntheticSegments.push({
