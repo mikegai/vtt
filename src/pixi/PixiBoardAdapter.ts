@@ -1,5 +1,5 @@
 import { Application, Assets, BitmapText, Color, Container, Graphics, Point, Rectangle } from 'pixi.js'
-import { createSpring2D, setSpringTarget, updateSpring2D } from './spring'
+import { createSpring1D, createSpring2D, setSpring1DTarget, setSpringTarget, updateSpring1D, updateSpring2D } from './spring'
 import type { SceneFreeSegmentVM, SceneGroupVM, SceneLabelVM, SceneNodeVM, ScenePatch, SceneVM, SceneSegmentVM } from '../worker/protocol'
 
 /** Stored on segment blocks for context-menu hit testing. */
@@ -68,6 +68,12 @@ type NodeView = {
   readonly contentContainer: Container
   segmentViews: Map<string, SegmentView>
   moveToRootBtn?: Graphics
+  totalWidth: number
+  totalHeight: number
+  clipWidthSpring?: ReturnType<typeof createSpring1D>
+  clipHeightSpring?: ReturnType<typeof createSpring1D>
+  contentClip?: Graphics
+  onClipAnimationComplete?: () => void
 }
 
 type GroupView = {
@@ -106,6 +112,7 @@ const TOP_BAND_H = 22
 const SLOT_START_X = 10
 const DEFAULT_STONES_PER_ROW = 25
 const STONE_ROW_GAP = 3
+const NODE_CLIP_LEFT_OVERFLOW = 24
 
 let stonesPerRow = DEFAULT_STONES_PER_ROW
 
@@ -293,6 +300,14 @@ const stoneToY = (stoneIndex: number): number =>
 const slotAreaHeightForSlots = (slotCount: number): number => {
   const numRows = Math.ceil(slotCount / stonesPerRow)
   return numRows * (STONE_H + STONE_ROW_GAP) - STONE_ROW_GAP
+}
+
+const drawNodeClipMask = (clip: Graphics, width: number, height: number): void => {
+  clip.clear()
+  clip.roundRect(0, 0, width, height, 10)
+  // Preserve left-side overhang controls (drag handle / move-to-root) while clipping body.
+  clip.rect(-NODE_CLIP_LEFT_OVERFLOW, 0, NODE_CLIP_LEFT_OVERFLOW, height)
+  clip.fill({ color: 0xffffff, alpha: 0.001 })
 }
 
 /** Group sixths by stone column for blended rect drawing. */
@@ -723,6 +738,7 @@ const drawSegmentBlock = (
   onSegmentClick?: (segmentId: string, nodeId: string, addToSelection: boolean) => void,
   onSegmentDoubleClick?: (segmentId: string, itemDefId: string, nodeId: string) => void,
   getLastDragEndTime?: () => number,
+  allowInteraction?: () => boolean,
 ): void => {
   const o = baseOffset ?? { x: 0, y: 0 }
   const { startStone, endStone } = segmentStoneSpan(segment.startSixth, segment.sizeSixths)
@@ -736,13 +752,16 @@ const drawSegmentBlock = (
   block.eventMode = 'static'
   block.cursor = 'pointer'
   block.on('pointerover', (event: any) => {
+    if (allowInteraction && !allowInteraction()) return
     handlers.onHoverSegment(segment.id)
     onTooltipEnter?.(segment, event.global.x, event.global.y)
   })
   block.on('pointermove', (event: any) => {
+    if (allowInteraction && !allowInteraction()) return
     onTooltipMove?.(event.global.x, event.global.y)
   })
   block.on('pointerout', () => {
+    if (allowInteraction && !allowInteraction()) return
     handlers.onHoverSegment(null)
     onTooltipLeave?.()
   })
@@ -759,6 +778,7 @@ const drawSegmentBlock = (
   }
   if (nodeId && (onSegmentClick || onSegmentDoubleClick)) {
     block.on('pointertap', (event: any) => {
+      if (allowInteraction && !allowInteraction()) return
       if (event.button !== 0) return
       if (getLastDragEndTime && Date.now() - getLastDragEndTime() < 150) return
       if (event.detail === 2) {
@@ -1673,6 +1693,7 @@ export class PixiBoardAdapter {
     hoveredSegmentId: string | null,
     filterCategory: string | null,
     selectedSegmentIds: readonly string[],
+    previousSize?: { width: number; height: number },
   ): NodeView {
     const tier = getZoomTier(this.zoom)
     const textCompensationScale = getTextCompensationScale(this.zoom)
@@ -1852,6 +1873,7 @@ export class PixiBoardAdapter {
         this.handlers.onSegmentClick,
         this.handlers.onSegmentDoubleClick,
         () => this.lastDragEndTime,
+        () => this.activeDrag.type === 'idle',
       )
       segmentContainer.addChild(segContainer)
     })
@@ -1860,7 +1882,38 @@ export class PixiBoardAdapter {
     root.position.set(displayPos.x, displayPos.y)
     this.enableDrag(dragHandle, root, node.id)
     this.worldLayer.addChild(root)
-    return { root, positionSpring, segmentContainer, contentContainer, segmentViews, moveToRootBtn }
+
+    let clipWidthSpring: ReturnType<typeof createSpring1D> | undefined
+    let clipHeightSpring: ReturnType<typeof createSpring1D> | undefined
+    let contentClip: Graphics | undefined
+    const needsClipAnimation =
+      previousSize !== undefined &&
+      (Math.abs(previousSize.width - totalWidth) > 0.5 || Math.abs(previousSize.height - totalHeight) > 0.5)
+    if (needsClipAnimation) {
+      clipWidthSpring = createSpring1D(previousSize.width)
+      clipHeightSpring = createSpring1D(previousSize.height)
+      setSpring1DTarget(clipWidthSpring, totalWidth)
+      setSpring1DTarget(clipHeightSpring, totalHeight)
+      contentClip = new Graphics()
+      contentClip.eventMode = 'none'
+      drawNodeClipMask(contentClip, clipWidthSpring.value, clipHeightSpring.value)
+      root.addChildAt(contentClip, 0)
+      contentContainer.mask = contentClip
+    }
+
+    return {
+      root,
+      positionSpring,
+      segmentContainer,
+      contentContainer,
+      segmentViews,
+      moveToRootBtn,
+      totalWidth,
+      totalHeight,
+      clipWidthSpring,
+      clipHeightSpring,
+      contentClip,
+    }
   }
 
   private updateNode(
@@ -1954,6 +2007,7 @@ export class PixiBoardAdapter {
           this.handlers.onSegmentClick,
           this.handlers.onSegmentDoubleClick,
           () => this.lastDragEndTime,
+          () => this.activeDrag.type === 'idle',
         )
         view.segmentContainer.addChild(segContainer)
       } else {
@@ -1992,6 +2046,7 @@ export class PixiBoardAdapter {
           this.handlers.onSegmentClick,
           this.handlers.onSegmentDoubleClick,
           () => this.lastDragEndTime,
+          () => this.activeDrag.type === 'idle',
         )
       }
     })
@@ -2000,6 +2055,8 @@ export class PixiBoardAdapter {
   private enableDrag(handleView: Container, nodeContainer: Container, nodeId: string): void {
     handleView.on('pointerdown', (event) => {
       if (event.button !== 0 || this.activeDrag.type !== 'idle' || !this.currentScene) return
+      this.handlers.onHoverSegment(null)
+      this.hideTooltip()
       const nodeIds: string[] = [nodeId]
       for (const n of Object.values(this.currentScene.nodes)) {
         if (n.parentNodeId === nodeId) nodeIds.push(n.id)
@@ -2116,6 +2173,7 @@ export class PixiBoardAdapter {
       this.handlers.onSegmentClick,
       this.handlers.onSegmentDoubleClick,
       () => this.lastDragEndTime,
+      () => this.activeDrag.type === 'idle',
     )
     this.worldLayer.addChild(root)
     return { root }
@@ -2412,8 +2470,10 @@ export class PixiBoardAdapter {
     if (!this.fontsLoaded) return
     this.recomputeDisplayFlow(scene)
     const previousNodePositions = new Map<string, { x: number; y: number }>()
+    const previousNodeSizes = new Map<string, { width: number; height: number }>()
     for (const [nodeId, view] of this.nodeViews) {
       previousNodePositions.set(nodeId, { x: view.root.position.x, y: view.root.position.y })
+      previousNodeSizes.set(nodeId, { width: view.totalWidth, height: view.totalHeight })
     }
     for (const [, view] of this.groupViews) {
       this.groupLayer.removeChild(view.root)
@@ -2442,7 +2502,20 @@ export class PixiBoardAdapter {
     const filterCategory = scene.filterCategory ?? null
     const selectedSegmentIds = scene.selectedSegmentIds ?? []
     Object.values(scene.nodes).forEach((node) => {
-      const view = this.createNode(node, scene.hoveredSegmentId ?? null, filterCategory, selectedSegmentIds)
+      const previousNodeSize = previousNodeSizes.get(node.id)
+      const targetDims = this.getNodeDisplayDimensions(node)
+      const previousSize =
+        previousNodeSize &&
+        (targetDims.width > previousNodeSize.width || targetDims.height > previousNodeSize.height)
+          ? previousNodeSize
+          : undefined
+      const view = this.createNode(
+        node,
+        scene.hoveredSegmentId ?? null,
+        filterCategory,
+        selectedSegmentIds,
+        previousSize,
+      )
       const displayPos = this.getNodeDisplayPosition(node)
       if (this.skipNodeAnimationOnce.delete(node.id)) {
         view.positionSpring.x = displayPos.x
@@ -2538,15 +2611,40 @@ export class PixiBoardAdapter {
   private updateSprings(): void {
     const dt = 1 / 60
     let anyActive = false
+    const completedTransitions: Array<() => void> = []
     for (const [, view] of this.nodeViews) {
       if (updateSpring2D(view.positionSpring, dt)) anyActive = true
       view.root.position.set(view.positionSpring.x, view.positionSpring.y)
+      if (view.clipWidthSpring && view.clipHeightSpring && view.contentClip) {
+        const widthActive = updateSpring1D(view.clipWidthSpring, dt)
+        const heightActive = updateSpring1D(view.clipHeightSpring, dt)
+        if (widthActive || heightActive) anyActive = true
+        drawNodeClipMask(view.contentClip, view.clipWidthSpring.value, view.clipHeightSpring.value)
+        if (!view.clipWidthSpring.active && !view.clipHeightSpring.active) {
+          const onComplete = view.onClipAnimationComplete
+          if (onComplete) {
+            ;(view as NodeView).onClipAnimationComplete = undefined
+            ;(view as NodeView).clipWidthSpring = undefined
+            ;(view as NodeView).clipHeightSpring = undefined
+            completedTransitions.push(onComplete)
+          } else {
+            view.contentContainer.mask = null
+            view.root.removeChild(view.contentClip)
+            view.contentClip.destroy()
+            ;(view as NodeView).clipWidthSpring = undefined
+            ;(view as NodeView).clipHeightSpring = undefined
+            ;(view as NodeView).contentClip = undefined
+          }
+        }
+      }
       for (const [, segView] of view.segmentViews) {
         if (updateSpring2D(segView.spring, dt)) anyActive = true
         segView.container.position.set(segView.spring.x, segView.spring.y)
       }
     }
     this.updateSelectionOverlay()
+    if (completedTransitions.length > 0) anyActive = true
+    for (const done of completedTransitions) done()
     if (!anyActive) {
       this.app.ticker.remove(this.springTickerBound)
     }
@@ -2557,24 +2655,85 @@ export class PixiBoardAdapter {
   }
 
   private setNodeExpanded(nodeId: string, expanded: boolean): void {
-    this.nodeExpandedState.set(nodeId, expanded)
     if (!this.currentScene) return
-    this.rebuildAllNodes(this.currentScene)
+    const node = this.currentScene.nodes[nodeId]
+    const view = this.nodeViews.get(nodeId)
+    if (!node || !view) {
+      this.nodeExpandedState.set(nodeId, expanded)
+      this.rebuildAllNodes(this.currentScene)
+      this.startSpringTicker()
+      return
+    }
+
+    if (expanded) {
+      this.nodeExpandedState.set(nodeId, true)
+      this.rebuildAllNodes(this.currentScene)
+      this.startSpringTicker()
+      return
+    }
+
+    const targetDims = this.getNodeDisplayDimensionsForExpanded(node, false)
+    const currentWidth = view.clipWidthSpring?.value ?? view.totalWidth
+    const currentHeight = view.clipHeightSpring?.value ?? view.totalHeight
+    if (Math.abs(currentWidth - targetDims.width) <= 0.5 && Math.abs(currentHeight - targetDims.height) <= 0.5) {
+      this.nodeExpandedState.set(nodeId, false)
+      this.rebuildAllNodes(this.currentScene)
+      this.startSpringTicker()
+      return
+    }
+
+    // Update display flow immediately so sibling nodes start moving while this node clips closed.
+    this.nodeExpandedState.set(nodeId, false)
+    this.recomputeDisplayFlow(this.currentScene)
+    for (const [id, nodeView] of this.nodeViews) {
+      const sceneNode = this.currentScene.nodes[id]
+      if (!sceneNode) continue
+      const pos = this.getNodeDisplayPosition(sceneNode)
+      setSpringTarget(nodeView.positionSpring, pos.x, pos.y)
+    }
+
+    let clip = view.contentClip
+    if (!clip) {
+      clip = new Graphics()
+      clip.eventMode = 'none'
+      drawNodeClipMask(clip, currentWidth, currentHeight)
+      view.root.addChildAt(clip, 0)
+      view.contentContainer.mask = clip
+      ;(view as NodeView).contentClip = clip
+    }
+    const widthSpring = createSpring1D(currentWidth)
+    const heightSpring = createSpring1D(currentHeight)
+    setSpring1DTarget(widthSpring, targetDims.width)
+    setSpring1DTarget(heightSpring, targetDims.height)
+    ;(view as NodeView).clipWidthSpring = widthSpring
+    ;(view as NodeView).clipHeightSpring = heightSpring
+    ;(view as NodeView).onClipAnimationComplete = () => {
+      if (!this.currentScene) return
+      this.rebuildAllNodes(this.currentScene)
+      this.startSpringTicker()
+    }
     this.startSpringTicker()
   }
 
   private getVisibleSlotCount(node: SceneNodeVM): number {
-    if (this.isNodeExpanded(node.id)) return node.slotCount
-    return collapsedVisibleSlotCount(node.segments, node.slotCount)
+    const expanded = this.isNodeExpanded(node.id)
+    return expanded ? node.slotCount : collapsedVisibleSlotCount(node.segments, node.slotCount)
   }
 
-  private getNodeDisplayDimensions(node: SceneNodeVM): { width: number; height: number } {
-    const visibleSlotCount = this.getVisibleSlotCount(node)
+  private getNodeDisplayDimensionsForExpanded(
+    node: SceneNodeVM,
+    expanded: boolean,
+  ): { width: number; height: number } {
+    const visibleSlotCount = expanded ? node.slotCount : collapsedVisibleSlotCount(node.segments, node.slotCount)
     const totalMeterWidth = meterWidthForSlots(visibleSlotCount)
     return {
       width: SLOT_START_X + totalMeterWidth + 20,
       height: TOP_BAND_H + slotAreaHeightForSlots(visibleSlotCount),
     }
+  }
+
+  private getNodeDisplayDimensions(node: SceneNodeVM): { width: number; height: number } {
+    return this.getNodeDisplayDimensionsForExpanded(node, this.isNodeExpanded(node.id))
   }
 
   private recomputeDisplayFlow(scene: SceneVM): void {

@@ -76,3 +76,44 @@ export const updateSpring2D = (
   }
   return state.active
 }
+
+export type Spring1DState = {
+  value: number
+  velocity: number
+  target: number
+  active: boolean
+}
+
+export const createSpring1D = (value: number): Spring1DState => ({
+  value,
+  velocity: 0,
+  target: value,
+  active: false,
+})
+
+export const setSpring1DTarget = (state: Spring1DState, target: number): void => {
+  state.target = target
+  state.active = true
+}
+
+export const updateSpring1D = (
+  state: Spring1DState,
+  dt: number,
+  config: SpringConfig = DEFAULT_CONFIG,
+): boolean => {
+  if (!state.active) return false
+
+  const { stiffness, damping, precision } = config
+  const dx = state.target - state.value
+  const ax = stiffness * dx - damping * state.velocity
+
+  state.velocity += ax * dt
+  state.value += state.velocity * dt
+
+  if (Math.abs(dx) < precision && Math.abs(state.velocity) < precision) {
+    state.value = state.target
+    state.velocity = 0
+    state.active = false
+  }
+  return state.active
+}
