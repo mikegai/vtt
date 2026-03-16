@@ -1,4 +1,4 @@
-import { BASE_CAPACITY_SIXTHS, SIXTHS_PER_STONE, type ItemDefinition } from './types'
+import { BASE_CAPACITY_SIXTHS, SIXTHS_PER_STONE, type Actor, type ItemDefinition } from './types'
 
 export type SpeedBand = 'green' | 'yellow' | 'orange' | 'red'
 
@@ -33,6 +33,16 @@ export const capacitySixthsForStrengthMod = (strengthMod: number): number => {
   const capacity = BASE_CAPACITY_SIXTHS + stoneToSixths(strengthMod)
   return Math.max(0, capacity)
 }
+
+/** For animals with capacityStone (e.g. mule 50, medium riding horse 60). */
+export const capacitySixthsForAnimal = (capacityStone: number): number =>
+  stoneToSixths(capacityStone)
+
+/** Capacity in sixths for any actor (PC uses strength, animal uses capacityStone). */
+export const capacitySixthsForActor = (actor: Actor): number =>
+  actor.capacityStone != null
+    ? capacitySixthsForAnimal(actor.capacityStone)
+    : capacitySixthsForStrengthMod(actor.stats.strengthMod)
 
 const speedTable: Record<SpeedBand, Omit<SpeedProfile, 'band'>> = {
   green: { explorationFeet: 120, combatFeet: 40, runningFeet: 120, milesPerDay: 24 },

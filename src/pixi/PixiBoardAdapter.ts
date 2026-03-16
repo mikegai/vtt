@@ -27,8 +27,11 @@ const SIXTH_ROWS = 6
 const CELL_H = STONE_H / SIXTH_ROWS
 const METER_X = 148
 const METER_Y = 34
-const SLOT_COUNT = 20
 const ROW_H = 100
+
+const meterWidthForSlots = (slotCount: number): number =>
+  slotCount * (STONE_W + STONE_GAP) - STONE_GAP
+const totalSixthsForSlots = (slotCount: number): number => slotCount * 6
 
 const SPEED_COLORS: Record<string, number> = {
   green: 0x3dba72,
@@ -59,6 +62,10 @@ const fixedSlotBandColor = (stoneIndex: number, greenSlots: number): number => {
   if (stoneIndex < greenSlots + 5) return SPEED_COLORS.orange
   return SPEED_COLORS.red
 }
+
+/** Animals and vehicles: green for first half of slots, orange for second half (50% breakpoint). */
+const twoBandSlotColor = (stoneIndex: number, greenSlots: number): number =>
+  stoneIndex < greenSlots ? SPEED_COLORS.green : SPEED_COLORS.orange
 
 const getZoomTier = (zoom: number): ZoomTier => {
   if (zoom < 0.55) return 'far'
@@ -203,8 +210,6 @@ const selectLabelFit = (
   return fallback
 }
 
-const TOTAL_SIXTHS = SLOT_COUNT * 6
-const METER_WIDTH = SLOT_COUNT * (STONE_W + STONE_GAP) - STONE_GAP
 
 const isMultiStone = (segment: SceneSegmentVM): boolean =>
   segment.sizeSixths >= 6 && segment.sizeSixths % 6 === 0
@@ -217,8 +222,8 @@ const isBookLikeChainable = (segment: SceneSegmentVM): boolean => {
 
 const stoneToX = (stoneIndex: number): number => stoneIndex * (STONE_W + STONE_GAP)
 
-const sixthToCellLocal = (sixthIndex: number): { x: number; y: number } => {
-  const clamped = Math.max(0, Math.min(TOTAL_SIXTHS, sixthIndex))
+const sixthToCellLocal = (sixthIndex: number, totalSixths: number): { x: number; y: number } => {
+  const clamped = Math.max(0, Math.min(totalSixths, sixthIndex))
   const stone = Math.floor(clamped / 6)
   const row = clamped % 6
   return {
@@ -233,12 +238,15 @@ const segmentStoneSpan = (startSixth: number, sizeSixths: number): { startStone:
   return { startStone, endStone }
 }
 
-const occupiedSixthsFromSegments = (segments: readonly SceneSegmentVM[]): Set<number> => {
+const occupiedSixthsFromSegments = (
+  segments: readonly SceneSegmentVM[],
+  totalSixths: number,
+): Set<number> => {
   const occupied = new Set<number>()
   segments.forEach((segment) => {
     if (segment.isOverflow) return
     const start = Math.max(0, segment.startSixth)
-    const endExclusive = Math.min(TOTAL_SIXTHS, segment.startSixth + segment.sizeSixths)
+    const endExclusive = Math.min(totalSixths, segment.startSixth + segment.sizeSixths)
     for (let idx = start; idx < endExclusive; idx += 1) {
       occupied.add(idx)
     }
@@ -246,12 +254,13 @@ const occupiedSixthsFromSegments = (segments: readonly SceneSegmentVM[]): Set<nu
   return occupied
 }
 
-const localToSixth = (localX: number, localY: number): number => {
+const localToSixth = (localX: number, localY: number, slotCount: number): number => {
   if (localX <= 0) return 0
-  const maxLocal = stoneToX(SLOT_COUNT)
-  if (localX >= maxLocal) return TOTAL_SIXTHS
+  const totalSixths = totalSixthsForSlots(slotCount)
+  const maxLocal = stoneToX(slotCount)
+  if (localX >= maxLocal) return totalSixths
 
-  for (let stone = 0; stone < SLOT_COUNT; stone += 1) {
+  for (let stone = 0; stone < slotCount; stone += 1) {
     const stoneStart = stoneToX(stone)
     const stoneEnd = stoneStart + STONE_W
     if (localX >= stoneStart && localX < stoneEnd) {
@@ -262,7 +271,7 @@ const localToSixth = (localX: number, localY: number): number => {
       return (stone + 1) * 6
     }
   }
-  return TOTAL_SIXTHS
+  return totalSixths
 }
 
 const drawMultiItemChain = (
@@ -275,10 +284,11 @@ const drawMultiItemChain = (
   alpha: number,
   connectEdges: boolean,
   compactCells: boolean,
+  totalSixths: number,
 ): void => {
   let previousCenter: { x: number; y: number } | null = null
   for (let i = 0; i < sizeSixths; i += 1) {
-    const slot = sixthToCellLocal(startSixth + i)
+    const slot = sixthToCellLocal(startSixth + i, totalSixths)
     const x = baseX + slot.x
     const y = baseY + slot.y
     const cellGraphic = new Graphics()
@@ -312,6 +322,7 @@ const drawSegmentBlock = (
   textCompensationScale: number,
   minVisibleLabelPx: number,
   maxVisibleLabelPx: number,
+  totalSixths: number,
   onTooltipEnter?: (segment: SceneSegmentVM, globalX: number, globalY: number) => void,
   onTooltipMove?: (globalX: number, globalY: number) => void,
   onTooltipLeave?: () => void,
@@ -362,9 +373,10 @@ const drawSegmentBlock = (
       alpha,
       useConnectedChain,
       !useConnectedChain,
+      totalSixths,
     )
-    const first = sixthToCellLocal(segment.startSixth)
-    const last = sixthToCellLocal(segment.startSixth + segment.sizeSixths - 1)
+    const first = sixthToCellLocal(segment.startSixth, totalSixths)
+    const last = sixthToCellLocal(segment.startSixth + segment.sizeSixths - 1, totalSixths)
     const hitX = METER_X + Math.min(first.x, last.x)
     const hitY = METER_Y + Math.min(first.y, last.y)
     const hitW = Math.max(first.x, last.x) + STONE_W - Math.min(first.x, last.x)
@@ -380,8 +392,8 @@ const drawSegmentBlock = (
     let centerX = startX + width / 2
     let centerY = METER_Y + STONE_H / 2
     if (!isMultiStone(segment)) {
-      const first = sixthToCellLocal(segment.startSixth)
-      const last = sixthToCellLocal(segment.startSixth + segment.sizeSixths - 1)
+      const first = sixthToCellLocal(segment.startSixth, totalSixths)
+      const last = sixthToCellLocal(segment.startSixth + segment.sizeSixths - 1, totalSixths)
       const minX = METER_X + Math.min(first.x, last.x)
       const maxX = METER_X + Math.max(first.x, last.x) + STONE_W
       const minY = METER_Y + Math.min(first.y, last.y)
@@ -590,17 +602,19 @@ export class PixiBoardAdapter {
     if (!this.currentScene) return null
 
     for (const node of Object.values(this.currentScene.nodes)) {
+      const nodeMeterWidth = meterWidthForSlots(node.slotCount)
       const inY = worldY >= node.y + METER_Y && worldY <= node.y + METER_Y + STONE_H
       if (!inY) continue
       const localX = worldX - node.x - METER_X
       const localY = worldY - node.y - METER_Y
-      if (localX < -STONE_W || localX > METER_WIDTH + STONE_W) continue
+      if (localX < -STONE_W || localX > nodeMeterWidth + STONE_W) continue
 
-      let startSixth = localToSixth(localX, localY)
+      let startSixth = localToSixth(localX, localY, node.slotCount)
       if (isMultiStone(segment)) {
         startSixth = Math.floor(startSixth / 6) * 6
       }
-      const maxStart = Math.max(0, TOTAL_SIXTHS - segment.sizeSixths)
+      const totalSixths = totalSixthsForSlots(node.slotCount)
+      const maxStart = Math.max(0, totalSixths - segment.sizeSixths)
       startSixth = Math.max(0, Math.min(maxStart, startSixth))
       return { nodeId: node.id, startSixth }
     }
@@ -649,7 +663,8 @@ export class PixiBoardAdapter {
     if (snap && this.currentScene) {
       const node = this.currentScene.nodes[snap.nodeId]
       if (node) {
-        const slot = sixthToCellLocal(snap.startSixth)
+        const totalSixths = totalSixthsForSlots(node.slotCount)
+        const slot = sixthToCellLocal(snap.startSixth, totalSixths)
         const x = node.x + METER_X + slot.x
         const y = node.y + METER_Y + (isMultiStone(this.segmentDrag.segment) ? 0 : slot.y)
         this.segmentDrag.ghost.position.set(x, y)
@@ -673,9 +688,11 @@ export class PixiBoardAdapter {
     root.eventMode = 'static'
     root.cursor = 'grab'
 
-    const totalMeterWidth = METER_WIDTH
+    const slotCount = node.slotCount
+    const totalMeterWidth = meterWidthForSlots(slotCount)
     const totalWidth = METER_X + totalMeterWidth + 20
     const totalHeight = ROW_H
+    const totalSixths = totalSixthsForSlots(slotCount)
 
     const bg = new Graphics()
     bg.roundRect(0, 0, totalWidth, totalHeight, 10)
@@ -715,14 +732,15 @@ export class PixiBoardAdapter {
       root.addChild(compact)
     }
 
-    const occupiedSixths = occupiedSixthsFromSegments(node.segments)
+    const occupiedSixths = occupiedSixthsFromSegments(node.segments, totalSixths)
 
     const slotFillLayer = new Graphics()
     const dimAlpha = tier === 'far' ? 0.1 : 0.14
     const brightAlpha = tier === 'far' ? 0.36 : 0.48
-    for (let stone = 0; stone < SLOT_COUNT; stone += 1) {
+    const slotColorFn = node.twoBandSlots ? twoBandSlotColor : fixedSlotBandColor
+    for (let stone = 0; stone < slotCount; stone += 1) {
       const sx = METER_X + stoneToX(stone)
-      const slotBandColor = fixedSlotBandColor(stone, node.fixedGreenStoneSlots)
+      const slotBandColor = slotColorFn(stone, node.fixedGreenStoneSlots)
       for (let row = 0; row < SIXTH_ROWS; row += 1) {
         const sixth = stone * 6 + row
         const filled = occupiedSixths.has(sixth)
@@ -749,6 +767,7 @@ export class PixiBoardAdapter {
         textCompensationScale,
         this.minVisibleLabelPx,
         this.maxVisibleLabelPx,
+        totalSixths,
         (seg, x, y) => this.showTooltip(seg, x, y),
         (x, y) => this.moveTooltip(x, y),
         () => this.hideTooltip(),

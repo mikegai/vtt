@@ -28,6 +28,10 @@ export type SceneNodeVM = {
   readonly speedFeet: number
   readonly speedBand: string
   readonly fixedGreenStoneSlots: number
+  /** Total stone slots (e.g. 20 for PCs, 60 for medium riding horse). */
+  readonly slotCount: number
+  /** Animals and vehicles use green/orange only (50% breakpoint). */
+  readonly twoBandSlots?: boolean
   readonly usedSixths: number
   readonly usedStoneText: string
   readonly capacityStoneText: string

@@ -1,7 +1,7 @@
 import { buildLabelLadder } from '../domain/labels'
 import { packDeterministic, type PackInput } from '../domain/packing'
 import {
-  capacitySixthsForStrengthMod,
+  capacitySixthsForActor,
   encumbranceCostSixths,
   formatSixthsAsStone,
   speedProfileForSixths,
@@ -104,7 +104,7 @@ const buildRow = (
   parentActorId?: string,
   isDroppedRow = false,
 ): ActorRowVM => {
-  const capacitySixths = capacitySixthsForStrengthMod(actor.stats.strengthMod)
+  const capacitySixths = capacitySixthsForActor(actor)
   const packInputs: PackInput[] = entries
     .map((entry) => {
       const definition = state.itemDefinitions[entry.itemDefId]
@@ -202,15 +202,21 @@ const buildPartyPace = (rows: readonly ActorRowVM[]): PartyPaceVM => {
 }
 
 export const buildBoardVM = (state: CanonicalState): BoardVM => {
-  const actors = Object.values(state.actors).sort(byName)
+  const allActors = Object.values(state.actors).sort(byName)
+  const topLevelActors = allActors.filter((a) => !a.ownerActorId || !state.actors[a.ownerActorId])
 
-  const rows = actors.map((actor) => {
-    const carriedEntries = entriesForActor(state, actor.id, false)
-    const row = buildRow(state, actor, actor.id, carriedEntries)
-    const childRows = buildDroppedRows(state, actor)
+  const rows = topLevelActors.map((owner) => {
+    const carriedEntries = entriesForActor(state, owner.id, false)
+    const row = buildRow(state, owner, owner.id, carriedEntries)
+    const ownedActors = allActors.filter((a) => a.ownerActorId === owner.id)
+    const ownedRows = ownedActors.map((animal) => {
+      const entries = entriesForActor(state, animal.id, false)
+      return buildRow(state, animal, animal.id, entries, owner.id)
+    })
+    const droppedRows = buildDroppedRows(state, owner)
     return {
       ...row,
-      childRows,
+      childRows: [...ownedRows, ...droppedRows],
     }
   })
 

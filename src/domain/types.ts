@@ -48,6 +48,10 @@ export type Actor = {
   readonly stats: ActorStats
   readonly movementGroupId: string
   readonly active: boolean
+  /** For animals/henchmen: the actor who owns or rides them. */
+  readonly ownerActorId?: string
+  /** For animals: total capacity in stone (e.g. mule 50, medium riding horse 60). */
+  readonly capacityStone?: number
 }
 
 export type CarryGroup = {

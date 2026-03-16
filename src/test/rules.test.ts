@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   armorAcToSixths,
+  capacitySixthsForActor,
+  capacitySixthsForAnimal,
   capacitySixthsForStrengthMod,
   coinsToSixths,
   encumbranceCostSixths,
@@ -8,7 +10,7 @@ import {
   speedBandForSixths,
   stoneToSixths,
 } from '../domain/rules'
-import type { ItemDefinition } from '../domain/types'
+import type { Actor, ItemDefinition } from '../domain/types'
 
 describe('ACKS rules', () => {
   it('maps base speed breakpoints', () => {
@@ -29,6 +31,34 @@ describe('ACKS rules', () => {
     expect(capacitySixthsForStrengthMod(0)).toBe(stoneToSixths(20))
     expect(capacitySixthsForStrengthMod(2)).toBe(stoneToSixths(22))
     expect(capacitySixthsForStrengthMod(-1)).toBe(stoneToSixths(19))
+  })
+
+  it('uses capacityStone for animals', () => {
+    expect(capacitySixthsForAnimal(50)).toBe(stoneToSixths(50))
+    expect(capacitySixthsForAnimal(60)).toBe(stoneToSixths(60))
+  })
+
+  it('capacitySixthsForActor uses capacityStone for animals, strength for PCs', () => {
+    const pc: Actor = {
+      id: 'pc',
+      name: 'PC',
+      kind: 'pc',
+      stats: { strengthMod: 2, hasLoadBearing: false },
+      movementGroupId: 'party',
+      active: true,
+    }
+    const mule: Actor = {
+      id: 'mule',
+      name: 'Mule',
+      kind: 'animal',
+      stats: { strengthMod: 0, hasLoadBearing: false },
+      movementGroupId: 'party',
+      active: true,
+      ownerActorId: 'pc',
+      capacityStone: 50,
+    }
+    expect(capacitySixthsForActor(pc)).toBe(stoneToSixths(22))
+    expect(capacitySixthsForActor(mule)).toBe(stoneToSixths(50))
   })
 
   it('converts coin weight using ACKS coin thresholds', () => {
