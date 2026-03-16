@@ -168,16 +168,55 @@ const renderSearch = (query: string): void => {
     .join('')
 }
 
+/** Disambiguation overrides: raw chunk text -> selected itemId */
+const disambiguationOverrides: Record<string, string> = {}
+
 const renderParsed = (text: string): void => {
   const parsed = parseInventoryText(text, sourceItemSearch)
   parseResultsEl.innerHTML = parsed.chunks
     .map((c) => {
-      const resolved = c.resolvedItemName ? ` &rarr; ${c.resolvedItemName}` : ''
-      const alts = c.alternatives.length > 0 ? ` &bull; alt: ${c.alternatives.map((a) => a.itemName).join(', ')}` : ''
-      return `<div class="parsed-item status-${c.status}"><div class="parsed-head"><span class="parsed-status">${c.status}</span><span class="parsed-qty">qty ${c.quantity}</span><span class="parsed-conf">${Math.round(c.confidence * 100)}%</span></div><div class="parsed-text">${c.raw}</div><div class="parsed-candidate">${c.candidateName}${resolved}${alts}</div></div>`
+      const override = disambiguationOverrides[c.raw]
+      const effectiveStatus = override ? 'resolved' : c.status
+      const locked = !!override
+      const displayItemId = override ?? c.resolvedItemId
+      const displayItemName = override
+        ? (c.alternatives.find((a) => a.itemId === override)?.itemName ?? c.candidateName)
+        : (c.resolvedItemName ?? c.candidateName)
+
+      let altsHtml = ''
+      if (locked) {
+        altsHtml = `<button class="alt-unlock" data-raw="${escapeHtml(c.raw)}" type="button" title="Unlock and show alternatives">↩ unlock</button>`
+      } else if (c.alternatives.length > 0) {
+        altsHtml = `<div class="alt-pills">${c.alternatives
+          .map(
+            (a) =>
+              `<button class="alt-pill ${a.itemId === displayItemId ? 'alt-pill-selected' : ''}" data-raw="${escapeHtml(c.raw)}" data-item-id="${escapeHtml(a.itemId)}" type="button">${escapeHtml(a.itemName)}</button>`,
+          )
+          .join('')}</div>`
+      }
+
+      return `<div class="parsed-item status-${effectiveStatus} ${locked ? 'parsed-item-locked' : ''}" data-raw="${escapeHtml(c.raw)}">
+        <div class="parsed-head">
+          <span class="parsed-status">${effectiveStatus}</span>
+          <span class="parsed-qty">qty ${c.quantity}</span>
+          ${locked ? '' : `<span class="parsed-conf">${Math.round(c.confidence * 100)}%</span>`}
+        </div>
+        <div class="parsed-text">${escapeHtml(c.raw)}</div>
+        <div class="parsed-candidate">
+          <span class="parsed-display-name">${escapeHtml(displayItemName)}</span>
+          ${altsHtml}
+        </div>
+      </div>`
     })
     .join('')
 }
+
+const escapeHtml = (s: string): string =>
+  s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
 
 const renderBulkImport = (text: string): void => {
   const plan = parseInventoryImportPlan(text, sourceItemSearch)
@@ -199,6 +238,24 @@ inputEl.addEventListener('input', () => renderSearch(inputEl.value))
 parseInputEl.value = '2 sacks, 14 torches and 3 flasks of oil'
 renderParsed(parseInputEl.value)
 parseInputEl.addEventListener('input', () => renderParsed(parseInputEl.value))
+
+parseResultsEl.addEventListener('click', (e) => {
+  const target = e.target as HTMLElement
+  const pill = target.closest('.alt-pill')
+  const unlock = target.closest('.alt-unlock')
+  const raw = (pill ?? unlock)?.getAttribute('data-raw')
+  if (!raw) return
+  if (pill) {
+    const itemId = pill.getAttribute('data-item-id')
+    if (itemId) {
+      disambiguationOverrides[raw] = itemId
+      renderParsed(parseInputEl.value)
+    }
+  } else if (unlock) {
+    delete disambiguationOverrides[raw]
+    renderParsed(parseInputEl.value)
+  }
+})
 
 bulkInputEl.value = `Fighter:\nplate armor, shield, spear\n\nLoot Pile - Crypt Chest:\n2 sacks, 14 torches and 3 flasks of oil`
 renderBulkImport(bulkInputEl.value)

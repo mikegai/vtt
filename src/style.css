@@ -281,6 +281,11 @@ html, body {
   border-color: rgba(89, 210, 148, 0.4);
 }
 
+.status-resolved.parsed-item-locked {
+  border-color: rgba(89, 210, 148, 0.6);
+  background: rgba(89, 210, 148, 0.08);
+}
+
 .status-ambiguous {
   border-color: rgba(244, 188, 88, 0.4);
 }
@@ -319,6 +324,57 @@ html, body {
   color: var(--text-muted);
   font-size: 11px;
   margin-top: 2px;
+}
+
+.parsed-display-name {
+  display: block;
+  margin-bottom: 4px;
+}
+
+.alt-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.alt-pill {
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(111, 126, 168, 0.35);
+  background: rgba(14, 20, 33, 0.9);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, color 0.15s;
+}
+
+.alt-pill:hover {
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+
+.alt-pill-selected {
+  border-color: rgba(89, 210, 148, 0.5);
+  background: rgba(89, 210, 148, 0.12);
+  color: #a8f0c8;
+}
+
+.alt-unlock {
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid rgba(111, 126, 168, 0.3);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  margin-top: 4px;
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.alt-unlock:hover {
+  border-color: rgba(244, 188, 88, 0.5);
+  color: #f4bc58;
 }
 
 .result-item {
