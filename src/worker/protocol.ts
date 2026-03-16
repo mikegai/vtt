@@ -94,7 +94,7 @@ export type ScenePatch =
 export type DropIntent = {
   readonly segmentIds: readonly string[]
   readonly sourceNodeIds: Readonly<Record<string, string>>
-  readonly targetNodeId: string
+  readonly targetNodeId: string | null
 }
 
 export type WorkerIntent =

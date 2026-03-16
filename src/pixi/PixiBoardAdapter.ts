@@ -1341,7 +1341,6 @@ export class PixiBoardAdapter {
         anchorOffset: { x: world.x - group.x, y: world.y - group.y },
       },
     }
-    this.setGroupNodeContentVisibility(group.id, false)
     return true
   }
 
@@ -1417,6 +1416,47 @@ export class PixiBoardAdapter {
 
   private buildDragProxy(segments: readonly SceneSegmentVM[]): DragProxyLayout {
     const proxy = new Container()
+    if (segments.length > 1) {
+      let maxW = 0
+      let maxH = 0
+      for (const segment of segments) {
+        const b = segmentBoundsInNodeLocal({ ...segment, startSixth: 0 })
+        maxW = Math.max(maxW, b.w)
+        maxH = Math.max(maxH, b.h)
+      }
+      const width = Math.max(24, maxW)
+      const height = Math.max(18, maxH)
+      const base = new Graphics()
+      base.roundRect(0, 0, width, height, 7)
+      base.fill({ color: 0x7bd7cf, alpha: 0.78 })
+      base.stroke({ width: 1.5, color: 0xd3ebff, alpha: 0.9 })
+      proxy.addChild(base)
+
+      const badge = new Graphics()
+      const badgeR = 10
+      badge.circle(width - badgeR + 2, badgeR - 2, badgeR)
+      badge.fill({ color: 0x173862, alpha: 0.96 })
+      badge.stroke({ width: 1.5, color: 0xe8f4ff, alpha: 0.9 })
+      proxy.addChild(badge)
+
+      const countLabel = new BitmapText({
+        text: `${segments.length}`,
+        style: { fill: '#f3f9ff', fontSize: 12, fontFamily: FONT_SEMIBOLD, align: 'center' },
+      })
+      countLabel.eventMode = 'none'
+      countLabel.anchor.set(0.5, 0.5)
+      countLabel.position.set(width - badgeR + 2, badgeR - 2)
+      proxy.addChild(countLabel)
+
+      const segmentBounds: Record<string, { x: number; y: number; w: number; h: number }> = {}
+      for (const segment of segments) {
+        segmentBounds[segment.id] = { x: 0, y: 0, w: width, h: height }
+      }
+      const pivot = { x: width / 2, y: height / 2 }
+      proxy.pivot.set(pivot.x, pivot.y)
+      return { proxy, pivot, segmentBounds }
+    }
+
     const ITEM_GAP = 4
     let offsetY = 0
     const segmentBounds: Record<string, { x: number; y: number; w: number; h: number }> = {}
@@ -1998,7 +2038,6 @@ export class PixiBoardAdapter {
           targetNestParentNodeId: null,
         },
       }
-      this.setNodeContentVisibility(nodeIds, false)
       handleView.cursor = 'grabbing'
       event.stopPropagation()
     })

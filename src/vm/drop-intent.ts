@@ -33,8 +33,28 @@ export const applyDropIntentToState = (
     const sourceNodeId = dropIntent.sourceNodeIds[segmentId]
     if (!sourceNodeId) continue
 
-    const target = parseNodeId(dropIntent.targetNodeId)
     const source = parseNodeId(sourceNodeId)
+    if (!dropIntent.targetNodeId) {
+      // While hovering outside any node, hide the source entries from normal rows.
+      // We move them into a synthetic dropped group id that has no carry-group record.
+      const movedEntry: InventoryEntry = {
+        ...entry,
+        actorId: source.actorId,
+        carryGroupId: `__drag-preview__:${source.actorId}`,
+        zone: 'dropped',
+        state: { ...(entry.state ?? {}), dropped: true },
+      }
+      result = {
+        ...result,
+        inventoryEntries: {
+          ...result.inventoryEntries,
+          [entryId]: movedEntry,
+        },
+      }
+      continue
+    }
+
+    const target = parseNodeId(dropIntent.targetNodeId)
 
     if (target.actorId === source.actorId && target.carryGroupId === source.carryGroupId) {
       continue

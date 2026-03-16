@@ -44,6 +44,169 @@ const buildSegmentIdToNodeId = (state: CanonicalState): Record<string, string> =
 
 const droppedGroupIdForActor = (actorId: string): string => `${actorId}:ground`
 
+const STONE_W = 36
+const STONE_H = 54
+const STONE_GAP = 3
+const STONE_ROW_GAP = 3
+const SLOT_START_X = 10
+const TOP_BAND_H = 34
+
+const stoneToX = (stoneIndex: number, stonesPerRow: number): number =>
+  (stoneIndex % stonesPerRow) * (STONE_W + STONE_GAP)
+const stoneToY = (stoneIndex: number, stonesPerRow: number): number =>
+  Math.floor(stoneIndex / stonesPerRow) * (STONE_H + STONE_ROW_GAP)
+const segmentStoneSpan = (startSixth: number, sizeSixths: number): { startStone: number; endStone: number } => {
+  const startStone = Math.floor(startSixth / 6)
+  const endStone = Math.max(startStone + 1, Math.ceil((startSixth + sizeSixths) / 6))
+  return { startStone, endStone }
+}
+const isMultiStone = (sizeSixths: number): boolean => sizeSixths >= 6 && sizeSixths % 6 === 0
+
+const groupSixthsByStone = (
+  startSixth: number,
+  sizeSixths: number,
+): { stone: number; startRow: number; count: number }[] => {
+  const groups: { stone: number; startRow: number; count: number }[] = []
+  for (let i = 0; i < sizeSixths; i += 1) {
+    const sixth = startSixth + i
+    const stone = Math.floor(sixth / 6)
+    const row = sixth % 6
+    const last = groups[groups.length - 1]
+    if (last && last.stone === stone) {
+      last.count += 1
+    } else {
+      groups.push({ stone, startRow: row, count: 1 })
+    }
+  }
+  return groups
+}
+
+const splitStonesAtWrap = (
+  startStone: number,
+  endStone: number,
+  stonesPerRow: number,
+): { start: number; end: number }[] => {
+  const chunks: { start: number; end: number }[] = []
+  let s = startStone
+  while (s < endStone) {
+    const rowStart = Math.floor(s / stonesPerRow) * stonesPerRow
+    const rowEnd = rowStart + stonesPerRow
+    const chunkEnd = Math.min(endStone, rowEnd)
+    chunks.push({ start: s, end: chunkEnd })
+    s = chunkEnd
+  }
+  return chunks
+}
+
+const segmentBoundsInNodeLocal = (
+  segment: { startSixth: number; sizeSixths: number },
+  stonesPerRow: number,
+): { x: number; y: number; w: number; h: number } => {
+  const { startStone, endStone } = segmentStoneSpan(segment.startSixth, segment.sizeSixths)
+  if (isMultiStone(segment.sizeSixths)) {
+    const chunks = splitStonesAtWrap(startStone, endStone, stonesPerRow)
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+    chunks.forEach((chunk) => {
+      const cx = SLOT_START_X + stoneToX(chunk.start, stonesPerRow)
+      const cy = TOP_BAND_H + stoneToY(chunk.start, stonesPerRow)
+      const cw = (chunk.end - chunk.start) * (STONE_W + STONE_GAP) - STONE_GAP
+      minX = Math.min(minX, cx)
+      minY = Math.min(minY, cy)
+      maxX = Math.max(maxX, cx + cw)
+      maxY = Math.max(maxY, cy + STONE_H)
+    })
+    return { x: minX, y: minY, w: maxX - minX, h: maxY - minY }
+  }
+  const CELL_H = STONE_H / 6
+  const groups = groupSixthsByStone(segment.startSixth, segment.sizeSixths)
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+  groups.forEach((g) => {
+    const x = stoneToX(g.stone, stonesPerRow)
+    const y = stoneToY(g.stone, stonesPerRow) + g.startRow * CELL_H
+    minX = Math.min(minX, x)
+    minY = Math.min(minY, y)
+    maxX = Math.max(maxX, x + STONE_W)
+    maxY = Math.max(maxY, y + g.count * CELL_H)
+  })
+  return {
+    x: SLOT_START_X + minX,
+    y: TOP_BAND_H + minY,
+    w: maxX - minX,
+    h: maxY - minY,
+  }
+}
+
+type DragSourceRect = {
+  readonly id: string
+  readonly x: number
+  readonly y: number
+  readonly w: number
+  readonly h: number
+}
+
+const computeDroppedFreeSegmentPositions = (
+  scene: SceneVM,
+  segmentIds: readonly string[],
+  anchorX: number,
+  anchorY: number,
+  stonesPerRow: number,
+): Record<string, { x: number; y: number }> => {
+  const rects: DragSourceRect[] = []
+  for (const segmentId of segmentIds) {
+    let found = false
+    for (const node of Object.values(scene.nodes)) {
+      const seg = node.segments.find((s) => s.id === segmentId)
+      if (!seg) continue
+      const b = segmentBoundsInNodeLocal(seg, stonesPerRow)
+      rects.push({ id: segmentId, x: node.x + b.x, y: node.y + b.y, w: Math.max(8, b.w), h: Math.max(8, b.h) })
+      found = true
+      break
+    }
+    if (found) continue
+    const free = scene.freeSegments[segmentId]
+    if (!free) continue
+    const b = segmentBoundsInNodeLocal(free.segment, stonesPerRow)
+    rects.push({
+      id: segmentId,
+      x: free.x + b.x - SLOT_START_X,
+      y: free.y + b.y - TOP_BAND_H,
+      w: Math.max(8, b.w),
+      h: Math.max(8, b.h),
+    })
+  }
+  if (rects.length === 0) return {}
+
+  rects.sort((a, b) => (a.y === b.y ? a.x - b.x : a.y - b.y))
+  const totalArea = rects.reduce((sum, r) => sum + r.w * r.h, 0)
+  const targetRowW = Math.max(220, Math.round(Math.sqrt(totalArea) * 1.8))
+  const GAP = 6
+  const packedById: Record<string, { x: number; y: number }> = {}
+  let xCursor = 0
+  let yCursor = 0
+  let rowH = 0
+  for (const r of rects) {
+    if (xCursor > 0 && xCursor + r.w > targetRowW) {
+      xCursor = 0
+      yCursor += rowH + GAP
+      rowH = 0
+    }
+    packedById[r.id] = { x: xCursor, y: yCursor }
+    xCursor += r.w + GAP
+    rowH = Math.max(rowH, r.h)
+  }
+  const anchorPacked = packedById[segmentIds[0] ?? ''] ?? { x: 0, y: 0 }
+  const out: Record<string, { x: number; y: number }> = {}
+  for (const segmentId of segmentIds) {
+    const packed = packedById[segmentId]
+    if (!packed) continue
+    out[segmentId] = {
+      x: anchorX + (packed.x - anchorPacked.x),
+      y: anchorY + (packed.y - anchorPacked.y),
+    }
+  }
+  return out
+}
+
 /** Migrate legacy entry.state.wield to actor.leftWieldingEntryId/rightWieldingEntryId. */
 const migrateWieldToActor = (state: CanonicalState): CanonicalState => {
   const actors = { ...state.actors }
@@ -344,14 +507,11 @@ const applyIntent = (intent: WorkerIntent): void => {
 
   if (intent.type === 'DRAG_SEGMENT_UPDATE') {
     if (!localState.dropIntent) return
-    const firstSource = localState.dropIntent.segmentIds[0]
-      ? localState.dropIntent.sourceNodeIds[localState.dropIntent.segmentIds[0]]
-      : null
     localState = {
       ...localState,
       dropIntent: {
         ...localState.dropIntent,
-        targetNodeId: intent.targetNodeId ?? firstSource ?? localState.dropIntent.targetNodeId,
+        targetNodeId: intent.targetNodeId,
       },
     }
     recompute()
@@ -359,9 +519,13 @@ const applyIntent = (intent: WorkerIntent): void => {
   }
 
   if (intent.type === 'DRAG_SEGMENT_END') {
-    if (localState.dropIntent && intent.targetNodeId) {
-      const { segmentIds, sourceNodeIds, targetNodeId } = localState.dropIntent
-      const target = parseNodeId(targetNodeId)
+    const hoverTargetNodeId = localState.dropIntent
+      ? (intent.targetNodeId ?? localState.dropIntent.targetNodeId)
+      : null
+    if (localState.dropIntent && hoverTargetNodeId) {
+      const { segmentIds, sourceNodeIds } = localState.dropIntent
+      const target = parseNodeId(hoverTargetNodeId)
+      let movedAny = false
       if (worldState) {
         for (const segmentId of segmentIds) {
           const sourceNodeId = sourceNodeIds[segmentId]
@@ -371,6 +535,7 @@ const applyIntent = (intent: WorkerIntent): void => {
           const entryId = segmentIdToEntryId(segmentId)
           const entry: InventoryEntry | undefined = worldState.inventoryEntries[entryId]
           if (entry) {
+            movedAny = true
             const movedEntry: InventoryEntry = {
               ...entry,
               actorId: target.actorId,
@@ -406,9 +571,11 @@ const applyIntent = (intent: WorkerIntent): void => {
           }
         }
       }
-      const freeSegmentPositions = { ...localState.freeSegmentPositions }
-      for (const segmentId of segmentIds) delete freeSegmentPositions[segmentId]
-      localState = { ...localState, freeSegmentPositions }
+      if (movedAny) {
+        const freeSegmentPositions = { ...localState.freeSegmentPositions }
+        for (const segmentId of segmentIds) delete freeSegmentPositions[segmentId]
+        localState = { ...localState, freeSegmentPositions }
+      }
     } else if (localState.dropIntent && worldState && intent.x != null && intent.y != null) {
       const { segmentIds, sourceNodeIds } = localState.dropIntent
       const firstSourceNodeId = segmentIds[0] ? sourceNodeIds[segmentIds[0]] : null
@@ -465,11 +632,18 @@ const applyIntent = (intent: WorkerIntent): void => {
           }
         }
 
+        const sceneAtDrop = buildSceneVM(worldState, localState)
+        const droppedLayout = computeDroppedFreeSegmentPositions(
+          sceneAtDrop,
+          segmentIds,
+          intent.x,
+          intent.y,
+          localState.stonesPerRow,
+        )
         const freeSegmentPositions = { ...localState.freeSegmentPositions }
-        let yOffset = 0
         for (const segmentId of segmentIds) {
-          freeSegmentPositions[segmentId] = { x: intent.x, y: intent.y + yOffset }
-          yOffset += 14
+          const nextPos = droppedLayout[segmentId] ?? { x: intent.x, y: intent.y }
+          freeSegmentPositions[segmentId] = nextPos
         }
         localState = {
           ...localState,
