@@ -420,7 +420,7 @@ const localToSixth = (localX: number, localY: number, slotCount: number): number
 /** Hand/fist marker to indicate wielded sides. */
 const GRIP_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
   <path d="M6.6 13.8v-2.2a1.5 1.5 0 1 1 3 0V7.1a1.5 1.5 0 1 1 3 0v4.5V6.3a1.5 1.5 0 1 1 3 0v5.3V7.9a1.5 1.5 0 1 1 3 0v8.2c0 2.5-2 4.5-4.5 4.5h-4.2c-2.5 0-4.5-2-4.5-4.5V14l-1.1-1.1a1.6 1.6 0 1 1 2.3-2.3l1 1Z"
-    fill="#f0f8ff" stroke="#d6e7ff" stroke-width="0.6" stroke-linejoin="round"/>
+    fill="#ffd84a" stroke="#fff6b3" stroke-width="0.9" stroke-linejoin="round"/>
 </svg>`
 
 const GRIP_ICON_SIZE = 10
@@ -438,17 +438,19 @@ const drawGripIndicators = (
   const drawOneGrip = (x: number, flip = false): void => {
     const g = new Graphics()
     g.eventMode = 'none'
-    g.translateTransform(x - GRIP_ICON_SIZE / 2, cy - GRIP_ICON_SIZE / 2)
-    g.scaleTransform(flip ? -scale : scale, scale)
     g.svg(GRIP_ICON_SVG)
+    // Anchor at icon center, then mirror/scale so left/right markers stay edge-aligned.
+    g.pivot.set(12, 12)
+    g.position.set(x, cy)
+    g.scale.set(flip ? -scale : scale, scale)
     container.addChild(g)
   }
 
   if (wield === 'left' || wield === 'both') {
-    drawOneGrip(bounds.x + GRIP_ICON_SIZE / 2 + 2, true)
+    drawOneGrip(bounds.x, true)
   }
   if (wield === 'right' || wield === 'both') {
-    drawOneGrip(bounds.x + bounds.w - GRIP_ICON_SIZE / 2 - 2, false)
+    drawOneGrip(bounds.x + bounds.w, false)
   }
 }
 

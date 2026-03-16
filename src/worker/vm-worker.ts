@@ -1,6 +1,7 @@
 /// <reference lib="webworker" />
 
-import type { CanonicalState } from '../domain/types'
+import type { Actor, CanonicalState } from '../domain/types'
+import { getWieldOptions, isTwoHandedOnly } from '../domain/weapon-metadata'
 import { parseNodeId, segmentIdToEntryId } from '../vm/drop-intent'
 import { diffSceneVM } from './scene-diff'
 import { buildSceneVM, type WorkerLocalState } from './scene-vm'
@@ -16,6 +17,40 @@ let previousScene: SceneVM | null = null
 
 const post = (message: WorkerToMainMessage): void => {
   self.postMessage(message)
+}
+
+/** Migrate legacy entry.state.wield to actor.leftWieldingEntryId/rightWieldingEntryId. */
+const migrateWieldToActor = (state: CanonicalState): CanonicalState => {
+  const actors = { ...state.actors }
+  const inventoryEntries = { ...state.inventoryEntries }
+  let changed = false
+
+  for (const entry of Object.values(state.inventoryEntries)) {
+    const wield = entry.state?.wield
+    if (!wield || entry.carryGroupId) continue
+
+    const actor = actors[entry.actorId]
+    if (!actor) continue
+
+    const nextActor: Actor = {
+      ...actor,
+      leftWieldingEntryId: wield === 'left' || wield === 'both' ? entry.id : actor.leftWieldingEntryId,
+      rightWieldingEntryId: wield === 'right' || wield === 'both' ? entry.id : actor.rightWieldingEntryId,
+    }
+    if (nextActor.leftWieldingEntryId !== actor.leftWieldingEntryId || nextActor.rightWieldingEntryId !== actor.rightWieldingEntryId) {
+      actors[actor.id] = nextActor
+      changed = true
+    }
+
+    const { wield: _w, heldHands: _h, ...restState } = entry.state ?? {}
+    if (_w !== undefined || _h !== undefined) {
+      inventoryEntries[entry.id] = { ...entry, state: Object.keys(restState).length ? restState : undefined }
+      changed = true
+    }
+  }
+
+  if (!changed) return state
+  return { ...state, actors, inventoryEntries }
 }
 
 const recompute = (sendInitIfFirst = false): void => {
@@ -104,6 +139,18 @@ const applyIntent = (intent: WorkerIntent): void => {
               [entryId]: movedEntry,
             },
           }
+          const actor = worldState.actors[source.actorId]
+          if (actor && (actor.leftWieldingEntryId === entryId || actor.rightWieldingEntryId === entryId)) {
+            const nextActor: Actor = {
+              ...actor,
+              leftWieldingEntryId: actor.leftWieldingEntryId === entryId ? undefined : actor.leftWieldingEntryId,
+              rightWieldingEntryId: actor.rightWieldingEntryId === entryId ? undefined : actor.rightWieldingEntryId,
+            }
+            worldState = {
+              ...worldState,
+              actors: { ...worldState.actors, [actor.id]: nextActor },
+            }
+          }
         }
       }
     }
@@ -133,6 +180,18 @@ const applyIntent = (intent: WorkerIntent): void => {
             [entryId]: movedEntry,
           },
         }
+        const actor = worldState.actors[source.actorId]
+        if (actor && (actor.leftWieldingEntryId === entryId || actor.rightWieldingEntryId === entryId)) {
+          const nextActor: Actor = {
+            ...actor,
+            leftWieldingEntryId: actor.leftWieldingEntryId === entryId ? undefined : actor.leftWieldingEntryId,
+            rightWieldingEntryId: actor.rightWieldingEntryId === entryId ? undefined : actor.rightWieldingEntryId,
+          }
+          worldState = {
+            ...worldState,
+            actors: { ...worldState.actors, [actor.id]: nextActor },
+          }
+        }
       }
     }
     recompute()
@@ -143,23 +202,46 @@ const applyIntent = (intent: WorkerIntent): void => {
     if (!worldState) return
     const entryId = segmentIdToEntryId(intent.segmentId)
     const entry = worldState.inventoryEntries[entryId]
-    if (entry) {
-      const heldHands: 0 | 1 | 2 = intent.wield === 'both' ? 2 : 1
-      const updatedEntry = {
-        ...entry,
-        state: {
-          ...entry.state,
-          wield: intent.wield,
-          heldHands,
-        },
+    const itemDef = entry ? worldState.itemDefinitions[entry.itemDefId] : null
+    if (!entry || !itemDef || !getWieldOptions(itemDef)?.includes(intent.wield)) {
+      recompute()
+      return
+    }
+
+    const actor = worldState.actors[entry.actorId]
+    if (!actor || entry.carryGroupId) {
+      recompute()
+      return
+    }
+
+    let left = actor.leftWieldingEntryId
+    let right = actor.rightWieldingEntryId
+
+    if (intent.wield === 'both') {
+      left = entryId
+      right = entryId
+    } else if (intent.wield === 'left') {
+      if (right === entryId) right = undefined
+      else if (right) {
+        const rightEntry = worldState.inventoryEntries[right]
+        const rightDef = rightEntry ? worldState.itemDefinitions[rightEntry.itemDefId] : null
+        if (rightDef && isTwoHandedOnly(rightDef)) right = undefined
       }
-      worldState = {
-        ...worldState,
-        inventoryEntries: {
-          ...worldState.inventoryEntries,
-          [entryId]: updatedEntry,
-        },
+      left = entryId
+    } else {
+      if (left === entryId) left = undefined
+      else if (left) {
+        const leftEntry = worldState.inventoryEntries[left]
+        const leftDef = leftEntry ? worldState.itemDefinitions[leftEntry.itemDefId] : null
+        if (leftDef && isTwoHandedOnly(leftDef)) left = undefined
       }
+      right = entryId
+    }
+
+    const nextActor: Actor = { ...actor, leftWieldingEntryId: left, rightWieldingEntryId: right }
+    worldState = {
+      ...worldState,
+      actors: { ...worldState.actors, [actor.id]: nextActor },
     }
     recompute()
     return
@@ -169,20 +251,21 @@ const applyIntent = (intent: WorkerIntent): void => {
     if (!worldState) return
     const entryId = segmentIdToEntryId(intent.segmentId)
     const entry = worldState.inventoryEntries[entryId]
-    if (entry) {
-      const nextState = { ...(entry.state ?? {}) }
-      delete nextState.wield
-      nextState.heldHands = 0
-      const updatedEntry = {
-        ...entry,
-        state: nextState,
+    if (!entry) {
+      recompute()
+      return
+    }
+
+    const actor = worldState.actors[entry.actorId]
+    if (actor && (actor.leftWieldingEntryId === entryId || actor.rightWieldingEntryId === entryId)) {
+      const nextActor: Actor = {
+        ...actor,
+        leftWieldingEntryId: actor.leftWieldingEntryId === entryId ? undefined : actor.leftWieldingEntryId,
+        rightWieldingEntryId: actor.rightWieldingEntryId === entryId ? undefined : actor.rightWieldingEntryId,
       }
       worldState = {
         ...worldState,
-        inventoryEntries: {
-          ...worldState.inventoryEntries,
-          [entryId]: updatedEntry,
-        },
+        actors: { ...worldState.actors, [actor.id]: nextActor },
       }
     }
     recompute()
@@ -190,7 +273,7 @@ const applyIntent = (intent: WorkerIntent): void => {
   }
 
   if (intent.type === 'SET_WORLD_STATE') {
-    worldState = intent.worldState
+    worldState = migrateWieldToActor(intent.worldState)
     recompute()
   }
 }
@@ -198,7 +281,7 @@ const applyIntent = (intent: WorkerIntent): void => {
 self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
   const message = event.data
   if (message.type === 'INIT') {
-    worldState = message.worldState
+    worldState = migrateWieldToActor(message.worldState)
     recompute(true)
     return
   }

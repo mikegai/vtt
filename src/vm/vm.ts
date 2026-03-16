@@ -6,7 +6,7 @@ import {
   formatSixthsAsStone,
   speedProfileForSixths,
 } from '../domain/rules'
-import { BASE_CAPACITY_SIXTHS, SIXTHS_PER_STONE, type Actor, type CanonicalState, type InventoryEntry } from '../domain/types'
+import { BASE_CAPACITY_SIXTHS, SIXTHS_PER_STONE, type Actor, type CanonicalState, type InventoryEntry, type WieldGrip } from '../domain/types'
 import type { ActorRowVM, BoardVM, PartyPaceVM, SegmentVM, StoneSlotVM } from './vm-types'
 
 const byName = <T extends { name: string }>(left: T, right: T): number => left.name.localeCompare(right.name)
@@ -70,8 +70,17 @@ const ironRationDisplaySlots = (quantity: number): number[] => {
   return result
 }
 
+const deriveWieldFromActor = (actor: Actor, entryId: string): { wield?: WieldGrip; heldHands?: 0 | 1 | 2 } => {
+  const left = actor.leftWieldingEntryId === entryId
+  const right = actor.rightWieldingEntryId === entryId
+  if (left && right) return { wield: 'both', heldHands: 2 }
+  if (left) return { wield: 'left', heldHands: 1 }
+  if (right) return { wield: 'right', heldHands: 1 }
+  return {}
+}
+
 const toSegmentVM = (
-  actorId: string,
+  actor: Actor,
   packedSegment: {
     readonly inventoryEntryId: string
     readonly itemDefId: string
@@ -85,24 +94,27 @@ const toSegmentVM = (
   },
   canonicalName: string,
 ): SegmentVM | SegmentVM[] => {
+  const actorId = actor.id
   const zoneLabel = packedSegment.zone[0].toUpperCase() + packedSegment.zone.slice(1)
   const stoneText = formatSixthsAsStone(packedSegment.sizeSixths)
+  const baseEntryId = packedSegment.inventoryEntryId.replace(':overflow', '')
+  const derivedWield = deriveWieldFromActor(actor, baseEntryId)
+  const baseState = { ...(packedSegment.state ?? {}), ...derivedWield }
 
   if (packedSegment.itemDefId === 'ironRationsDay' && packedSegment.quantity > 0) {
     const displaySlots = ironRationDisplaySlots(packedSegment.quantity)
-    const baseId = packedSegment.inventoryEntryId.replace(':overflow', '')
     return displaySlots.map((displayQty, i) => {
       const startSixth = packedSegment.startSixth + i
       const endSixth = startSixth + 1
       const title = displayQty === 2 ? '2 iron rations' : canonicalName
       const labels = buildLabelLadder(title)
       return {
-        id: `${baseId}:${i}`,
+        id: `${baseEntryId}:${i}`,
         actorId,
         itemDefId: packedSegment.itemDefId,
         quantity: displayQty,
         zone: packedSegment.zone,
-        state: packedSegment.state ?? {},
+        state: baseState,
         startSixth,
         endSixth,
         sizeSixths: 1,
@@ -125,7 +137,7 @@ const toSegmentVM = (
     itemDefId: packedSegment.itemDefId,
     quantity: packedSegment.quantity,
     zone: packedSegment.zone,
-    state: packedSegment.state ?? {},
+    state: baseState,
     startSixth: packedSegment.startSixth,
     endSixth: packedSegment.endSixth,
     sizeSixths: packedSegment.sizeSixths,
@@ -181,7 +193,7 @@ const buildRow = (
     const baseId = segment.inventoryEntryId.replace(':overflow', '')
     const baseEntry = entryMap.get(baseId)
     if (!baseEntry || !definition) return []
-    const vm = toSegmentVM(actor.id, segment, definition.canonicalName)
+    const vm = toSegmentVM(actor, segment, definition.canonicalName)
     return Array.isArray(vm) ? vm : [vm]
   })
 

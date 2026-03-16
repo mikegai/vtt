@@ -9,6 +9,7 @@ export const sampleState: CanonicalState = {
       stats: { strengthMod: 0, hasLoadBearing: false },
       movementGroupId: 'party',
       active: true,
+      rightWieldingEntryId: 'cutthroatDagger',
     },
     prophet: {
       id: 'prophet',
@@ -33,6 +34,7 @@ export const sampleState: CanonicalState = {
       stats: { strengthMod: 2, hasLoadBearing: false },
       movementGroupId: 'party',
       active: true,
+      rightWieldingEntryId: 'templarPolishedSword',
     },
     templarHorse: {
       id: 'templarHorse',
@@ -59,6 +61,7 @@ export const sampleState: CanonicalState = {
       stats: { strengthMod: 0, hasLoadBearing: false },
       movementGroupId: 'party',
       active: true,
+      rightWieldingEntryId: 'corsairScimitar',
     },
     legionary: {
       id: 'legionary',
@@ -75,6 +78,7 @@ export const sampleState: CanonicalState = {
       stats: { strengthMod: 2, hasLoadBearing: false },
       movementGroupId: 'party',
       active: true,
+      rightWieldingEntryId: 'cataphractPolishedSword',
     },
     cataphractHorse: {
       id: 'cataphractHorse',
@@ -159,7 +163,6 @@ export const sampleState: CanonicalState = {
       itemDefId: 'dagger',
       quantity: 1,
       zone: 'attached',
-      state: { heldHands: 1 },
     },
     cutthroatLeatherArmor: {
       id: 'cutthroatLeatherArmor',
@@ -332,7 +335,6 @@ export const sampleState: CanonicalState = {
       itemDefId: 'polishedSword',
       quantity: 1,
       zone: 'attached',
-      state: { heldHands: 1 },
     },
     templarDagger: {
       id: 'templarDagger',
@@ -380,7 +382,7 @@ export const sampleState: CanonicalState = {
     thugRations: { id: 'thugRations', actorId: 'thug', itemDefId: 'ironRationsDay', quantity: 7, zone: 'stowed' },
     corsairShortBow: { id: 'corsairShortBow', actorId: 'corsair', itemDefId: 'shortBow', quantity: 1, zone: 'attached' },
     corsairQuiver: { id: 'corsairQuiver', actorId: 'corsair', itemDefId: 'quiver20Arrows', quantity: 1, zone: 'attached' },
-    corsairScimitar: { id: 'corsairScimitar', actorId: 'corsair', itemDefId: 'scimitar', quantity: 1, zone: 'attached', state: { heldHands: 1 } },
+    corsairScimitar: { id: 'corsairScimitar', actorId: 'corsair', itemDefId: 'scimitar', quantity: 1, zone: 'attached' },
     corsairDaggerA: { id: 'corsairDaggerA', actorId: 'corsair', itemDefId: 'dagger', quantity: 1, zone: 'attached' },
     corsairDaggerB: { id: 'corsairDaggerB', actorId: 'corsair', itemDefId: 'dagger', quantity: 1, zone: 'attached' },
     corsairLeatherArmor: { id: 'corsairLeatherArmor', actorId: 'corsair', itemDefId: 'leatherArmor', quantity: 1, zone: 'worn', state: { worn: true } },
@@ -402,7 +404,7 @@ export const sampleState: CanonicalState = {
     legionaryRations: { id: 'legionaryRations', actorId: 'legionary', itemDefId: 'ironRationsDay', quantity: 7, zone: 'stowed' },
     cataphractCompositeBow: { id: 'cataphractCompositeBow', actorId: 'cataphract', itemDefId: 'compositeBow', quantity: 1, zone: 'attached' },
     cataphractQuiver: { id: 'cataphractQuiver', actorId: 'cataphract', itemDefId: 'quiver20Arrows', quantity: 1, zone: 'attached' },
-    cataphractPolishedSword: { id: 'cataphractPolishedSword', actorId: 'cataphract', itemDefId: 'polishedSword', quantity: 1, zone: 'attached', state: { heldHands: 1 } },
+    cataphractPolishedSword: { id: 'cataphractPolishedSword', actorId: 'cataphract', itemDefId: 'polishedSword', quantity: 1, zone: 'attached' },
     cataphractSteelShield: { id: 'cataphractSteelShield', actorId: 'cataphract', itemDefId: 'steelShield', quantity: 1, zone: 'attached' },
     cataphractLamellarArmor: { id: 'cataphractLamellarArmor', actorId: 'cataphract', itemDefId: 'lamellarArmor', quantity: 1, zone: 'worn', state: { worn: true } },
     cataphractWaterskin: { id: 'cataphractWaterskin', actorId: 'cataphract', itemDefId: 'waterskin', quantity: 1, zone: 'stowed' },

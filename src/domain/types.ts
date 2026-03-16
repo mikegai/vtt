@@ -55,6 +55,10 @@ export type Actor = {
   readonly ownerActorId?: string
   /** For animals: total capacity in stone (e.g. mule 50, medium riding horse 60). */
   readonly capacityStone?: number
+  /** Entry id wielded in left hand. Mutually exclusive with right; both can point to same 2-handed item. */
+  readonly leftWieldingEntryId?: string
+  /** Entry id wielded in right hand. A 2-handed item loses both if either hand is reassigned. */
+  readonly rightWieldingEntryId?: string
 }
 
 export type CarryGroup = {
