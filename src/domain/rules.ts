@@ -64,7 +64,14 @@ export const speedProfileForSixths = (encumbranceSixths: number, hasLoadBearing:
   return { ...speedTable[band], band }
 }
 
+/** Iron rations: every 7, 2 double up. Effective slots = n - floor(n/7). */
+export const ironRationEffectiveSixths = (quantity: number): number =>
+  quantity - Math.floor(quantity / 7)
+
 export const encumbranceCostSixths = (item: ItemDefinition, quantity: number): number => {
+  if (item.id === 'ironRationsDay') {
+    return ironRationEffectiveSixths(quantity)
+  }
   switch (item.kind) {
     case 'armor':
       return armorAcToSixths(item.armorClass ?? 0) * quantity
