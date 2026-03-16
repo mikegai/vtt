@@ -372,10 +372,21 @@ const encumbranceToSixths = (enc: EncumbranceExpr): number => {
   return 1
 }
 
+/** Per-unit sixths for source items. Handles bundle notation (e.g. "Iron Spikes (6)" = 1 stone for 6). */
+const perUnitSixthsFromSource = (sourceItem: SourceItem): number => {
+  const totalSixths = encumbranceToSixths(sourceItem.encumbrance)
+  const bundleMatch = sourceItem.name.match(/\((\d+)\)/)
+  if (bundleMatch) {
+    const bundleSize = Number(bundleMatch[1])
+    if (bundleSize > 0) return Math.max(1, Math.round(totalSixths / bundleSize))
+  }
+  return totalSixths
+}
+
 const SIXTHS_PER_STONE = 6
 
 const deriveItemKind = (source: SourceItem): { kind: string; sixthsPerUnit: number; armorClass?: number } => {
-  const perUnit = encumbranceToSixths(source.encumbrance)
+  const perUnit = perUnitSixthsFromSource(source)
   const name = source.name.toLowerCase()
   if (source.group === 'armor-and-barding') {
     if (name.includes('shield') && perUnit === SIXTHS_PER_STONE) {
@@ -478,7 +489,7 @@ const pixiAdapter = new PixiBoardAdapter(canvasHost, {
       postToWorker({ type: 'INTENT', intent: { type: 'SET_SELECTED_SEGMENTS', segmentIds } })
     }
   },
-  onExternalDragEnd(targetNodeId, x, y, cancelled) {
+  onExternalDragEnd(targetNodeId, x, y, cancelled, freeSegmentPositions) {
     parseResultsEl.querySelectorAll('.parsed-item-dragging').forEach((el) => el.classList.remove('parsed-item-dragging'))
     if (cancelled || !activeParsedDrag) {
       activeParsedDrag = null
@@ -490,6 +501,9 @@ const pixiAdapter = new PixiBoardAdapter(canvasHost, {
     if (!targetNodeId && (x == null || y == null)) return
     const sourceItem = item.itemDefId ? sourceItemById.get(item.itemDefId) : null
     const derived = sourceItem ? deriveItemKind(sourceItem) : { kind: 'standard', sixthsPerUnit: 1 }
+    const segmentIds = freeSegmentPositions
+      ? Array.from({ length: item.quantity }, (_, i) => `ext-${item.id}-${i}`)
+      : undefined
     postToWorker({
       type: 'INTENT',
       intent: {
@@ -503,6 +517,8 @@ const pixiAdapter = new PixiBoardAdapter(canvasHost, {
         sixthsPerUnit: derived.sixthsPerUnit,
         itemKind: derived.kind,
         armorClass: derived.armorClass,
+        segmentIds,
+        freeSegmentPositions,
       },
     })
     consumedParsedIds.add(item.id)
@@ -606,7 +622,7 @@ const renderParsed = (text: string): void => {
       ? (c.alternatives.find((a) => a.itemId === override)?.itemName ?? c.candidateName)
       : (c.resolvedItemName ?? c.candidateName)
     const sourceItem = itemDefId ? sourceItemById.get(itemDefId) : null
-    const perUnitSixths = sourceItem ? encumbranceToSixths(sourceItem.encumbrance) : 1
+    const perUnitSixths = sourceItem ? perUnitSixthsFromSource(sourceItem) : 1
     return {
       id: `${idx}`,
       raw: c.raw,
@@ -749,7 +765,7 @@ document.addEventListener('pointermove', (e) => {
       activeParsedDrag.enteredCanvas = true
       const item = activeParsedDrag.parsedItem
       const sourceItem = item.itemDefId ? sourceItemById.get(item.itemDefId) : null
-      const perUnitSixths = sourceItem ? encumbranceToSixths(sourceItem.encumbrance) : 1
+      const perUnitSixths = sourceItem ? perUnitSixthsFromSource(sourceItem) : 1
       const syntheticSegments: SceneSegmentVM[] = []
       for (let i = 0; i < item.quantity; i++) {
         syntheticSegments.push({
@@ -770,7 +786,8 @@ document.addEventListener('pointermove', (e) => {
           },
         })
       }
-      pixiAdapter.beginExternalDrag(syntheticSegments, e.clientX, e.clientY)
+      const layout = pixiAdapter.computeVirtualSegmentLayout(syntheticSegments)
+      pixiAdapter.beginExternalDrag(syntheticSegments, e.clientX, e.clientY, layout)
     }
   }
 })

@@ -865,12 +865,21 @@ const applyIntent = (intent: WorkerIntent): void => {
     }
 
     if (shouldDropToGround && intent.x != null && intent.y != null) {
-      const sceneAtDrop = buildSceneVM(worldState, localState)
-      const createdEntryIdSet = new Set(createdEntryIds)
       const freeSegmentPositions = { ...localState.freeSegmentPositions }
-      for (const free of Object.values(sceneAtDrop.freeSegments)) {
-        if (createdEntryIdSet.has(segmentIdToEntryId(free.id))) {
-          freeSegmentPositions[free.id] = { x: intent.x, y: intent.y }
+      if (intent.freeSegmentPositions && intent.segmentIds && intent.segmentIds.length === createdEntryIds.length) {
+        for (let i = 0; i < createdEntryIds.length; i++) {
+          const pos = intent.freeSegmentPositions[intent.segmentIds[i]]
+          if (pos) {
+            freeSegmentPositions[createdEntryIds[i]] = pos
+          }
+        }
+      } else {
+        const sceneAtDrop = buildSceneVM(worldState, localState)
+        const createdEntryIdSet = new Set(createdEntryIds)
+        for (const free of Object.values(sceneAtDrop.freeSegments)) {
+          if (createdEntryIdSet.has(segmentIdToEntryId(free.id))) {
+            freeSegmentPositions[free.id] = { x: intent.x, y: intent.y }
+          }
         }
       }
       localState = { ...localState, freeSegmentPositions }

@@ -251,7 +251,7 @@ export const adventuringSourceItems: readonly SourceItem[] = [
   mk('adventuring-equipment', "Thieves' Tools, Expanded", '1/6'),
   mk('adventuring-equipment', "Thieves' Tools, Superior", '1/6'),
   mk('adventuring-equipment', 'Tinderbox (flint & steel)', '1/6'),
-  mk('adventuring-equipment', 'Torches (6)', '1'),
+  mk('adventuring-equipment', 'Torch', '1/6'),
   mk('adventuring-equipment', 'Treatise, Apprentice', '5'),
   mk('adventuring-equipment', 'Treatise, Journeyman', '5'),
   mk('adventuring-equipment', 'Treatise, Master', '5'),

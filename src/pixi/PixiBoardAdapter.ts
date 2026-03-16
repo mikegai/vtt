@@ -62,7 +62,13 @@ type AdapterHandlers = {
   onMoveLabel?(labelId: string, x: number, y: number): void
   onSelectLabel?(labelId: string | null): void
   onCanvasWorldClick?(x: number, y: number): boolean | void
-  onExternalDragEnd?(targetNodeId: string | null, x: number, y: number, cancelled: boolean): void
+  onExternalDragEnd?(
+    targetNodeId: string | null,
+    x: number,
+    y: number,
+    cancelled: boolean,
+    freeSegmentPositions?: Readonly<Record<string, { x: number; y: number }>>,
+  ): void
 }
 
 type SegmentView = {
@@ -1568,7 +1574,38 @@ export class PixiBoardAdapter {
     })
   }
 
-  beginExternalDrag(segments: readonly SceneSegmentVM[], clientX: number, clientY: number): void {
+  /** Virtual node-style layout for segments (e.g. paste inventory). Used as initialSegmentPositions for external drag. */
+  computeVirtualSegmentLayout(segments: readonly SceneSegmentVM[]): Record<string, { x: number; y: number }> {
+    const ITEM_GAP = 4
+    const result: Record<string, { x: number; y: number }> = {}
+    let offsetY = 0
+    for (const segment of segments) {
+      if (isMultiStone(segment)) {
+        result[segment.id] = { x: 0, y: offsetY }
+        offsetY += STONE_H + ITEM_GAP
+      } else {
+        const groups = groupSixthsByStone(0, segment.sizeSixths)
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+        groups.forEach((g) => {
+          const gy = offsetY + stoneToY(g.stone) + g.startRow * CELL_H
+          minX = Math.min(minX, stoneToX(g.stone))
+          minY = Math.min(minY, gy)
+          maxX = Math.max(maxX, stoneToX(g.stone) + STONE_W)
+          maxY = Math.max(maxY, gy + g.count * CELL_H)
+        })
+        result[segment.id] = { x: minX, y: minY }
+        offsetY += maxY - minY + ITEM_GAP
+      }
+    }
+    return result
+  }
+
+  beginExternalDrag(
+    segments: readonly SceneSegmentVM[],
+    clientX: number,
+    clientY: number,
+    initialSegmentPositions?: Record<string, { x: number; y: number }>,
+  ): void {
     if (this.activeDrag.type !== 'idle') return
     if (segments.length === 0) return
     const pointerWorld = this.screenToWorld(clientX, clientY)
@@ -1589,7 +1626,7 @@ export class PixiBoardAdapter {
         lineLayer,
         proxyAnchorOffset,
         dropAnchorOffset: { x: pivot.x, y: pivot.y },
-        initialSegmentPositions: {},
+        initialSegmentPositions: initialSegmentPositions ?? {},
         pointerWorldAtStart: pointerWorld,
         grabbedSegmentId: segments[0].id,
         snap: null,
@@ -1991,12 +2028,26 @@ export class PixiBoardAdapter {
       }
       const dropX = world?.x ?? 0
       const dropY = world?.y ?? 0
+      let freeSegmentPositions: Record<string, { x: number; y: number }> | undefined
+      if (!cancelled && !targetNodeId && world && Object.keys(drag.initialSegmentPositions).length > 0) {
+        freeSegmentPositions = {}
+        const anchor = drag.dropAnchorOffset
+        for (const segId of drag.segmentIds) {
+          const pos = drag.initialSegmentPositions[segId]
+          if (pos) {
+            freeSegmentPositions[segId] = {
+              x: world.x - anchor.x + pos.x,
+              y: world.y - anchor.y + pos.y,
+            }
+          }
+        }
+      }
       this.worldLayer.removeChild(drag.lineLayer)
       this.worldLayer.removeChild(drag.proxy)
       drag.lineLayer.destroy({ children: true })
       drag.proxy.destroy({ children: true })
       this.endDrag()
-      this.handlers.onExternalDragEnd?.(targetNodeId, dropX, dropY, cancelled)
+      this.handlers.onExternalDragEnd?.(targetNodeId, dropX, dropY, cancelled, freeSegmentPositions)
       return
     }
 

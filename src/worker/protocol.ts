@@ -129,6 +129,8 @@ export type WorkerIntent =
       readonly sixthsPerUnit?: number
       readonly itemKind?: string
       readonly armorClass?: number
+      readonly segmentIds?: readonly string[]
+      readonly freeSegmentPositions?: Readonly<Record<string, { x: number; y: number }>>
     }
   | { readonly type: 'MOVE_ENTRY_TO'; readonly segmentId: string; readonly sourceNodeId: string; readonly targetNodeId: string }
   | { readonly type: 'DELETE_ENTRY'; readonly segmentId: string }
