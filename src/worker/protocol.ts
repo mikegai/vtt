@@ -27,6 +27,8 @@ export type SceneNodeVM = {
   readonly rowId: string
   readonly actorId: string
   readonly groupId: string
+  /** Parent node id when nested (one-level deep). */
+  readonly parentNodeId?: string
   readonly actorKind: ActorKind
   readonly title: string
   readonly x: number
@@ -86,6 +88,8 @@ export type WorkerIntent =
   | { readonly type: 'SELECT_ALL_OF_TYPE'; readonly itemDefId: string; readonly nodeId?: string }
   | { readonly type: 'MOVE_GROUP'; readonly groupId: string; readonly x: number; readonly y: number }
   | { readonly type: 'MOVE_NODE_TO_GROUP_INDEX'; readonly nodeId: string; readonly groupId: string; readonly index: number }
+  | { readonly type: 'NEST_NODE_UNDER'; readonly nodeId: string; readonly parentNodeId: string }
+  | { readonly type: 'MOVE_NODE_TO_ROOT'; readonly nodeId: string }
   | { readonly type: 'DRAG_SEGMENT_START'; readonly segmentIds: readonly string[] }
   | { readonly type: 'DRAG_SEGMENT_UPDATE'; readonly targetNodeId: string | null }
   | { readonly type: 'DRAG_SEGMENT_END'; readonly targetNodeId: string | null }

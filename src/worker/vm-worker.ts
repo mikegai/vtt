@@ -164,41 +164,95 @@ const applyIntent = (intent: WorkerIntent): void => {
       return
     }
     const scene = buildSceneVM(worldState, localState)
+    const nodeIdsToMove: string[] = [intent.nodeId]
+    for (const n of Object.values(scene.nodes)) {
+      if (n.parentNodeId === intent.nodeId) nodeIdsToMove.push(n.id)
+    }
     const baseOrders: Record<string, readonly string[]> = {}
     for (const [gid, g] of Object.entries(scene.groups ?? {})) {
       baseOrders[gid] = [...g.nodeIds]
     }
     const nextOrders: Record<string, readonly string[]> = { ...baseOrders }
     for (const [gid, order] of Object.entries(nextOrders)) {
-      nextOrders[gid] = order.filter((id) => id !== intent.nodeId)
+      nextOrders[gid] = order.filter((id) => !nodeIdsToMove.includes(id))
     }
     const target = [...(nextOrders[intent.groupId] ?? [])]
     const clamped = Math.max(0, Math.min(intent.index, target.length))
-    target.splice(clamped, 0, intent.nodeId)
+    target.splice(clamped, 0, ...nodeIdsToMove)
     nextOrders[intent.groupId] = target
 
-    if (worldState.actors[intent.nodeId]) {
-      const actor = worldState.actors[intent.nodeId]
-      worldState = {
-        ...worldState,
-        actors: {
-          ...worldState.actors,
-          [intent.nodeId]: {
-            ...actor,
-            movementGroupId: intent.groupId,
+    for (const nid of nodeIdsToMove) {
+      const actor: Actor | undefined = worldState.actors[nid]
+      if (actor) {
+        worldState = {
+          ...worldState,
+          actors: {
+            ...worldState.actors,
+            [nid]: { ...actor, movementGroupId: intent.groupId },
           },
-        },
+        }
       }
     }
 
+    const overrides = { ...localState.nodeGroupOverrides }
+    for (const nid of nodeIdsToMove) overrides[nid] = intent.groupId
+    localState = { ...localState, nodeGroupOverrides: overrides, groupNodeOrders: nextOrders }
+    recompute()
+    return
+  }
+
+  if (intent.type === 'NEST_NODE_UNDER') {
+    if (!worldState) {
+      recompute()
+      return
+    }
+    const parentActor = worldState.actors[intent.parentNodeId]
+    const childActor = worldState.actors[intent.nodeId]
+    if (!parentActor || !childActor) {
+      recompute()
+      return
+    }
+    if (parentActor.ownerActorId) {
+      recompute()
+      return
+    }
+    worldState = {
+      ...worldState,
+      actors: {
+        ...worldState.actors,
+        [intent.nodeId]: {
+          ...childActor,
+          ownerActorId: intent.parentNodeId,
+          movementGroupId: parentActor.movementGroupId,
+        },
+      },
+    }
     localState = {
       ...localState,
-      nodeGroupOverrides: {
-        ...localState.nodeGroupOverrides,
-        [intent.nodeId]: intent.groupId,
-      },
-      groupNodeOrders: nextOrders,
+      nodeGroupOverrides: { ...localState.nodeGroupOverrides, [intent.nodeId]: parentActor.movementGroupId },
     }
+    recompute()
+    return
+  }
+
+  if (intent.type === 'MOVE_NODE_TO_ROOT') {
+    if (!worldState) {
+      recompute()
+      return
+    }
+    const actor = worldState.actors[intent.nodeId]
+    if (!actor) {
+      recompute()
+      return
+    }
+    worldState = {
+      ...worldState,
+      actors: {
+        ...worldState.actors,
+        [intent.nodeId]: { ...actor, ownerActorId: undefined },
+      },
+    }
+    localState = { ...localState }
     recompute()
     return
   }

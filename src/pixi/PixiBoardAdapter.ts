@@ -12,13 +12,14 @@ type GroupDragData = {
 }
 
 type NodeReorderDragData = {
-  readonly nodeId: string
-  readonly nodeContainer: Container
+  readonly nodeIds: string[]
+  readonly nodeContainers: Container[]
+  readonly initialPositions: { x: number; y: number }[]
   readonly handleView: Container
-  readonly initialPos: { x: number; y: number }
   readonly offset: { x: number; y: number }
   targetGroupId: string | null
   targetIndex: number
+  targetNestParentNodeId: string | null
 }
 
 type ActiveDrag =
@@ -32,6 +33,8 @@ type AdapterHandlers = {
   onHoverSegment(segmentId: string | null): void
   onMoveGroup?(groupId: string, x: number, y: number): void
   onMoveNodeToGroupIndex?(nodeId: string, groupId: string, index: number): void
+  onNestNodeUnder?(nodeId: string, parentNodeId: string): void
+  onMoveNodeToRoot?(nodeId: string): void
   onZoomChange(zoom: number): void
   onDragSegmentStart(segmentIds: string[]): void
   onDragSegmentUpdate(targetNodeId: string | null): void
@@ -51,6 +54,7 @@ type NodeView = {
   readonly root: Container
   readonly segmentContainer: Container
   segmentViews: Map<string, SegmentView>
+  moveToRootBtn?: Graphics
 }
 
 type GroupView = {
@@ -1447,6 +1451,26 @@ export class PixiBoardAdapter {
     const totalHeight = TOP_BAND_H + slotAreaHeightForSlots(slotCount)
     const totalSixths = totalSixthsForSlots(slotCount)
 
+    let moveToRootBtn: Graphics | undefined
+    if (node.parentNodeId && this.handlers.onMoveNodeToRoot) {
+      moveToRootBtn = new Graphics()
+      moveToRootBtn.eventMode = 'static'
+      moveToRootBtn.cursor = 'pointer'
+      const btnW = 16
+      const btnH = 16
+      const btnX = -btnW - 4
+      const btnY = totalHeight / 2 - btnH / 2
+      moveToRootBtn.roundRect(btnX, btnY, btnW, btnH, 4)
+      moveToRootBtn.fill({ color: 0x2f4878, alpha: 0.6 })
+      moveToRootBtn.stroke({ width: 1, color: 0x5cadee, alpha: 0.8 })
+      ;(moveToRootBtn as Container & { __dragHandle?: boolean }).__dragHandle = true
+      moveToRootBtn.on('pointertap', () => {
+        if (this.activeDrag.type !== 'idle') return
+        this.handlers.onMoveNodeToRoot?.(node.id)
+      })
+      root.addChild(moveToRootBtn)
+    }
+
     const bg = new Graphics()
     bg.roundRect(0, 0, totalWidth, totalHeight, 10)
     bg.fill({ color: 0x0d1a30, alpha: 0.92 })
@@ -1562,7 +1586,7 @@ export class PixiBoardAdapter {
     root.position.set(node.x, node.y)
     this.enableDrag(dragHandle, root, node.id)
     this.worldLayer.addChild(root)
-    return { root, segmentContainer, segmentViews }
+    return { root, segmentContainer, segmentViews, moveToRootBtn }
   }
 
   private updateNode(
@@ -1572,6 +1596,33 @@ export class PixiBoardAdapter {
     filterCategory: string | null,
     selectedSegmentIds: readonly string[],
   ): void {
+    const totalHeight = TOP_BAND_H + slotAreaHeightForSlots(node.slotCount)
+    if (node.parentNodeId && this.handlers.onMoveNodeToRoot) {
+      if (!view.moveToRootBtn) {
+        const moveToRootBtn = new Graphics()
+        moveToRootBtn.eventMode = 'static'
+        moveToRootBtn.cursor = 'pointer'
+        const btnW = 16
+        const btnH = 16
+        const btnX = -btnW - 4
+        const btnY = totalHeight / 2 - btnH / 2
+        moveToRootBtn.roundRect(btnX, btnY, btnW, btnH, 4)
+        moveToRootBtn.fill({ color: 0x2f4878, alpha: 0.6 })
+        moveToRootBtn.stroke({ width: 1, color: 0x5cadee, alpha: 0.8 })
+        ;(moveToRootBtn as Container & { __dragHandle?: boolean }).__dragHandle = true
+        moveToRootBtn.on('pointertap', () => {
+          if (this.activeDrag.type !== 'idle') return
+          this.handlers.onMoveNodeToRoot?.(node.id)
+        })
+        view.root.addChildAt(moveToRootBtn, 0)
+        ;(view as NodeView).moveToRootBtn = moveToRootBtn
+      }
+    } else if (view.moveToRootBtn) {
+      view.root.removeChild(view.moveToRootBtn)
+      view.moveToRootBtn.destroy()
+      ;(view as NodeView).moveToRootBtn = undefined
+    }
+
     const tier = getZoomTier(this.zoom)
     const textCompensationScale = getTextCompensationScale(this.zoom)
     const totalSixths = totalSixthsForSlots(node.slotCount)
@@ -1652,7 +1703,18 @@ export class PixiBoardAdapter {
 
   private enableDrag(handleView: Container, nodeContainer: Container, nodeId: string): void {
     handleView.on('pointerdown', (event) => {
-      if (event.button !== 0 || this.activeDrag.type !== 'idle') return
+      if (event.button !== 0 || this.activeDrag.type !== 'idle' || !this.currentScene) return
+      const nodeIds: string[] = [nodeId]
+      for (const n of Object.values(this.currentScene.nodes)) {
+        if (n.parentNodeId === nodeId) nodeIds.push(n.id)
+      }
+      const nodeContainers: Container[] = []
+      for (const nid of nodeIds) {
+        const v = this.nodeViews.get(nid)
+        if (v) nodeContainers.push(v.root)
+      }
+      if (nodeContainers.length === 0) return
+      const initialPositions = nodeContainers.map((c) => ({ x: c.position.x, y: c.position.y }))
       const point = event.global
       const offset = {
         x: (point.x - this.pan.x) / this.zoom - nodeContainer.position.x,
@@ -1661,13 +1723,14 @@ export class PixiBoardAdapter {
       this.activeDrag = {
         type: 'nodeReorder',
         state: {
-          nodeId,
-          nodeContainer,
+          nodeIds,
+          nodeContainers,
+          initialPositions,
           handleView,
-          initialPos: { x: nodeContainer.position.x, y: nodeContainer.position.y },
           offset,
           targetGroupId: null,
           targetIndex: 0,
+          targetNestParentNodeId: null,
         },
       }
       handleView.cursor = 'grabbing'
@@ -1719,8 +1782,26 @@ export class PixiBoardAdapter {
     return { root }
   }
 
-  private findNodeDropTarget(nodeId: string, worldX: number, worldY: number): { groupId: string; index: number; lineY: number } | null {
+  private findNodeDropTarget(
+    nodeIds: string[],
+    worldX: number,
+    worldY: number,
+  ): { type: 'reorder'; groupId: string; index: number; lineY: number } | { type: 'nest'; parentNodeId: string; lineY: number } | null {
     if (!this.currentScene) return null
+    const BODY_INSET = 8
+
+    for (const node of Object.values(this.currentScene.nodes)) {
+      if (nodeIds.includes(node.id)) continue
+      if (node.parentNodeId) continue
+      const bodyLeft = node.x + BODY_INSET
+      const bodyRight = node.x + node.width - BODY_INSET
+      const bodyTop = node.y + TOP_BAND_H
+      const bodyBottom = node.y + node.height - BODY_INSET
+      if (worldX >= bodyLeft && worldX <= bodyRight && worldY >= bodyTop && worldY <= bodyBottom) {
+        return { type: 'nest', parentNodeId: node.id, lineY: node.y + node.height / 2 }
+      }
+    }
+
     const groups = Object.values(this.currentScene.groups ?? {})
     let target: SceneGroupVM | null = null
     for (let i = groups.length - 1; i >= 0; i -= 1) {
@@ -1733,7 +1814,7 @@ export class PixiBoardAdapter {
     }
     if (!target) return null
 
-    const candidateIds = target.nodeIds.filter((id) => id !== nodeId)
+    const candidateIds = target.nodeIds.filter((id) => !nodeIds.includes(id))
     let index = candidateIds.length
     for (let i = 0; i < candidateIds.length; i += 1) {
       const n = this.currentScene.nodes[candidateIds[i]]
@@ -1753,21 +1834,32 @@ export class PixiBoardAdapter {
       const n = this.currentScene.nodes[candidateIds[index]]
       lineY = n ? n.y - 4 : lineY
     }
-    return { groupId: target.id, index, lineY }
+    return { type: 'reorder', groupId: target.id, index, lineY }
   }
 
-  private drawGroupDropIndicator(groupId: string, lineY: number): void {
+  private drawGroupDropIndicator(
+    drop:
+      | { type: 'reorder'; groupId: string; lineY: number }
+      | { type: 'nest'; parentNodeId: string; lineY: number },
+  ): void {
     const indicator = this.groupDropIndicator
     if (!this.currentScene) return
-    const group = this.currentScene.groups[groupId]
-    if (!group) return
-    this.groupLayer.addChild(indicator)
     indicator.clear()
-    const x1 = group.x + 20
-    const x2 = group.x + group.width - 20
-    indicator.moveTo(x1, lineY)
-    indicator.lineTo(x2, lineY)
-    indicator.stroke({ width: 3, color: 0xffffff, alpha: 0.95 })
+    this.groupLayer.addChild(indicator)
+    if (drop.type === 'reorder') {
+      const group = this.currentScene.groups[drop.groupId]
+      if (!group) return
+      const x1 = group.x + 20
+      const x2 = group.x + group.width - 20
+      indicator.moveTo(x1, drop.lineY)
+      indicator.lineTo(x2, drop.lineY)
+      indicator.stroke({ width: 3, color: 0xffffff, alpha: 0.95 })
+    } else {
+      const node = this.currentScene.nodes[drop.parentNodeId]
+      if (!node) return
+      indicator.roundRect(node.x - 2, node.y - 2, node.width + 4, node.height + 4, 12)
+      indicator.stroke({ width: 3, color: 0x5cadee, alpha: 0.9 })
+    }
   }
 
   private updateNodeReorderDrag(clientX: number, clientY: number): void {
@@ -1776,18 +1868,32 @@ export class PixiBoardAdapter {
     const world = this.screenToWorld(clientX, clientY)
     const x = world.x - drag.offset.x
     const y = world.y - drag.offset.y
-    drag.nodeContainer.position.set(x, y)
-    const node = this.currentScene.nodes[drag.nodeId]
-    const probeX = node ? x + node.width / 2 : world.x
-    const probeY = node ? y + node.height / 2 : world.y
-    const drop = this.findNodeDropTarget(drag.nodeId, probeX, probeY)
+    const dx = x - drag.initialPositions[0].x
+    const dy = y - drag.initialPositions[0].y
+    for (let i = 0; i < drag.nodeContainers.length; i++) {
+      const c = drag.nodeContainers[i]
+      const ip = drag.initialPositions[i]
+      c.position.set(ip.x + dx, ip.y + dy)
+    }
+    const primaryNode = this.currentScene.nodes[drag.nodeIds[0]]
+    const probeX = primaryNode ? x + primaryNode.width / 2 : world.x
+    const probeY = primaryNode ? y + primaryNode.height / 2 : world.y
+    const drop = this.findNodeDropTarget(drag.nodeIds, probeX, probeY)
     if (drop) {
-      drag.targetGroupId = drop.groupId
-      drag.targetIndex = drop.index
-      this.drawGroupDropIndicator(drop.groupId, drop.lineY)
+      if (drop.type === 'reorder') {
+        drag.targetGroupId = drop.groupId
+        drag.targetIndex = drop.index
+        drag.targetNestParentNodeId = null
+      } else {
+        drag.targetGroupId = null
+        drag.targetIndex = 0
+        drag.targetNestParentNodeId = drop.parentNodeId
+      }
+      this.drawGroupDropIndicator(drop)
     } else {
       this.groupDropIndicator.clear()
       drag.targetGroupId = null
+      drag.targetNestParentNodeId = null
     }
   }
 
@@ -1795,25 +1901,37 @@ export class PixiBoardAdapter {
     if (this.activeDrag.type !== 'nodeReorder') return
     const drag = this.activeDrag.state
     if (finalClientX != null && finalClientY != null && this.currentScene) {
-      const node = this.currentScene.nodes[drag.nodeId]
-      if (node) {
+      const primaryNode = this.currentScene.nodes[drag.nodeIds[0]]
+      if (primaryNode) {
         const world = this.screenToWorld(finalClientX, finalClientY)
         const x = world.x - drag.offset.x
         const y = world.y - drag.offset.y
-        const probeX = x + node.width / 2
-        const probeY = y + node.height / 2
-        const finalDrop = this.findNodeDropTarget(drag.nodeId, probeX, probeY)
+        const probeX = x + primaryNode.width / 2
+        const probeY = y + primaryNode.height / 2
+        const finalDrop = this.findNodeDropTarget(drag.nodeIds, probeX, probeY)
         if (finalDrop) {
-          drag.targetGroupId = finalDrop.groupId
-          drag.targetIndex = finalDrop.index
+          if (finalDrop.type === 'reorder') {
+            drag.targetGroupId = finalDrop.groupId
+            drag.targetIndex = finalDrop.index
+            drag.targetNestParentNodeId = null
+          } else {
+            drag.targetGroupId = null
+            drag.targetIndex = 0
+            drag.targetNestParentNodeId = finalDrop.parentNodeId
+          }
         }
       }
     }
     drag.handleView.cursor = 'grab'
     this.groupDropIndicator.clear()
-    drag.nodeContainer.position.set(drag.initialPos.x, drag.initialPos.y)
-    if (drag.targetGroupId && this.handlers.onMoveNodeToGroupIndex) {
-      this.handlers.onMoveNodeToGroupIndex(drag.nodeId, drag.targetGroupId, drag.targetIndex)
+    for (let i = 0; i < drag.nodeContainers.length; i++) {
+      const ip = drag.initialPositions[i]
+      drag.nodeContainers[i].position.set(ip.x, ip.y)
+    }
+    if (drag.targetNestParentNodeId && this.handlers.onNestNodeUnder) {
+      this.handlers.onNestNodeUnder(drag.nodeIds[0], drag.targetNestParentNodeId)
+    } else if (drag.targetGroupId && this.handlers.onMoveNodeToGroupIndex) {
+      this.handlers.onMoveNodeToGroupIndex(drag.nodeIds[0], drag.targetGroupId, drag.targetIndex)
     }
     this.endDrag()
   }

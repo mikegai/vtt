@@ -45,6 +45,7 @@ const NODE_ROW_GAP = 8
 const GROUP_PADDING_X = 20
 const GROUP_PADDING_TOP = 40
 const GROUP_PADDING_BOTTOM = 18
+const NODE_INDENT = 24
 
 const flattenRows = (rows: readonly ActorRowVM[]): ActorRowVM[] => {
   const result: ActorRowVM[] = []
@@ -86,6 +87,7 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
       rowId: row.id,
       actorId: row.actorId,
       groupId,
+      parentNodeId: row.parentActorId,
       actorKind: actor?.kind ?? 'pc',
       title: row.title,
       x: 0,
@@ -142,10 +144,11 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
       const node = nodes[nodeId]
       if (!node) continue
       const mutableNode = node as SceneNodeVM & { x: number; y: number }
-      mutableNode.x = pos.x + GROUP_PADDING_X
+      const indentPx = node.parentNodeId ? NODE_INDENT : 0
+      mutableNode.x = pos.x + GROUP_PADDING_X + indentPx
       mutableNode.y = cursorY
       cursorY += node.height + NODE_ROW_GAP
-      maxNodeW = Math.max(maxNodeW, node.width)
+      maxNodeW = Math.max(maxNodeW, node.width + indentPx)
     }
     const hasNodes = orderedNodeIds.length > 0
     const groupHeight = hasNodes

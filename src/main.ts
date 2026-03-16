@@ -280,6 +280,12 @@ const pixiAdapter = new PixiBoardAdapter(canvasHost, {
   onMoveNodeToGroupIndex(nodeId, groupId, index) {
     postToWorker({ type: 'INTENT', intent: { type: 'MOVE_NODE_TO_GROUP_INDEX', nodeId, groupId, index } })
   },
+  onNestNodeUnder(nodeId, parentNodeId) {
+    postToWorker({ type: 'INTENT', intent: { type: 'NEST_NODE_UNDER', nodeId, parentNodeId } })
+  },
+  onMoveNodeToRoot(nodeId) {
+    postToWorker({ type: 'INTENT', intent: { type: 'MOVE_NODE_TO_ROOT', nodeId } })
+  },
   onZoomChange(_zoom) {},
   onDragSegmentStart(segmentIds) {
     postToWorker({ type: 'INTENT', intent: { type: 'DRAG_SEGMENT_START', segmentIds } })
