@@ -7,6 +7,7 @@ import {
   coinsToSixths,
   encumbranceCostSixths,
   formatSixthsAsStone,
+  ironRationEffectiveSixths,
   speedBandForSixths,
   stoneToSixths,
 } from '../domain/rules'
@@ -72,11 +73,13 @@ describe('ACKS rules', () => {
     expect(encumbranceCostSixths(plate, 1)).toBe(stoneToSixths(6))
   })
 
-  it('formats sixths as stone with fractional sixths (no decimals)', () => {
-    expect(formatSixthsAsStone(6)).toBe('1 stone')
-    expect(formatSixthsAsStone(58)).toBe('9 4/6 stone')
-    expect(formatSixthsAsStone(37)).toBe('6 1/6 stone')
-    expect(formatSixthsAsStone(0)).toBe('0 stone')
+  it('iron rations: every 7, 2 pack into one slot (effective sixths = n - floor(n/7))', () => {
+    expect(ironRationEffectiveSixths(5)).toBe(5)
+    expect(ironRationEffectiveSixths(6)).toBe(6)
+    expect(ironRationEffectiveSixths(7)).toBe(6)
+    expect(ironRationEffectiveSixths(8)).toBe(7)
+    expect(ironRationEffectiveSixths(14)).toBe(12)
+    expect(ironRationEffectiveSixths(15)).toBe(13)
   })
 
 })

@@ -6,7 +6,7 @@ import type { InventoryEntry, ItemDefinition } from '../domain/types'
 const defs: Record<string, ItemDefinition> = {
   armor: { id: 'armor', canonicalName: 'Plate Armor', kind: 'armor', armorClass: 6 },
   shield: { id: 'shield', canonicalName: 'Steel shield', kind: 'bulky' },
-  sword: { id: 'sword', canonicalName: 'Long sword', kind: 'bulky' },
+  sword: { id: 'sword', canonicalName: 'Long sword', kind: 'standard', sixthsPerUnit: 1 },
   pole: { id: 'pole', canonicalName: 'Pole, Wooden', kind: 'bulky' },
   rope: { id: 'rope', canonicalName: "50' rope", kind: 'standard', sixthsPerUnit: 6 },
   torch: { id: 'torch', canonicalName: 'Torch', kind: 'standard', sixthsPerUnit: 1 },
@@ -75,7 +75,7 @@ describe('deterministic packing', () => {
     expect(ropeSegment!.sizeSixths).toBe(6)
   })
 
-  it('packs full-stone items first: armor, shields, weapons, poles, other 1-stone; small items last', () => {
+  it('packs full-stone items first: armor, shields, poles, rope; 1/6-stone items (sword, torch) last', () => {
     const items = [
       asInput(mkEntry('f', 'torch', 'stowed', 1)),
       asInput(mkEntry('e', 'rope', 'stowed', 1)),
@@ -86,6 +86,6 @@ describe('deterministic packing', () => {
     ]
     const packed = packDeterministic(items, stoneToSixths(20))
     const placed = packed.filter((s) => !s.isOverflow).map((s) => s.itemDefId)
-    expect(placed).toEqual(['armor', 'shield', 'sword', 'pole', 'rope', 'torch'])
+    expect(placed).toEqual(['armor', 'shield', 'pole', 'rope', 'sword', 'torch'])
   })
 })

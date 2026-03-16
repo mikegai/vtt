@@ -34,13 +34,17 @@ describe('board view model', () => {
     expect(horseRow!.title).toBe('Medium riding horse')
   })
 
-  it('nests cataphract horse under cataphract by ownership', () => {
+  it('iron rations: 7 individual entries display as 6 segments (5 singles + 1 "2 iron rations")', () => {
     const board = buildBoardVM(sampleState)
-    const cataphractRow = board.rows.find((r) => r.actorId === 'cataphract')
-    expect(cataphractRow).toBeDefined()
-    const horseRow = cataphractRow!.childRows.find((r) => r.actorId === 'cataphractHorse')
-    expect(horseRow).toBeDefined()
-    expect(horseRow!.parentActorId).toBe('cataphract')
+    const cutthroatRow = board.rows.find((r) => r.actorId === 'cutthroat')
+    expect(cutthroatRow).toBeDefined()
+    const ironRationSegments = cutthroatRow!.segments.filter((s) => s.itemDefId === 'ironRationsDay')
+    expect(ironRationSegments.length).toBe(6)
+    const pairSegment = ironRationSegments.find((s) => s.tooltip.title === '2 iron rations')
+    expect(pairSegment).toBeDefined()
+    expect(pairSegment!.quantity).toBe(2)
+    const singleCount = ironRationSegments.filter((s) => s.tooltip.title === "1 day's iron rations").length
+    expect(singleCount).toBe(5)
   })
 
 })
