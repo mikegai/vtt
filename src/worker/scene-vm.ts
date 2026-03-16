@@ -2,13 +2,16 @@ import type { ItemCategory } from '../domain/item-category'
 import { SIXTHS_PER_STONE } from '../domain/types'
 import { applyDropIntentToState } from '../vm/drop-intent'
 import { buildBoardVM } from '../vm/vm'
+import type { ActorRowVM } from '../vm/vm-types'
 import type { CanonicalState } from '../domain/types'
 import type { DropIntent } from './protocol'
 import type { SceneGroupVM, SceneNodeVM, SceneVM } from './protocol'
 
 export type WorkerLocalState = {
   readonly hoveredSegmentId: string | null
-  readonly nodePositions: Record<string, { x: number; y: number }>
+  readonly groupPositions: Record<string, { x: number; y: number }>
+  readonly nodeGroupOverrides: Record<string, string>
+  readonly groupNodeOrders: Record<string, readonly string[]>
   readonly dropIntent: DropIntent | null
   readonly stonesPerRow: number
   readonly filterCategory: ItemCategory | null
@@ -36,11 +39,22 @@ const nodeHeightForSlots = (slotCount: number, stonesPerRow: number): number =>
 const nodeWidthForSlots = (slotCount: number, stonesPerRow: number): number =>
   SLOT_START_X + meterWidthForSlots(slotCount, stonesPerRow) + 20
 
-const INDENT_X = 40
-const NODE_ROW_GAP = 20
-const GROUP_PADDING_X = 22
-const GROUP_PADDING_TOP = 44
-const GROUP_PADDING_BOTTOM = 24
+const GROUP_X = 80
+const GROUP_STACK_GAP = 28
+const NODE_ROW_GAP = 8
+const GROUP_PADDING_X = 20
+const GROUP_PADDING_TOP = 40
+const GROUP_PADDING_BOTTOM = 18
+
+const flattenRows = (rows: readonly ActorRowVM[]): ActorRowVM[] => {
+  const result: ActorRowVM[] = []
+  const visit = (row: ActorRowVM): void => {
+    result.push(row)
+    row.childRows.forEach(visit)
+  }
+  rows.forEach(visit)
+  return result
+}
 
 export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocalState): SceneVM => {
   const effectiveState = localState.dropIntent
@@ -49,10 +63,11 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
   const board = buildBoardVM(effectiveState)
   const movedSegmentIds = localState.dropIntent ? new Set(localState.dropIntent.segmentIds) : new Set<string>()
   const dropIntent = localState.dropIntent
+  const rows = flattenRows(board.rows)
   const nodes: Record<string, SceneNodeVM> = {}
+  const groupsById = new Map<string, { id: string; title: string; nodeIds: string[] }>()
 
-  let accumY = 80
-  for (const row of board.rows) {
+  for (const row of rows) {
     const actor = worldState.actors[row.actorId]
     const twoBandSlots = actor?.kind === 'animal' || actor?.kind === 'vehicle'
     const totalStoneSlots = Math.ceil(row.capacitySixths / SIXTHS_PER_STONE)
@@ -61,20 +76,20 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
       : actor?.stats.hasLoadBearing
         ? 7
         : 5
-
     const slotCount = totalStoneSlots
-    const nodeHeight = nodeHeightForSlots(slotCount, localState.stonesPerRow)
-    const fallback = { x: 80, y: accumY }
-    const position = localState.nodePositions[row.id] ?? fallback
-    accumY += nodeHeight + NODE_ROW_GAP
+    const baseGroupId = actor?.movementGroupId ?? 'ungrouped'
+    const groupId = localState.nodeGroupOverrides[row.id] ?? baseGroupId
+    const groupTitle = worldState.movementGroups[groupId]?.name ?? groupId
+
     nodes[row.id] = {
       id: row.id,
       rowId: row.id,
       actorId: row.actorId,
+      groupId,
       actorKind: actor?.kind ?? 'pc',
       title: row.title,
-      x: position.x,
-      y: position.y,
+      x: 0,
+      y: 0,
       width: nodeWidthForSlots(slotCount, localState.stonesPerRow),
       height: nodeHeightForSlots(slotCount, localState.stonesPerRow),
       speedFeet: row.speed.explorationFeet,
@@ -101,93 +116,51 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
       })),
     }
 
-    for (const child of row.childRows) {
-      const childActor = worldState.actors[child.actorId]
-      const childTwoBandSlots = childActor?.kind === 'animal' || childActor?.kind === 'vehicle'
-      const childTotalStoneSlots = Math.ceil(child.capacitySixths / SIXTHS_PER_STONE)
-      const childFixedGreenStoneSlots = childTwoBandSlots
-        ? Math.floor(childTotalStoneSlots / 2)
-        : childActor?.stats.hasLoadBearing
-          ? 7
-          : 5
-
-      const childSlotCount = childTotalStoneSlots
-      const childNodeHeight = nodeHeightForSlots(childSlotCount, localState.stonesPerRow)
-      const childFallback = { x: 80 + INDENT_X, y: accumY }
-      const childPosition = localState.nodePositions[child.id] ?? childFallback
-      accumY += childNodeHeight + NODE_ROW_GAP
-      nodes[child.id] = {
-        id: child.id,
-        rowId: child.id,
-        actorId: child.actorId,
-        actorKind: childActor?.kind ?? 'pc',
-        title: child.title,
-        x: childPosition.x,
-        y: childPosition.y,
-        width: nodeWidthForSlots(childSlotCount, localState.stonesPerRow),
-        height: nodeHeightForSlots(childSlotCount, localState.stonesPerRow),
-        speedFeet: child.speed.explorationFeet,
-        speedBand: child.speedBand.band,
-        fixedGreenStoneSlots: childFixedGreenStoneSlots,
-        slotCount: childSlotCount,
-        twoBandSlots: childTwoBandSlots,
-        usedSixths: child.encumbranceSixths,
-        usedStoneText: child.summary.usedStoneText,
-        capacityStoneText: child.summary.capacityStoneText,
-        segments: child.segments.map((segment) => ({
-          id: segment.id,
-          shortLabel: segment.labels.short,
-          mediumLabel: segment.labels.medium,
-          fullLabel: segment.labels.full,
-          startSixth: segment.startSixth,
-          sizeSixths: segment.sizeSixths,
-          isOverflow: segment.isOverflow,
-          isDropPreview: dropIntent != null && movedSegmentIds.has(segment.id) && child.id === dropIntent.targetNodeId && dropIntent.sourceNodeIds[segment.id] !== dropIntent.targetNodeId,
-          itemDefId: segment.itemDefId,
-          category: segment.category,
-          wield: segment.state?.wield,
-          tooltip: segment.tooltip,
-        })),
-      }
-    }
-  }
-
-  const groupsById = new Map<string, { id: string; title: string; nodeIds: string[] }>()
-  for (const node of Object.values(nodes)) {
-    const actor = worldState.actors[node.actorId]
-    const groupId = actor?.movementGroupId ?? 'ungrouped'
-    const groupTitle = worldState.movementGroups[groupId]?.name ?? groupId
     const existing = groupsById.get(groupId)
-    if (existing) {
-      existing.nodeIds.push(node.id)
-    } else {
-      groupsById.set(groupId, { id: groupId, title: groupTitle, nodeIds: [node.id] })
-    }
+    if (existing) existing.nodeIds.push(row.id)
+    else groupsById.set(groupId, { id: groupId, title: groupTitle, nodeIds: [row.id] })
   }
+
+  const groupOrder = [...groupsById.keys()]
   const groups: Record<string, SceneGroupVM> = {}
-  for (const group of groupsById.values()) {
-    let minX = Infinity
-    let minY = Infinity
-    let maxX = -Infinity
-    let maxY = -Infinity
-    for (const nodeId of group.nodeIds) {
+  let flowY = 80
+  for (const groupId of groupOrder) {
+    const meta = groupsById.get(groupId)
+    if (!meta) continue
+    const preferredOrder = localState.groupNodeOrders[groupId] ?? []
+    const preferredSet = new Set(preferredOrder)
+    const orderedNodeIds = [
+      ...preferredOrder.filter((id) => meta.nodeIds.includes(id)),
+      ...meta.nodeIds.filter((id) => !preferredSet.has(id)),
+    ]
+    meta.nodeIds = orderedNodeIds
+
+    const pos = localState.groupPositions[groupId] ?? { x: GROUP_X, y: flowY }
+    let cursorY = pos.y + GROUP_PADDING_TOP
+    let maxNodeW = 0
+    for (const nodeId of orderedNodeIds) {
       const node = nodes[nodeId]
       if (!node) continue
-      minX = Math.min(minX, node.x)
-      minY = Math.min(minY, node.y)
-      maxX = Math.max(maxX, node.x + node.width)
-      maxY = Math.max(maxY, node.y + node.height)
+      const mutableNode = node as SceneNodeVM & { x: number; y: number }
+      mutableNode.x = pos.x + GROUP_PADDING_X
+      mutableNode.y = cursorY
+      cursorY += node.height + NODE_ROW_GAP
+      maxNodeW = Math.max(maxNodeW, node.width)
     }
-    if (!Number.isFinite(minX) || !Number.isFinite(minY)) continue
-    groups[group.id] = {
-      id: group.id,
-      title: group.title,
-      nodeIds: group.nodeIds,
-      x: minX - GROUP_PADDING_X,
-      y: minY - GROUP_PADDING_TOP,
-      width: (maxX - minX) + GROUP_PADDING_X * 2,
-      height: (maxY - minY) + GROUP_PADDING_TOP + GROUP_PADDING_BOTTOM,
+    const hasNodes = orderedNodeIds.length > 0
+    const groupHeight = hasNodes
+      ? cursorY - NODE_ROW_GAP - pos.y + GROUP_PADDING_BOTTOM
+      : GROUP_PADDING_TOP + GROUP_PADDING_BOTTOM + 20
+    groups[groupId] = {
+      id: groupId,
+      title: meta.title,
+      nodeIds: orderedNodeIds,
+      x: pos.x,
+      y: pos.y,
+      width: maxNodeW + GROUP_PADDING_X * 2,
+      height: groupHeight,
     }
+    if (!localState.groupPositions[groupId]) flowY = pos.y + groupHeight + GROUP_STACK_GAP
   }
 
   return {

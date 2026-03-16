@@ -274,11 +274,11 @@ const pixiAdapter = new PixiBoardAdapter(canvasHost, {
   onHoverSegment(segmentId) {
     postToWorker({ type: 'INTENT', intent: { type: 'HOVER_SEGMENT', segmentId } })
   },
-  onMoveNode(nodeId, x, y) {
-    postToWorker({ type: 'INTENT', intent: { type: 'MOVE_NODE', nodeId, x, y } })
+  onMoveGroup(groupId, x, y) {
+    postToWorker({ type: 'INTENT', intent: { type: 'MOVE_GROUP', groupId, x, y } })
   },
-  onMoveNodes(positions) {
-    postToWorker({ type: 'INTENT', intent: { type: 'MOVE_NODES', positions } })
+  onMoveNodeToGroupIndex(nodeId, groupId, index) {
+    postToWorker({ type: 'INTENT', intent: { type: 'MOVE_NODE_TO_GROUP_INDEX', nodeId, groupId, index } })
   },
   onZoomChange(_zoom) {},
   onDragSegmentStart(segmentIds) {

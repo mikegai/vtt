@@ -12,7 +12,9 @@ import type { MainToWorkerMessage, SceneVM, WorkerIntent, WorkerToMainMessage } 
 let worldState: CanonicalState | null = null
 let localState: WorkerLocalState = {
   hoveredSegmentId: null,
-  nodePositions: {},
+  groupPositions: {},
+  nodeGroupOverrides: {},
+  groupNodeOrders: {},
   dropIntent: null,
   stonesPerRow: 25,
   filterCategory: null,
@@ -144,25 +146,49 @@ const applyIntent = (intent: WorkerIntent): void => {
     return
   }
 
-  if (intent.type === 'MOVE_NODE') {
+  if (intent.type === 'MOVE_GROUP') {
     localState = {
       ...localState,
-      nodePositions: {
-        ...localState.nodePositions,
-        [intent.nodeId]: { x: intent.x, y: intent.y },
+      groupPositions: {
+        ...localState.groupPositions,
+        [intent.groupId]: { x: intent.x, y: intent.y },
       },
     }
     recompute()
     return
   }
 
-  if (intent.type === 'MOVE_NODES') {
+  if (intent.type === 'MOVE_NODE_TO_GROUP_INDEX') {
+    const nextOrders: Record<string, readonly string[]> = { ...localState.groupNodeOrders }
+    for (const [gid, order] of Object.entries(nextOrders)) {
+      nextOrders[gid] = order.filter((id) => id !== intent.nodeId)
+    }
+    const target = [...(nextOrders[intent.groupId] ?? [])]
+    const clamped = Math.max(0, Math.min(intent.index, target.length))
+    target.splice(clamped, 0, intent.nodeId)
+    nextOrders[intent.groupId] = target
+
+    if (worldState && worldState.actors[intent.nodeId]) {
+      const actor = worldState.actors[intent.nodeId]
+      worldState = {
+        ...worldState,
+        actors: {
+          ...worldState.actors,
+          [intent.nodeId]: {
+            ...actor,
+            movementGroupId: intent.groupId,
+          },
+        },
+      }
+    }
+
     localState = {
       ...localState,
-      nodePositions: {
-        ...localState.nodePositions,
-        ...intent.positions,
+      nodeGroupOverrides: {
+        ...localState.nodeGroupOverrides,
+        [intent.nodeId]: intent.groupId,
       },
+      groupNodeOrders: nextOrders,
     }
     recompute()
     return

@@ -8,13 +8,19 @@ type GroupDragState = {
   readonly groupId: string
   readonly startWorld: { x: number; y: number }
   readonly initialGroupPos: { x: number; y: number }
-  readonly initialNodePositions: Record<string, { x: number; y: number }>
+}
+
+type NodeReorderDragState = {
+  readonly nodeId: string
+  readonly initialPos: { x: number; y: number }
+  targetGroupId: string | null
+  targetIndex: number
 }
 
 type AdapterHandlers = {
   onHoverSegment(segmentId: string | null): void
-  onMoveNode(nodeId: string, x: number, y: number): void
-  onMoveNodes?(positions: Record<string, { x: number; y: number }>): void
+  onMoveGroup?(groupId: string, x: number, y: number): void
+  onMoveNodeToGroupIndex?(nodeId: string, groupId: string, index: number): void
   onZoomChange(zoom: number): void
   onDragSegmentStart(segmentIds: string[]): void
   onDragSegmentUpdate(targetNodeId: string | null): void
@@ -818,6 +824,8 @@ export class PixiBoardAdapter {
   private currentScene: SceneVM | null = null
   private segmentDrag: SegmentDragState | null = null
   private groupDrag: GroupDragState | null = null
+  private nodeReorderDrag: NodeReorderDragState | null = null
+  private groupDropIndicator: Graphics
   private lastDragEndTime = 0
   private marqueeState: { startX: number; startY: number; endX: number; endY: number } | null = null
   private marqueeGraphics: Graphics | null = null
@@ -830,6 +838,8 @@ export class PixiBoardAdapter {
     this.app = new Application()
     this.sceneRoot = new Container()
     this.groupLayer = new Container()
+    this.groupDropIndicator = new Graphics()
+    this.groupDropIndicator.eventMode = 'none'
     this.worldLayer = new Container()
     this.selectionOverlayLayer = new Container()
     this.selectionOverlayLayer.eventMode = 'none'
@@ -869,6 +879,7 @@ export class PixiBoardAdapter {
     })
 
     this.sceneRoot.addChild(this.groupLayer)
+    this.groupLayer.addChild(this.groupDropIndicator)
     this.sceneRoot.addChild(this.worldLayer)
     this.sceneRoot.addChild(this.selectionOverlayLayer)
     this.app.stage.addChild(this.sceneRoot)
@@ -1165,44 +1176,30 @@ export class PixiBoardAdapter {
   }
 
   private startGroupDragFromPointer(event: PointerEvent): boolean {
-    if (!this.currentScene || !this.handlers.onMoveNodes) return false
+    if (!this.currentScene || !this.handlers.onMoveGroup) return false
     if (this.hitTestSegmentOrNodeHandle(event.clientX, event.clientY)) return false
     const world = this.screenToWorld(event.clientX, event.clientY)
     const group = this.findTopGroupAtWorld(world.x, world.y)
     if (!group) return false
 
-    const initialNodePositions: Record<string, { x: number; y: number }> = {}
-    for (const nodeId of group.nodeIds) {
-      const view = this.nodeViews.get(nodeId)
-      if (view) initialNodePositions[nodeId] = { x: view.root.position.x, y: view.root.position.y }
-    }
     this.groupDrag = {
       groupId: group.id,
       startWorld: world,
       initialGroupPos: { x: group.x, y: group.y },
-      initialNodePositions,
     }
     return true
   }
 
   private updateGroupDrag(clientX: number, clientY: number): void {
-    if (!this.groupDrag || !this.currentScene || !this.handlers.onMoveNodes) return
+    if (!this.groupDrag || !this.currentScene || !this.handlers.onMoveGroup) return
     const world = this.screenToWorld(clientX, clientY)
     const dx = world.x - this.groupDrag.startWorld.x
     const dy = world.y - this.groupDrag.startWorld.y
-    const nextPositions: Record<string, { x: number; y: number }> = {}
-    for (const [nodeId, startPos] of Object.entries(this.groupDrag.initialNodePositions)) {
-      const next = { x: startPos.x + dx, y: startPos.y + dy }
-      nextPositions[nodeId] = next
-      const view = this.nodeViews.get(nodeId)
-      if (view) view.root.position.set(next.x, next.y)
-    }
     const groupView = this.groupViews.get(this.groupDrag.groupId)
     if (groupView) {
       groupView.root.position.set(this.groupDrag.initialGroupPos.x + dx, this.groupDrag.initialGroupPos.y + dy)
     }
-    this.handlers.onMoveNodes(nextPositions)
-    this.updateSelectionOverlay()
+    this.handlers.onMoveGroup(this.groupDrag.groupId, this.groupDrag.initialGroupPos.x + dx, this.groupDrag.initialGroupPos.y + dy)
   }
 
   private screenToWorld(clientX: number, clientY: number): { x: number; y: number } {
@@ -1622,12 +1619,26 @@ export class PixiBoardAdapter {
         x: (point.x - this.pan.x) / this.zoom - nodeContainer.position.x,
         y: (point.y - this.pan.y) / this.zoom - nodeContainer.position.y,
       }
+      this.nodeReorderDrag = {
+        nodeId,
+        initialPos: { x: nodeContainer.position.x, y: nodeContainer.position.y },
+        targetGroupId: null,
+        targetIndex: 0,
+      }
       handleView.cursor = 'grabbing'
       event.stopPropagation()
     })
     const stop = (): void => {
       dragging = false
       handleView.cursor = 'grab'
+      this.groupDropIndicator.clear()
+      if (this.nodeReorderDrag?.targetGroupId && this.handlers.onMoveNodeToGroupIndex) {
+        nodeContainer.position.set(this.nodeReorderDrag.initialPos.x, this.nodeReorderDrag.initialPos.y)
+        this.handlers.onMoveNodeToGroupIndex(this.nodeReorderDrag.nodeId, this.nodeReorderDrag.targetGroupId, this.nodeReorderDrag.targetIndex)
+      } else if (this.nodeReorderDrag) {
+        nodeContainer.position.set(this.nodeReorderDrag.initialPos.x, this.nodeReorderDrag.initialPos.y)
+      }
+      this.nodeReorderDrag = null
     }
     handleView.on('pointerup', stop)
     handleView.on('pointerupoutside', stop)
@@ -1637,7 +1648,18 @@ export class PixiBoardAdapter {
       const x = (point.x - this.pan.x) / this.zoom - offset.x
       const y = (point.y - this.pan.y) / this.zoom - offset.y
       nodeContainer.position.set(x, y)
-      this.handlers.onMoveNode(nodeId, x, y)
+      const world = {
+        x: (point.x - this.pan.x) / this.zoom,
+        y: (point.y - this.pan.y) / this.zoom,
+      }
+      const drop = this.findNodeDropTarget(nodeId, world.x, world.y)
+      if (drop && this.nodeReorderDrag) {
+        this.nodeReorderDrag.targetGroupId = drop.groupId
+        this.nodeReorderDrag.targetIndex = drop.index
+        this.drawGroupDropIndicator(drop.groupId, drop.lineY)
+      } else {
+        this.groupDropIndicator.clear()
+      }
     })
   }
 
@@ -1677,6 +1699,57 @@ export class PixiBoardAdapter {
 
     this.groupLayer.addChild(root)
     return { root }
+  }
+
+  private findNodeDropTarget(nodeId: string, worldX: number, worldY: number): { groupId: string; index: number; lineY: number } | null {
+    if (!this.currentScene) return null
+    const groups = Object.values(this.currentScene.groups ?? {})
+    let target: SceneGroupVM | null = null
+    for (let i = groups.length - 1; i >= 0; i -= 1) {
+      const g = groups[i]
+      if (!g) continue
+      if (worldX >= g.x && worldX <= g.x + g.width && worldY >= g.y && worldY <= g.y + g.height) {
+        target = g
+        break
+      }
+    }
+    if (!target) return null
+
+    const candidateIds = target.nodeIds.filter((id) => id !== nodeId)
+    let index = candidateIds.length
+    for (let i = 0; i < candidateIds.length; i += 1) {
+      const n = this.currentScene.nodes[candidateIds[i]]
+      if (!n) continue
+      if (worldY < n.y + n.height / 2) {
+        index = i
+        break
+      }
+    }
+    let lineY = target.y + 42
+    if (candidateIds.length === 0) {
+      lineY = target.y + 56
+    } else if (index >= candidateIds.length) {
+      const last = this.currentScene.nodes[candidateIds[candidateIds.length - 1]]
+      lineY = last ? last.y + last.height + 4 : lineY
+    } else {
+      const n = this.currentScene.nodes[candidateIds[index]]
+      lineY = n ? n.y - 4 : lineY
+    }
+    return { groupId: target.id, index, lineY }
+  }
+
+  private drawGroupDropIndicator(groupId: string, lineY: number): void {
+    const indicator = this.groupDropIndicator
+    if (!this.currentScene) return
+    const group = this.currentScene.groups[groupId]
+    if (!group) return
+    this.groupLayer.addChild(indicator)
+    indicator.clear()
+    const x1 = group.x + 20
+    const x2 = group.x + group.width - 20
+    indicator.moveTo(x1, lineY)
+    indicator.lineTo(x2, lineY)
+    indicator.stroke({ width: 3, color: 0xffffff, alpha: 0.95 })
   }
 
   private rebuildAllNodes(scene: SceneVM): void {
