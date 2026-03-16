@@ -503,7 +503,12 @@ const pixiAdapter = new PixiBoardAdapter(canvasHost, {
   },
   onSegmentClick(segmentId, _nodeId, addToSelection) {
     if (addToSelection) {
-      postToWorker({ type: 'INTENT', intent: { type: 'SELECT_SEGMENTS_ADD', segmentIds: [segmentId] } })
+      const selected = currentScene?.selectedSegmentIds ?? []
+      if (selected.includes(segmentId)) {
+        postToWorker({ type: 'INTENT', intent: { type: 'SELECT_SEGMENTS_REMOVE', segmentIds: [segmentId] } })
+      } else {
+        postToWorker({ type: 'INTENT', intent: { type: 'SELECT_SEGMENTS_ADD', segmentIds: [segmentId] } })
+      }
     } else {
       postToWorker({ type: 'INTENT', intent: { type: 'SET_SELECTED_SEGMENTS', segmentIds: [segmentId] } })
     }
