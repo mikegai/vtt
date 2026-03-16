@@ -13,8 +13,25 @@ export type WorkerLocalState = {
 
 const STONE_W = 36
 const STONE_GAP = 3
+const STONE_H = 54
+const STONE_ROW_GAP = 3
+const STONES_PER_ROW = 25
 const SLOT_START_X = 10
-const baseNodeHeight = 84
+const TOP_BAND_H = 34
+
+const slotAreaHeightForSlots = (slotCount: number): number => {
+  const numRows = Math.ceil(slotCount / STONES_PER_ROW)
+  return numRows * (STONE_H + STONE_ROW_GAP) - STONE_ROW_GAP
+}
+
+const meterWidthForSlots = (slotCount: number): number =>
+  Math.min(slotCount, STONES_PER_ROW) * (STONE_W + STONE_GAP) - STONE_GAP
+
+const nodeHeightForSlots = (slotCount: number): number =>
+  TOP_BAND_H + slotAreaHeightForSlots(slotCount)
+
+const nodeWidthForSlots = (slotCount: number): number =>
+  SLOT_START_X + meterWidthForSlots(slotCount) + 20
 
 const INDENT_X = 40
 
@@ -45,7 +62,6 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
     const fallback = { x: 80, y: 80 + index * 104 }
     const position = localState.nodePositions[row.id] ?? fallback
     const slotCount = totalStoneSlots
-    const nodeWidth = SLOT_START_X + slotCount * (STONE_W + STONE_GAP) - STONE_GAP + 20
     nodes[row.id] = {
       id: row.id,
       rowId: row.id,
@@ -54,8 +70,8 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
       title: row.title,
       x: position.x,
       y: position.y,
-      width: nodeWidth,
-      height: baseNodeHeight,
+      width: nodeWidthForSlots(slotCount),
+      height: nodeHeightForSlots(slotCount),
       speedFeet: row.speed.explorationFeet,
       speedBand: row.speedBand.band,
       fixedGreenStoneSlots,
@@ -93,7 +109,6 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
       const childFallback = { x: 80 + INDENT_X, y: 80 + index * 104 }
       const childPosition = localState.nodePositions[child.id] ?? childFallback
       const childSlotCount = childTotalStoneSlots
-      const childNodeWidth = SLOT_START_X + childSlotCount * (STONE_W + STONE_GAP) - STONE_GAP + 20
       nodes[child.id] = {
         id: child.id,
         rowId: child.id,
@@ -102,8 +117,8 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
         title: child.title,
         x: childPosition.x,
         y: childPosition.y,
-        width: childNodeWidth,
-        height: baseNodeHeight,
+        width: nodeWidthForSlots(childSlotCount),
+        height: nodeHeightForSlots(childSlotCount),
         speedFeet: child.speed.explorationFeet,
         speedBand: child.speedBand.band,
         fixedGreenStoneSlots: childFixedGreenStoneSlots,

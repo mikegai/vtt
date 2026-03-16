@@ -6,7 +6,6 @@ import {
   capacitySixthsForStrengthMod,
   coinsToSixths,
   encumbranceCostSixths,
-  formatSixthsAsStone,
   ironRationEffectiveSixths,
   speedBandForSixths,
   stoneToSixths,

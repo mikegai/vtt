@@ -44,10 +44,11 @@ const CELL_H = STONE_H / SIXTH_ROWS
 const TOP_BAND_H = 34
 const SLOT_START_X = 10
 const SLOT_PADDING = 4
-const ROW_H = 100
+const STONES_PER_ROW = 25
+const STONE_ROW_GAP = 3
 
 const meterWidthForSlots = (slotCount: number): number =>
-  slotCount * (STONE_W + STONE_GAP) - STONE_GAP
+  Math.min(slotCount, STONES_PER_ROW) * (STONE_W + STONE_GAP) - STONE_GAP
 const totalSixthsForSlots = (slotCount: number): number => slotCount * 6
 
 const SPEED_COLORS: Record<string, number> = {
@@ -171,62 +172,6 @@ const wrapTextByWidth = (text: string, maxWidth: number, fontSize: number, maxLi
 /** Use denser 2x3 layout only when zoomed far out. */
 const GRID_ROWS = 3
 
-const selectLabelFit = (
-  segment: SceneSegmentVM,
-  tier: ZoomTier,
-  availableWorldWidth: number,
-  availableWorldHeight: number,
-  visualScale: number,
-  zoom: number,
-  minVisiblePx: number,
-  maxVisiblePx: number,
-): { text: string; fontSize: number } => {
-  const gridCols = tier === 'far' ? 2 : 1
-  const cellW = availableWorldWidth / gridCols
-  const maxLineWidth = cellW / visualScale
-  const maxLines = GRID_ROWS
-
-  // apparentScale = how many screen pixels per font-size unit.
-  // Use it only for the MINIMUM threshold (readability floor).
-  // maxFontSize is capped by what fits in the world-space box, not by zoom.
-  const apparentScale = Math.max(0.01, visualScale * zoom)
-  const minFontSize = Math.max(1, Math.ceil(minVisiblePx / apparentScale))
-  const maxFontSize = Math.max(minFontSize, Math.floor(maxVisiblePx / visualScale))
-
-  const widthBucket = Math.max(0, Math.round(availableWorldWidth))
-  const heightBucket = Math.max(0, Math.round(availableWorldHeight))
-  const scaleBucket = Math.round(visualScale * 100)
-  const zoomBucket = Math.round(zoom * 100)
-  const cacheKey = `${segment.tooltip.title}|${segment.fullLabel}|${segment.mediumLabel}|${segment.shortLabel}|${tier}|${gridCols}|${widthBucket}|${heightBucket}|${scaleBucket}|${zoomBucket}|${minFontSize}|${maxFontSize}`
-  const cached = textFitCache.get(cacheKey)
-  if (cached) return cached
-
-  const steps = uniqueTextSteps(segment)
-  for (const stepText of steps) {
-    for (let fontSize = maxFontSize; fontSize >= minFontSize; fontSize -= 1) {
-      const lineHeight = fontSize * 1.14
-      const wrapped = wrapTextByWidth(stepText, maxLineWidth, fontSize, maxLines)
-      if (!wrapped) continue
-      const widestLine = wrapped.reduce((max, line) => Math.max(max, measureTextWidth(line, fontSize)), 0)
-      const totalHeight = wrapped.length * lineHeight
-      const worldWidth = widestLine * visualScale
-      const worldHeight = totalHeight * visualScale
-      if (worldWidth <= availableWorldWidth && worldHeight <= availableWorldHeight) {
-        const fit = { text: wrapped.join('\n'), fontSize }
-        textFitCache.set(cacheKey, fit)
-        return fit
-      }
-    }
-  }
-
-  const fallback = {
-    text: steps[steps.length - 1] ?? '?',
-    fontSize: minFontSize,
-  }
-  textFitCache.set(cacheKey, fallback)
-  return fallback
-}
-
 const selectLabelFitForSteps = (
   steps: string[],
   tier: ZoomTier,
@@ -278,7 +223,15 @@ const selectLabelFitForSteps = (
 const isMultiStone = (segment: SceneSegmentVM): boolean =>
   segment.sizeSixths >= 6 && segment.sizeSixths % 6 === 0
 
-const stoneToX = (stoneIndex: number): number => stoneIndex * (STONE_W + STONE_GAP)
+const stoneToX = (stoneIndex: number): number =>
+  (stoneIndex % STONES_PER_ROW) * (STONE_W + STONE_GAP)
+const stoneToY = (stoneIndex: number): number =>
+  Math.floor(stoneIndex / STONES_PER_ROW) * (STONE_H + STONE_ROW_GAP)
+
+const slotAreaHeightForSlots = (slotCount: number): number => {
+  const numRows = Math.ceil(slotCount / STONES_PER_ROW)
+  return numRows * (STONE_H + STONE_ROW_GAP) - STONE_ROW_GAP
+}
 
 /** Group sixths by stone column for blended rect drawing. */
 const groupSixthsByStone = (
@@ -313,14 +266,14 @@ const segmentPositionInNode = (segment: SceneSegmentVM): { x: number; y: number 
   if (isMulti) {
     return {
       x: SLOT_START_X + stoneToX(startStone),
-      y: TOP_BAND_H,
+      y: TOP_BAND_H + stoneToY(startStone),
     }
   }
   const groups = groupSixthsByStone(segment.startSixth, segment.sizeSixths)
   let minX = Infinity, minY = Infinity
   groups.forEach((g) => {
     minX = Math.min(minX, stoneToX(g.stone))
-    minY = Math.min(minY, g.startRow * CELL_H)
+    minY = Math.min(minY, stoneToY(g.stone) + g.startRow * CELL_H)
   })
   return {
     x: SLOT_START_X + minX,
@@ -337,17 +290,25 @@ const segmentCenterInNode = (
   const { startStone, endStone } = segmentStoneSpan(segment.startSixth, segment.sizeSixths)
   const isMulti = segment.sizeSixths >= 6 && segment.sizeSixths % 6 === 0
   if (isMulti) {
-    const w = (endStone - startStone) * (STONE_W + STONE_GAP) - STONE_GAP
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+    for (let s = startStone; s < endStone; s += 1) {
+      const x = stoneToX(s)
+      const y = stoneToY(s)
+      minX = Math.min(minX, x)
+      minY = Math.min(minY, y)
+      maxX = Math.max(maxX, x + STONE_W)
+      maxY = Math.max(maxY, y + STONE_H)
+    }
     return {
-      x: nodeX + SLOT_START_X + stoneToX(startStone) + w / 2,
-      y: nodeY + TOP_BAND_H + STONE_H / 2,
+      x: nodeX + SLOT_START_X + (minX + maxX) / 2,
+      y: nodeY + TOP_BAND_H + (minY + maxY) / 2,
     }
   }
   const groups = groupSixthsByStone(segment.startSixth, segment.sizeSixths)
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
   groups.forEach((g) => {
     const x = stoneToX(g.stone)
-    const y = g.startRow * CELL_H
+    const y = stoneToY(g.stone) + g.startRow * CELL_H
     minX = Math.min(minX, x)
     minY = Math.min(minY, y)
     maxX = Math.max(maxX, x + STONE_W)
@@ -381,6 +342,45 @@ const drawArrowLine = (g: Graphics, x1: number, y1: number, x2: number, y2: numb
   g.stroke({ width: 2, color: 0x5cadee, alpha: 0.85 })
 }
 
+/** Split stone range into chunks at STONES_PER_ROW boundaries. */
+const splitStonesAtWrap = (
+  startStone: number,
+  endStone: number,
+): { start: number; end: number }[] => {
+  const chunks: { start: number; end: number }[] = []
+  let s = startStone
+  while (s < endStone) {
+    const rowStart = Math.floor(s / STONES_PER_ROW) * STONES_PER_ROW
+    const rowEnd = rowStart + STONES_PER_ROW
+    const chunkEnd = Math.min(endStone, rowEnd)
+    chunks.push({ start: s, end: chunkEnd })
+    s = chunkEnd
+  }
+  return chunks
+}
+
+/** Draw rect with fill and stroke on specific sides (for wrap continuity). */
+const drawChunkRect = (
+  g: Graphics,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  sides: { left: boolean; top: boolean; right: boolean; bottom: boolean },
+  fillOpt: { color: number; alpha: number },
+  strokeOpt: { width: number; color: number; alpha: number },
+  cornerRadius: number,
+): void => {
+  g.roundRect(x, y, w, h, cornerRadius)
+  g.fill(fillOpt)
+  g.moveTo(x + w, y + h)
+  if (sides.bottom) g.lineTo(x, y + h)
+  if (sides.left) g.lineTo(x, y)
+  if (sides.top) g.lineTo(x + w, y)
+  if (sides.right) g.lineTo(x + w, y + h)
+  g.stroke(strokeOpt)
+}
+
 const occupiedSixthsFromSegments = (
   segments: readonly SceneSegmentVM[],
   totalSixths: number,
@@ -400,19 +400,27 @@ const occupiedSixthsFromSegments = (
 const localToSixth = (localX: number, localY: number, slotCount: number): number => {
   if (localX <= 0) return 0
   const totalSixths = totalSixthsForSlots(slotCount)
-  const maxLocal = stoneToX(slotCount)
-  if (localX >= maxLocal) return totalSixths
-
-  for (let stone = 0; stone < slotCount; stone += 1) {
-    const stoneStart = stoneToX(stone)
-    const stoneEnd = stoneStart + STONE_W
-    if (localX >= stoneStart && localX < stoneEnd) {
-      const row = Math.max(0, Math.min(5, Math.floor(localY / CELL_H)))
-      return stone * 6 + row
+  const numRows = Math.ceil(slotCount / STONES_PER_ROW)
+  for (let rowIndex = 0; rowIndex < numRows; rowIndex += 1) {
+    const rowY = rowIndex * (STONE_H + STONE_ROW_GAP)
+    const rowBottom = rowY + STONE_H
+    if (localY < rowY) return Math.min(totalSixths, rowIndex * STONES_PER_ROW * 6)
+    if (localY >= rowBottom + (rowIndex < numRows - 1 ? STONE_ROW_GAP : 0)) continue
+    const stonesInRow = Math.min(STONES_PER_ROW, slotCount - rowIndex * STONES_PER_ROW)
+    const rowWidth = stonesInRow * (STONE_W + STONE_GAP) - STONE_GAP
+    if (localX >= rowWidth + STONE_W) return Math.min(totalSixths, (rowIndex * STONES_PER_ROW + stonesInRow) * 6)
+    for (let col = 0; col < stonesInRow; col += 1) {
+      const stoneStart = col * (STONE_W + STONE_GAP)
+      const stoneEnd = stoneStart + STONE_W
+      if (localX >= stoneStart && localX < stoneEnd) {
+        const sixthRow = Math.max(0, Math.min(5, Math.floor((localY - rowY) / CELL_H)))
+        return (rowIndex * STONES_PER_ROW + col) * 6 + sixthRow
+      }
+      if (localX >= stoneEnd && localX < stoneStart + STONE_W + STONE_GAP) {
+        return (rowIndex * STONES_PER_ROW + col + 1) * 6
+      }
     }
-    if (localX >= stoneEnd && localX < stoneStart + STONE_W + STONE_GAP) {
-      return (stone + 1) * 6
-    }
+    return Math.min(totalSixths, (rowIndex * STONES_PER_ROW + stonesInRow) * 6)
   }
   return totalSixths
 }
@@ -468,7 +476,7 @@ const drawGhostCells = (
     const stone = Math.floor((startSixth + i) / 6)
     const row = (startSixth + i) % 6
     const x = baseX + stoneToX(stone)
-    const y = baseY + row * CELL_H
+    const y = baseY + stoneToY(stone) + row * CELL_H
     const cellGraphic = new Graphics()
     cellGraphic.roundRect(x + 1.2, y + 0.6, STONE_W - 2.4, CELL_H - 1.2, 1.8)
     cellGraphic.fill({ color, alpha })
@@ -505,7 +513,7 @@ const drawBlendedSegmentRects = (
 
   groups.forEach((group, index) => {
     const x = baseX + stoneToX(group.stone)
-    const y = baseY + group.startRow * CELL_H
+    const y = baseY + stoneToY(group.stone) + group.startRow * CELL_H
     const w = STONE_W
     const h = group.count * CELL_H
 
@@ -589,9 +597,6 @@ const drawSegmentBlock = (
 ): void => {
   const o = baseOffset ?? { x: 0, y: 0 }
   const { startStone, endStone } = segmentStoneSpan(segment.startSixth, segment.sizeSixths)
-  const startX = SLOT_START_X + stoneToX(startStone) - o.x
-  const startY = TOP_BAND_H - o.y
-  const width = (endStone - startStone) * (STONE_W + STONE_GAP) - STONE_GAP
   const isDropPreview = segment.isDropPreview === true
   const color = isDropPreview ? 0x5cadee : segment.isOverflow ? 0x932d4e : hovered ? 0x5cadee : 0x3d9ac9
   const alpha = isDropPreview ? 0.25 : segment.isOverflow ? 0.58 : 0.82
@@ -627,57 +632,80 @@ const drawSegmentBlock = (
   }
 
   if (isMultiStone(segment)) {
-    const blockBounds = { x: startX + 0.5, y: startY + 2.5, w: width - 1, h: STONE_H - 5 }
-    block.roundRect(blockBounds.x, blockBounds.y, blockBounds.w, blockBounds.h, 5)
-    if (isDropPreview) {
-      block.fill({ color, alpha })
-      block.stroke({ width: 2, color: 0x5cadee, alpha: 0.7 })
-    } else {
-      block.fill({ color, alpha })
-    }
-    block.hitArea = new Rectangle(blockBounds.x, blockBounds.y, blockBounds.w, blockBounds.h)
+    const chunks = splitStonesAtWrap(startStone, endStone)
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+    const strokeOpt = isDropPreview
+      ? { width: 2, color: 0x5cadee, alpha: 0.7 }
+      : { width: 1.5, color: 0xd3ebff, alpha: 0.9 }
+    const fillOpt = { color, alpha }
+
     container.addChild(block)
+    chunks.forEach((chunk, idx) => {
+      const cx = SLOT_START_X + stoneToX(chunk.start) - o.x
+      const cy = TOP_BAND_H + stoneToY(chunk.start) - o.y
+      const cw = (chunk.end - chunk.start) * (STONE_W + STONE_GAP) - STONE_GAP
+      const ch = STONE_H
+      const pad = 0.5
+      const rx = cx + pad
+      const ry = cy + 2.5
+      const rw = cw - 1
+      const rh = ch - 5
+      const isFirst = idx === 0
+      const isLast = idx === chunks.length - 1
+      const sides = {
+        left: isFirst || chunks.length === 1,
+        top: true,
+        right: isLast || chunks.length === 1,
+        bottom: true,
+      }
+      drawChunkRect(block, rx, ry, rw, rh, sides, fillOpt, strokeOpt, 5)
+      minX = Math.min(minX, rx)
+      minY = Math.min(minY, ry)
+      maxX = Math.max(maxX, rx + rw)
+      maxY = Math.max(maxY, ry + rh)
 
-    if (segment.sizeSixths >= 1) {
-      const availableWorldWidth = Math.max(8, width - 6)
-      const availableWorldHeight = Math.max(8, STONE_H - 8)
-      const centerX = startX + width / 2
-      const centerY = startY + STONE_H / 2
-      const zoomReadableScale = zoom < 0.45 ? 1.14 : 1
-      const visualScale = textCompensationScale * zoomReadableScale
-      const fit = selectLabelFit(
-        segment,
-        tier,
-        availableWorldWidth,
-        availableWorldHeight,
-        visualScale,
-        zoom,
-        minVisibleLabelPx,
-        maxVisibleLabelPx,
-      )
-      const txt = new BitmapText({
-        text: fit.text,
-        style: { fill: '#f0f8ff', fontSize: fit.fontSize, fontFamily: FONT_SEMIBOLD, align: 'center' },
-      })
-      txt.eventMode = 'none'
-      txt.scale.set(visualScale)
-      txt.anchor.set(0.5, 0.5)
-      txt.position.set(centerX, centerY)
+      if (segment.sizeSixths >= 1) {
+        const availableWorldWidth = Math.max(8, rw - 6)
+        const availableWorldHeight = Math.max(8, rh - 8)
+        const centerX = rx + rw / 2
+        const centerY = ry + rh / 2
+        const zoomReadableScale = zoom < 0.45 ? 1.14 : 1
+        const visualScale = textCompensationScale * zoomReadableScale
+        const steps = idx === 0 ? uniqueTextSteps(segment) : uniqueTextSteps(segment).map((s) => `${s} (cont.)`)
+        const fit = selectLabelFitForSteps(
+          steps,
+          tier,
+          availableWorldWidth,
+          availableWorldHeight,
+          visualScale,
+          zoom,
+          minVisibleLabelPx,
+          maxVisibleLabelPx,
+        )
+        const txt = new BitmapText({
+          text: fit.text,
+          style: { fill: '#f0f8ff', fontSize: fit.fontSize, fontFamily: FONT_SEMIBOLD, align: 'center' },
+        })
+        txt.eventMode = 'none'
+        txt.scale.set(visualScale)
+        txt.anchor.set(0.5, 0.5)
+        txt.position.set(centerX, centerY)
 
-      const clip = new Graphics()
-      clip.eventMode = 'none'
-      clip.rect(centerX - availableWorldWidth / 2, centerY - availableWorldHeight / 2, availableWorldWidth, availableWorldHeight)
-      clip.fill({ color: 0xffffff, alpha: 0.001 })
-      container.addChild(clip)
-      txt.mask = clip
-      container.addChild(txt)
-    }
-    drawGripIndicators(container, segment.wield, {
-      x: startX + 0.5,
-      y: startY + 2.5,
-      w: width - 1,
-      h: STONE_H - 5,
+        const clip = new Graphics()
+        clip.eventMode = 'none'
+        clip.rect(centerX - availableWorldWidth / 2, centerY - availableWorldHeight / 2, availableWorldWidth, availableWorldHeight)
+        clip.fill({ color: 0xffffff, alpha: 0.001 })
+        container.addChild(clip)
+        txt.mask = clip
+        container.addChild(txt)
+      }
     })
+
+    const blockBounds = { x: minX, y: minY, w: maxX - minX, h: maxY - minY }
+    block.rect(blockBounds.x, blockBounds.y, blockBounds.w, blockBounds.h)
+    block.fill({ color: 0xffffff, alpha: 0.001 })
+    block.hitArea = new Rectangle(blockBounds.x, blockBounds.y, blockBounds.w, blockBounds.h)
+    drawGripIndicators(container, segment.wield, blockBounds)
   } else {
     const { hitBounds } = drawBlendedSegmentRects(
       container,
@@ -921,7 +949,8 @@ export class PixiBoardAdapter {
     if (!node) return null
 
     const nodeMeterWidth = meterWidthForSlots(node.slotCount)
-    const inY = worldY >= node.y + TOP_BAND_H && worldY <= node.y + TOP_BAND_H + STONE_H
+    const slotAreaH = slotAreaHeightForSlots(node.slotCount)
+    const inY = worldY >= node.y + TOP_BAND_H && worldY <= node.y + TOP_BAND_H + slotAreaH
     if (!inY) return { nodeId: targetNodeId, startSixth: 0 }
     const localX = worldX - node.x - SLOT_START_X
     const localY = worldY - node.y - TOP_BAND_H
@@ -954,10 +983,11 @@ export class PixiBoardAdapter {
       const groups = groupSixthsByStone(0, segment.sizeSixths)
       let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
       groups.forEach((g) => {
+        const gy = stoneToY(g.stone) + g.startRow * CELL_H
         minX = Math.min(minX, stoneToX(g.stone))
-        minY = Math.min(minY, g.startRow * CELL_H)
+        minY = Math.min(minY, gy)
         maxX = Math.max(maxX, stoneToX(g.stone) + STONE_W)
-        maxY = Math.max(maxY, g.startRow * CELL_H + g.count * CELL_H)
+        maxY = Math.max(maxY, gy + g.count * CELL_H)
       })
       const stroke = new Graphics()
       stroke.roundRect(minX, minY, maxX - minX, maxY - minY, 4)
@@ -1043,7 +1073,7 @@ export class PixiBoardAdapter {
     const slotCount = node.slotCount
     const totalMeterWidth = meterWidthForSlots(slotCount)
     const totalWidth = SLOT_START_X + totalMeterWidth + 20
-    const totalHeight = ROW_H
+    const totalHeight = TOP_BAND_H + slotAreaHeightForSlots(slotCount)
     const totalSixths = totalSixthsForSlots(slotCount)
 
     const bg = new Graphics()
@@ -1063,7 +1093,7 @@ export class PixiBoardAdapter {
     dragHandle.cursor = 'grab'
     dragHandle.rect(0, 0, totalWidth, TOP_BAND_H)
     dragHandle.fill({ color: 0xffffff, alpha: 0.001 })
-    dragHandle.rect(0, TOP_BAND_H, SLOT_START_X + SLOT_PADDING, ROW_H - TOP_BAND_H)
+    dragHandle.rect(0, TOP_BAND_H, SLOT_START_X + SLOT_PADDING, totalHeight - TOP_BAND_H)
     dragHandle.fill({ color: 0xffffff, alpha: 0.001 })
     root.addChild(dragHandle)
 
@@ -1104,11 +1134,12 @@ export class PixiBoardAdapter {
     const slotColorFn = node.twoBandSlots ? twoBandSlotColor : fixedSlotBandColor
     for (let stone = 0; stone < slotCount; stone += 1) {
       const sx = SLOT_START_X + stoneToX(stone)
+      const sy = TOP_BAND_H + stoneToY(stone)
       const slotBandColor = slotColorFn(stone, node.fixedGreenStoneSlots)
       for (let row = 0; row < SIXTH_ROWS; row += 1) {
         const sixth = stone * 6 + row
         const filled = occupiedSixths.has(sixth)
-        const cy = TOP_BAND_H + row * CELL_H
+        const cy = sy + row * CELL_H
         slotFillLayer.roundRect(sx + 1.6, cy + 0.8, STONE_W - 3.2, CELL_H - 1.6, 1.6)
         slotFillLayer.fill({
           color: slotBandColor,
