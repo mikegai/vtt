@@ -102,7 +102,7 @@ const STONE_W = 36
 const STONE_H = 54
 const SIXTH_ROWS = 6
 const CELL_H = STONE_H / SIXTH_ROWS
-const TOP_BAND_H = 34
+const TOP_BAND_H = 22
 const SLOT_START_X = 10
 const DEFAULT_STONES_PER_ROW = 25
 const STONE_ROW_GAP = 3
@@ -1740,23 +1740,21 @@ export class PixiBoardAdapter {
     }
     contentContainer.addChild(dragHandle)
 
-    const addExpandCaret = (): void => {
+    const addExpandCaret = (midY: number): void => {
       const caret = new Graphics()
       caret.eventMode = 'static'
       caret.cursor = 'pointer'
       ;(caret as Container & { __dragHandle?: boolean }).__dragHandle = true
-      // Larger transparent target so caret is easy to click.
-      // Caret is offset so its visual center aligns with TOP_BAND_H / 2.
-      caret.roundRect(6, 8, 18, 18, 5)
+      caret.roundRect(14, midY - 9, 18, 18, 5)
       caret.fill({ color: 0xffffff, alpha: 0.001 })
       if (isExpanded) {
-        caret.moveTo(11, 15)
-        caret.lineTo(19, 15)
-        caret.lineTo(15, 20)
+        caret.moveTo(18, midY - 2.5)
+        caret.lineTo(26, midY - 2.5)
+        caret.lineTo(22, midY + 2.5)
       } else {
-        caret.moveTo(12, 13)
-        caret.lineTo(12, 21)
-        caret.lineTo(17, 17)
+        caret.moveTo(19, midY - 4)
+        caret.lineTo(19, midY + 4)
+        caret.lineTo(24, midY)
       }
       caret.fill({ color: 0xc5d8ff, alpha: 0.95 })
       caret.on('pointertap', (event: any) => {
@@ -1767,33 +1765,28 @@ export class PixiBoardAdapter {
     }
 
     if (tier !== 'far') {
-      addExpandCaret()
       const title = new BitmapText({
         text: node.title,
         style: { fill: '#e8f0ff', fontSize: 13, fontFamily: FONT_SEMIBOLD },
       })
       title.eventMode = 'none'
+      title.anchor.set(0, 0.5)
       title.scale.set(textCompensationScale)
-      title.position.set(20, 11)
+      const midY = TOP_BAND_H / 2
+      addExpandCaret(midY)
+      title.position.set(30, midY)
       contentContainer.addChild(title)
-
-      const meta = new BitmapText({
-        text: `${node.speedFeet}' • ${node.usedStoneText} / ${node.capacityStoneText}`,
-        style: { fill: '#8ba0ca', fontSize: 11, fontFamily: FONT_REGULAR },
-      })
-      meta.eventMode = 'none'
-      meta.scale.set(textCompensationScale)
-      meta.position.set(20 + title.width * textCompensationScale + 12, 11)
-      contentContainer.addChild(meta)
     } else {
-      addExpandCaret()
       const compact = new BitmapText({
         text: `${compactToken(node.title, 4)} ${node.speedFeet}'`,
         style: { fill: '#b0c2e8', fontSize: 11, fontFamily: FONT_REGULAR },
       })
       compact.eventMode = 'none'
+      compact.anchor.set(0, 0.5)
       compact.scale.set(textCompensationScale)
-      compact.position.set(20, 11)
+      const midY = TOP_BAND_H / 2
+      addExpandCaret(midY)
+      compact.position.set(30, midY)
       contentContainer.addChild(compact)
     }
 
@@ -2418,6 +2411,10 @@ export class PixiBoardAdapter {
   private rebuildAllNodes(scene: SceneVM): void {
     if (!this.fontsLoaded) return
     this.recomputeDisplayFlow(scene)
+    const previousNodePositions = new Map<string, { x: number; y: number }>()
+    for (const [nodeId, view] of this.nodeViews) {
+      previousNodePositions.set(nodeId, { x: view.root.position.x, y: view.root.position.y })
+    }
     for (const [, view] of this.groupViews) {
       this.groupLayer.removeChild(view.root)
       view.root.destroy({ children: true })
@@ -2445,7 +2442,34 @@ export class PixiBoardAdapter {
     const filterCategory = scene.filterCategory ?? null
     const selectedSegmentIds = scene.selectedSegmentIds ?? []
     Object.values(scene.nodes).forEach((node) => {
-      this.nodeViews.set(node.id, this.createNode(node, scene.hoveredSegmentId ?? null, filterCategory, selectedSegmentIds))
+      const view = this.createNode(node, scene.hoveredSegmentId ?? null, filterCategory, selectedSegmentIds)
+      const displayPos = this.getNodeDisplayPosition(node)
+      if (this.skipNodeAnimationOnce.delete(node.id)) {
+        view.positionSpring.x = displayPos.x
+        view.positionSpring.y = displayPos.y
+        view.positionSpring.targetX = displayPos.x
+        view.positionSpring.targetY = displayPos.y
+        view.positionSpring.vx = 0
+        view.positionSpring.vy = 0
+        view.positionSpring.active = false
+        view.root.position.set(displayPos.x, displayPos.y)
+      } else {
+        const previousPos = previousNodePositions.get(node.id)
+        if (previousPos) {
+          const moved = previousPos.x !== displayPos.x || previousPos.y !== displayPos.y
+          if (moved) {
+            view.positionSpring.x = previousPos.x
+            view.positionSpring.y = previousPos.y
+            view.positionSpring.targetX = displayPos.x
+            view.positionSpring.targetY = displayPos.y
+            view.positionSpring.vx = 0
+            view.positionSpring.vy = 0
+            view.positionSpring.active = true
+            view.root.position.set(previousPos.x, previousPos.y)
+          }
+        }
+      }
+      this.nodeViews.set(node.id, view)
     })
     if (this.hiddenNodeContentIds.size > 0) {
       this.setNodeContentVisibility([...this.hiddenNodeContentIds], false)
