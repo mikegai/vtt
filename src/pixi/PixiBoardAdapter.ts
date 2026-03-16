@@ -1746,16 +1746,17 @@ export class PixiBoardAdapter {
       caret.cursor = 'pointer'
       ;(caret as Container & { __dragHandle?: boolean }).__dragHandle = true
       // Larger transparent target so caret is easy to click.
-      caret.roundRect(6, 5, 18, 18, 5)
+      // Caret is offset so its visual center aligns with TOP_BAND_H / 2.
+      caret.roundRect(6, 8, 18, 18, 5)
       caret.fill({ color: 0xffffff, alpha: 0.001 })
       if (isExpanded) {
-        caret.moveTo(11, 11)
-        caret.lineTo(19, 11)
-        caret.lineTo(15, 16)
+        caret.moveTo(11, 15)
+        caret.lineTo(19, 15)
+        caret.lineTo(15, 20)
       } else {
-        caret.moveTo(12, 9)
-        caret.lineTo(12, 17)
-        caret.lineTo(17, 13)
+        caret.moveTo(12, 13)
+        caret.lineTo(12, 21)
+        caret.lineTo(17, 17)
       }
       caret.fill({ color: 0xc5d8ff, alpha: 0.95 })
       caret.on('pointertap', (event: any) => {
@@ -1773,7 +1774,7 @@ export class PixiBoardAdapter {
       })
       title.eventMode = 'none'
       title.scale.set(textCompensationScale)
-      title.position.set(20, 8)
+      title.position.set(20, 11)
       contentContainer.addChild(title)
 
       const meta = new BitmapText({
@@ -1782,7 +1783,7 @@ export class PixiBoardAdapter {
       })
       meta.eventMode = 'none'
       meta.scale.set(textCompensationScale)
-      meta.position.set(20 + title.width * textCompensationScale + 12, 8)
+      meta.position.set(20 + title.width * textCompensationScale + 12, 11)
       contentContainer.addChild(meta)
     } else {
       addExpandCaret()
@@ -1792,7 +1793,7 @@ export class PixiBoardAdapter {
       })
       compact.eventMode = 'none'
       compact.scale.set(textCompensationScale)
-      compact.position.set(20, 8)
+      compact.position.set(20, 11)
       contentContainer.addChild(compact)
     }
 
