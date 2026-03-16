@@ -1,14 +1,14 @@
 import { Application, Assets, BitmapText, Color, Container, Graphics, Point, Rectangle } from 'pixi.js'
 import { createSpring2D, setSpringTarget, updateSpring2D } from './spring'
-import type { SceneGroupVM, SceneLabelVM, SceneNodeVM, ScenePatch, SceneVM, SceneSegmentVM } from '../worker/protocol'
+import type { SceneFreeSegmentVM, SceneGroupVM, SceneLabelVM, SceneNodeVM, ScenePatch, SceneVM, SceneSegmentVM } from '../worker/protocol'
 
 /** Stored on segment blocks for context-menu hit testing. */
 type SegmentContext = { segmentId: string; nodeId: string }
 
 type GroupDragData = {
   readonly groupId: string
-  readonly startWorld: { x: number; y: number }
-  readonly initialGroupPos: { x: number; y: number }
+  /** Pointer offset from group top-left in world units. */
+  readonly anchorOffset: { x: number; y: number }
 }
 
 type NodeReorderDragData = {
@@ -16,7 +16,8 @@ type NodeReorderDragData = {
   readonly nodeContainers: Container[]
   readonly initialPositions: { x: number; y: number }[]
   readonly handleView: Container
-  readonly offset: { x: number; y: number }
+  /** Pointer offset from primary node top-left in world units. */
+  readonly anchorOffset: { x: number; y: number }
   targetGroupId: string | null
   targetIndex: number
   targetNestParentNodeId: string | null
@@ -46,6 +47,7 @@ type AdapterHandlers = {
   onDragSegmentUpdate(targetNodeId: string | null): void
   onDragSegmentEnd(targetNodeId: string | null, x?: number, y?: number): void
   onContextMenu(segmentId: string, nodeId: string, clientX: number, clientY: number): void
+  onCanvasContextMenu?(worldX: number, worldY: number, clientX: number, clientY: number): void
   onSegmentClick?(segmentId: string, nodeId: string, addToSelection: boolean): void
   onSegmentDoubleClick?(segmentId: string, itemDefId: string, nodeId: string): void
   onMarqueeSelect?(segmentIds: string[], addToSelection: boolean): void
@@ -61,7 +63,9 @@ type SegmentView = {
 
 type NodeView = {
   readonly root: Container
+  readonly positionSpring: ReturnType<typeof createSpring2D>
   readonly segmentContainer: Container
+  readonly contentContainer: Container
   segmentViews: Map<string, SegmentView>
   moveToRootBtn?: Graphics
 }
@@ -74,12 +78,20 @@ type LabelView = {
   readonly root: Container
 }
 
+type FreeSegmentView = {
+  readonly root: Container
+}
+
 type SegmentDragState = {
   readonly segments: readonly SceneSegmentVM[]
   readonly segmentIds: readonly string[]
   readonly sourceNodeIds: Readonly<Record<string, string>>
   readonly proxy: Container
   readonly lineLayer: Container
+  /** Pointer offset from drag-proxy center in world units. */
+  readonly proxyAnchorOffset: { x: number; y: number }
+  /** Pointer offset from grabbed segment's visible top-left in world units. */
+  readonly dropAnchorOffset: { x: number; y: number }
   snap: { nodeId: string; startSixth: number } | null
 }
 
@@ -483,6 +495,20 @@ const occupiedSixthsFromSegments = (
   return occupied
 }
 
+const collapsedVisibleSlotCount = (
+  segments: readonly SceneSegmentVM[],
+  slotCount: number,
+): number => {
+  if (slotCount <= 0) return 0
+  const occupied = occupiedSixthsFromSegments(segments, totalSixthsForSlots(slotCount))
+  let highestOccupiedStone = -1
+  occupied.forEach((sixth) => {
+    highestOccupiedStone = Math.max(highestOccupiedStone, Math.floor(sixth / 6))
+  })
+  if (highestOccupiedStone < 0) return 1
+  return Math.min(slotCount, highestOccupiedStone + 2)
+}
+
 const localToSixth = (localX: number, localY: number, slotCount: number): number => {
   if (localX <= 0) return 0
   const totalSixths = totalSixthsForSlots(slotCount)
@@ -571,6 +597,12 @@ const drawGhostCells = (
     cellGraphic.fill({ color, alpha })
     container.addChild(cellGraphic)
   }
+}
+
+type DragProxyLayout = {
+  readonly proxy: Container
+  readonly pivot: { x: number; y: number }
+  readonly segmentBounds: Record<string, { x: number; y: number; w: number; h: number }>
 }
 
 /** Draw blended rectangles: one per stone column, with (cont.) label for continuations. */
@@ -684,7 +716,7 @@ const drawSegmentBlock = (
   onTooltipMove?: (globalX: number, globalY: number) => void,
   onTooltipLeave?: () => void,
   nodeId?: string,
-  onDragStart?: (segment: SceneSegmentVM, nodeId: string, x: number, y: number) => void,
+  onDragStart?: (segment: SceneSegmentVM, nodeId: string, clientX: number, clientY: number) => void,
   baseOffset?: { x: number; y: number },
   filterCategory?: string | null,
   _selectedSegmentIds?: readonly string[],
@@ -719,7 +751,9 @@ const drawSegmentBlock = (
       if (event.button === 0) {
         event.stopPropagation()
         onTooltipLeave?.()
-        onDragStart(segment, nodeId, event.global.x, event.global.y)
+        const clientX = typeof event.clientX === 'number' ? event.clientX : event.global.x
+        const clientY = typeof event.clientY === 'number' ? event.clientY : event.global.y
+        onDragStart(segment, nodeId, clientX, clientY)
       }
     })
   }
@@ -851,6 +885,7 @@ export class PixiBoardAdapter {
   private selectionOverlayLayer: Container
   private hudLayer: Container
   private readonly nodeViews = new Map<string, NodeView>()
+  private readonly freeSegmentViews = new Map<string, FreeSegmentView>()
   private readonly groupViews = new Map<string, GroupView>()
   private readonly labelViews = new Map<string, LabelView>()
   private readonly handlers: AdapterHandlers
@@ -869,6 +904,12 @@ export class PixiBoardAdapter {
   private minVisibleLabelPx = DEFAULT_MIN_VISIBLE_PX
   private readonly maxVisibleLabelPx = DEFAULT_MAX_VISIBLE_PX
   private fontsLoaded = false
+  private readonly nodeExpandedState = new Map<string, boolean>()
+  private readonly nodeDisplayOffsetY = new Map<string, number>()
+  private readonly groupDisplayHeights = new Map<string, number>()
+  private readonly skipNodeAnimationOnce = new Set<string>()
+  private readonly skipSegmentAnimationOnce = new Set<string>()
+  private readonly hiddenNodeContentIds = new Set<string>()
 
   constructor(host: HTMLElement, handlers: AdapterHandlers) {
     this.handlers = handlers
@@ -913,7 +954,12 @@ export class PixiBoardAdapter {
     this.app.canvas.addEventListener('contextmenu', (event: MouseEvent) => {
       event.preventDefault()
       const ctx = this.hitTestSegmentContext(event.clientX, event.clientY)
-      if (ctx) this.handlers.onContextMenu(ctx.segmentId, ctx.nodeId, event.clientX, event.clientY)
+      if (ctx) {
+        this.handlers.onContextMenu(ctx.segmentId, ctx.nodeId, event.clientX, event.clientY)
+        return
+      }
+      const world = this.screenToWorld(event.clientX, event.clientY)
+      this.handlers.onCanvasContextMenu?.(world.x, world.y, event.clientX, event.clientY)
     })
 
     this.sceneRoot.addChild(this.groupLayer)
@@ -1087,14 +1133,26 @@ export class PixiBoardAdapter {
         const segView = view.segmentViews.get(segment.id)
         const bounds = segmentBoundsInNodeLocal(segment)
         const pos = segmentPositionInNode(segment)
-        const worldX = node.x + (segView ? segView.container.position.x : pos.x) + bounds.x - pos.x
-        const worldY = node.y + (segView ? segView.container.position.y : pos.y) + bounds.y - pos.y
+        const nodePos = this.getNodeDisplayPosition(node)
+        const worldX = nodePos.x + (segView ? segView.container.position.x : pos.x) + bounds.x - pos.x
+        const worldY = nodePos.y + (segView ? segView.container.position.y : pos.y) + bounds.y - pos.y
         const g = new Graphics()
         g.eventMode = 'none'
         g.roundRect(worldX - PAD, worldY - PAD, bounds.w + PAD * 2, bounds.h + PAD * 2, RADIUS)
         g.stroke({ width: STROKE, color: 0xffffff, alpha: 0.95 })
         this.selectionOverlayLayer.addChild(g)
       }
+    }
+    for (const free of Object.values(this.currentScene.freeSegments ?? {})) {
+      if (!selectedIds.has(free.segment.id)) continue
+      const b = segmentBoundsInNodeLocal(free.segment)
+      const segX = free.x + b.x - SLOT_START_X
+      const segY = free.y + b.y - TOP_BAND_H
+      const g = new Graphics()
+      g.eventMode = 'none'
+      g.roundRect(segX - PAD, segY - PAD, b.w + PAD * 2, b.h + PAD * 2, RADIUS)
+      g.stroke({ width: STROKE, color: 0xffffff, alpha: 0.95 })
+      this.selectionOverlayLayer.addChild(g)
     }
   }
 
@@ -1129,13 +1187,25 @@ export class PixiBoardAdapter {
       for (const segment of node.segments) {
         if (segment.isDropPreview) continue
         const b = segmentBoundsInNodeLocal(segment)
-        const segX1 = node.x + b.x
-        const segY1 = node.y + b.y
+        const nodePos = this.getNodeDisplayPosition(node)
+        const segX1 = nodePos.x + b.x
+        const segY1 = nodePos.y + b.y
         const segX2 = segX1 + b.w
         const segY2 = segY1 + b.h
         if (segX1 < maxW && segX2 > minW && segY1 < maxH && segY2 > minH) {
           segmentIds.push(segment.id)
         }
+      }
+    }
+    for (const free of Object.values(this.currentScene.freeSegments ?? {})) {
+      if (free.segment.isDropPreview) continue
+      const b = segmentBoundsInNodeLocal(free.segment)
+      const segX1 = free.x + b.x - SLOT_START_X
+      const segY1 = free.y + b.y - TOP_BAND_H
+      const segX2 = segX1 + b.w
+      const segY2 = segY1 + b.h
+      if (segX1 < maxW && segX2 > minW && segY1 < maxH && segY2 > minH) {
+        segmentIds.push(free.segment.id)
       }
     }
     this.handlers.onMarqueeSelect(segmentIds, addToSelection)
@@ -1268,10 +1338,10 @@ export class PixiBoardAdapter {
       type: 'group',
       state: {
         groupId: group.id,
-        startWorld: world,
-        initialGroupPos: { x: group.x, y: group.y },
+        anchorOffset: { x: world.x - group.x, y: world.y - group.y },
       },
     }
+    this.setGroupNodeContentVisibility(group.id, false)
     return true
   }
 
@@ -1279,13 +1349,13 @@ export class PixiBoardAdapter {
     if (this.activeDrag.type !== 'group' || !this.currentScene || !this.handlers.onMoveGroup) return
     const drag = this.activeDrag.state
     const world = this.screenToWorld(clientX, clientY)
-    const dx = world.x - drag.startWorld.x
-    const dy = world.y - drag.startWorld.y
+    const nextX = world.x - drag.anchorOffset.x
+    const nextY = world.y - drag.anchorOffset.y
     const groupView = this.groupViews.get(drag.groupId)
     if (groupView) {
-      groupView.root.position.set(drag.initialGroupPos.x + dx, drag.initialGroupPos.y + dy)
+      groupView.root.position.set(nextX, nextY)
     }
-    this.handlers.onMoveGroup(drag.groupId, drag.initialGroupPos.x + dx, drag.initialGroupPos.y + dy)
+    this.handlers.onMoveGroup(drag.groupId, nextX, nextY)
   }
 
   private screenToWorld(clientX: number, clientY: number): { x: number; y: number } {
@@ -1308,8 +1378,10 @@ export class PixiBoardAdapter {
   private findDropTarget(worldX: number, worldY: number): string | null {
     if (!this.currentScene) return null
     for (const node of Object.values(this.currentScene.nodes)) {
-      if (worldX >= node.x && worldX <= node.x + node.width &&
-          worldY >= node.y && worldY <= node.y + node.height) {
+      const pos = this.getNodeDisplayPosition(node)
+      const dims = this.getNodeDisplayDimensions(node)
+      if (worldX >= pos.x && worldX <= pos.x + dims.width &&
+          worldY >= pos.y && worldY <= pos.y + dims.height) {
         return node.id
       }
     }
@@ -1323,28 +1395,31 @@ export class PixiBoardAdapter {
     const node = this.currentScene.nodes[targetNodeId]
     if (!node) return null
 
-    const nodeMeterWidth = meterWidthForSlots(node.slotCount)
-    const slotAreaH = slotAreaHeightForSlots(node.slotCount)
-    const inY = worldY >= node.y + TOP_BAND_H && worldY <= node.y + TOP_BAND_H + slotAreaH
+    const visibleSlotCount = this.getVisibleSlotCount(node)
+    const nodeMeterWidth = meterWidthForSlots(visibleSlotCount)
+    const slotAreaH = slotAreaHeightForSlots(visibleSlotCount)
+    const pos = this.getNodeDisplayPosition(node)
+    const inY = worldY >= pos.y + TOP_BAND_H && worldY <= pos.y + TOP_BAND_H + slotAreaH
     if (!inY) return { nodeId: targetNodeId, startSixth: 0 }
-    const localX = worldX - node.x - SLOT_START_X
-    const localY = worldY - node.y - TOP_BAND_H
+    const localX = worldX - pos.x - SLOT_START_X
+    const localY = worldY - pos.y - TOP_BAND_H
     if (localX < -STONE_W || localX > nodeMeterWidth + STONE_W) return { nodeId: targetNodeId, startSixth: 0 }
 
-    let startSixth = localToSixth(localX, localY, node.slotCount)
+    let startSixth = localToSixth(localX, localY, visibleSlotCount)
     if (isMultiStone(segment)) {
       startSixth = Math.floor(startSixth / 6) * 6
     }
-    const totalSixths = totalSixthsForSlots(node.slotCount)
+    const totalSixths = totalSixthsForSlots(visibleSlotCount)
     const maxStart = Math.max(0, totalSixths - segment.sizeSixths)
     startSixth = Math.max(0, Math.min(maxStart, startSixth))
     return { nodeId: targetNodeId, startSixth }
   }
 
-  private buildDragProxy(segments: readonly SceneSegmentVM[]): Container {
+  private buildDragProxy(segments: readonly SceneSegmentVM[]): DragProxyLayout {
     const proxy = new Container()
     const ITEM_GAP = 4
     let offsetY = 0
+    const segmentBounds: Record<string, { x: number; y: number; w: number; h: number }> = {}
 
     for (const segment of segments) {
       const color = segment.isOverflow ? 0xa83f62 : isMultiStone(segment) ? 0x61b5ff : 0x7bd7cf
@@ -1352,6 +1427,7 @@ export class PixiBoardAdapter {
 
       if (isMultiStone(segment)) {
         const w = (segment.sizeSixths / 6) * (STONE_W + STONE_GAP) - STONE_GAP
+        segmentBounds[segment.id] = { x: 0, y: offsetY, w, h: STONE_H }
         const rect = new Graphics()
         rect.roundRect(0, offsetY, w, STONE_H, 6)
         rect.fill({ color, alpha })
@@ -1369,6 +1445,7 @@ export class PixiBoardAdapter {
           maxX = Math.max(maxX, stoneToX(g.stone) + STONE_W)
           maxY = Math.max(maxY, gy + g.count * CELL_H)
         })
+        segmentBounds[segment.id] = { x: minX, y: minY, w: maxX - minX, h: maxY - minY }
         const stroke = new Graphics()
         stroke.roundRect(minX, minY, maxX - minX, maxY - minY, 4)
         stroke.stroke({ width: 1.5, color: 0xd3ebff, alpha: 0.85 })
@@ -1378,8 +1455,9 @@ export class PixiBoardAdapter {
     }
 
     const b = proxy.getBounds()
-    proxy.pivot.set(b.width / 2, b.height / 2)
-    return proxy
+    const pivot = { x: b.width / 2, y: b.height / 2 }
+    proxy.pivot.set(pivot.x, pivot.y)
+    return { proxy, pivot, segmentBounds }
   }
 
   private getDropTargetCenters(): { x: number; y: number }[] {
@@ -1390,9 +1468,10 @@ export class PixiBoardAdapter {
     const { nodeId, startSixth } = drag.snap
     const node = this.currentScene.nodes[nodeId]
     if (!node) return centers
+    const nodePos = this.getNodeDisplayPosition(node)
     const previewSegs = node.segments.filter((s) => s.isDropPreview === true)
     if (previewSegs.length > 0) {
-      previewSegs.forEach((s) => centers.push(segmentCenterInNode(s, node.x, node.y)))
+      previewSegs.forEach((s) => centers.push(segmentCenterInNode(s, nodePos.x, nodePos.y)))
       return centers
     }
     let cursorSixth = startSixth
@@ -1401,21 +1480,49 @@ export class PixiBoardAdapter {
       if (isSameAsSource) {
         const actualSeg = node.segments.find((s) => s.id === seg.id)
         if (actualSeg) {
-          centers.push(segmentCenterInNode(actualSeg, node.x, node.y))
+          centers.push(segmentCenterInNode(actualSeg, nodePos.x, nodePos.y))
           cursorSixth = actualSeg.startSixth + actualSeg.sizeSixths
         } else {
-          centers.push(segmentCenterInNode({ ...seg, startSixth: cursorSixth, sizeSixths: seg.sizeSixths }, node.x, node.y))
+          centers.push(segmentCenterInNode({ ...seg, startSixth: cursorSixth, sizeSixths: seg.sizeSixths }, nodePos.x, nodePos.y))
           cursorSixth += seg.sizeSixths
         }
       } else {
-        centers.push(segmentCenterInNode({ ...seg, startSixth: cursorSixth, sizeSixths: seg.sizeSixths }, node.x, node.y))
+        centers.push(segmentCenterInNode({ ...seg, startSixth: cursorSixth, sizeSixths: seg.sizeSixths }, nodePos.x, nodePos.y))
         cursorSixth += seg.sizeSixths
       }
     }
     return centers
   }
 
-  private beginSegmentDrag(segment: SceneSegmentVM, _sourceNodeId: string, globalX: number, globalY: number): void {
+  private getSegmentWorldBounds(segmentId: string, sourceNodeId: string): { x: number; y: number; w: number; h: number } | null {
+    if (!this.currentScene) return null
+    const sourceNode = this.currentScene.nodes[sourceNodeId]
+    if (sourceNode) {
+      const sourceSegment = sourceNode.segments.find((s) => s.id === segmentId)
+      if (!sourceSegment) return null
+      const b = segmentBoundsInNodeLocal(sourceSegment)
+      const nodePos = this.getNodeDisplayPosition(sourceNode)
+      return {
+        x: nodePos.x + b.x,
+        y: nodePos.y + b.y,
+        w: b.w,
+        h: b.h,
+      }
+    }
+    const free = Object.values(this.currentScene.freeSegments ?? {}).find((fs) => fs.segment.id === segmentId)
+    if (free) {
+      const b = segmentBoundsInNodeLocal(free.segment)
+      return {
+        x: free.x + b.x - SLOT_START_X,
+        y: free.y + b.y - TOP_BAND_H,
+        w: b.w,
+        h: b.h,
+      }
+    }
+    return null
+  }
+
+  private beginSegmentDrag(segment: SceneSegmentVM, sourceNodeId: string, clientX: number, clientY: number): void {
     if (this.activeDrag.type !== 'idle') return
     const selectedIds = this.currentScene?.selectedSegmentIds ?? []
     const segmentIds = selectedIds.includes(segment.id) && selectedIds.length > 1
@@ -1432,17 +1539,50 @@ export class PixiBoardAdapter {
         }
       }
     }
+    for (const free of Object.values(this.currentScene.freeSegments ?? {})) {
+      if (segmentIds.includes(free.segment.id)) {
+        segmentById.set(free.segment.id, free.segment)
+        sourceNodeIds[free.segment.id] = free.nodeId
+      }
+    }
     const segments: SceneSegmentVM[] = segmentIds
       .map((id) => segmentById.get(id))
       .filter((seg): seg is SceneSegmentVM => seg != null)
     if (segments.length === 0) return
-    const proxy = this.buildDragProxy(segments)
+    const { proxy, pivot, segmentBounds } = this.buildDragProxy(segments)
+    const pointerWorld = this.screenToWorld(clientX, clientY)
+    const grabbedWorldBounds = this.getSegmentWorldBounds(segment.id, sourceNodeId)
+    const pointerInSegment = grabbedWorldBounds
+      ? {
+          x: Math.max(0, Math.min(grabbedWorldBounds.w, pointerWorld.x - grabbedWorldBounds.x)),
+          y: Math.max(0, Math.min(grabbedWorldBounds.h, pointerWorld.y - grabbedWorldBounds.y)),
+        }
+      : { x: 0, y: 0 }
+    const proxySegmentBounds = segmentBounds[segment.id]
+    const proxyAnchorOffset = proxySegmentBounds
+      ? {
+          x: proxySegmentBounds.x + pointerInSegment.x - pivot.x,
+          y: proxySegmentBounds.y + pointerInSegment.y - pivot.y,
+        }
+      : { x: 0, y: 0 }
     const lineLayer = new Container()
     this.worldLayer.addChild(lineLayer)
     this.worldLayer.addChild(proxy)
-    this.activeDrag = { type: 'segment', state: { segments, segmentIds, sourceNodeIds, proxy, lineLayer, snap: null } }
+    this.activeDrag = {
+      type: 'segment',
+      state: {
+        segments,
+        segmentIds,
+        sourceNodeIds,
+        proxy,
+        lineLayer,
+        proxyAnchorOffset,
+        dropAnchorOffset: pointerInSegment,
+        snap: null,
+      },
+    }
     this.handlers.onDragSegmentStart(segmentIds)
-    this.updateSegmentDrag(globalX, globalY)
+    this.updateSegmentDrag(clientX, clientY)
   }
 
   private updateSegmentDrag(clientX: number, clientY: number): void {
@@ -1455,9 +1595,9 @@ export class PixiBoardAdapter {
     const snap = this.findSnapTarget(world.x, world.y, drag.segments[0])
     drag.snap = snap
 
-    drag.proxy.position.set(world.x, world.y)
-    const proxyCenterX = world.x
-    const proxyCenterY = world.y
+    const proxyCenterX = world.x - drag.proxyAnchorOffset.x
+    const proxyCenterY = world.y - drag.proxyAnchorOffset.y
+    drag.proxy.position.set(proxyCenterX, proxyCenterY)
 
     drag.lineLayer.removeChildren()
     const targetCenters = this.getDropTargetCenters()
@@ -1476,7 +1616,11 @@ export class PixiBoardAdapter {
     const targetNodeId = world ? this.findDropTarget(world.x, world.y) : drag.snap?.nodeId ?? null
     const anyDifferentSource = drag.segmentIds.some((id) => drag.sourceNodeIds[id] !== targetNodeId)
     const effectiveTarget = targetNodeId && anyDifferentSource ? targetNodeId : null
-    this.handlers.onDragSegmentEnd(effectiveTarget, world?.x, world?.y)
+    this.skipSegmentAnimationOnce.clear()
+    drag.segmentIds.forEach((segmentId) => this.skipSegmentAnimationOnce.add(segmentId))
+    const dropX = world ? world.x - drag.dropAnchorOffset.x : undefined
+    const dropY = world ? world.y - drag.dropAnchorOffset.y : undefined
+    this.handlers.onDragSegmentEnd(effectiveTarget, dropX, dropY)
     this.worldLayer.removeChild(drag.lineLayer)
     this.worldLayer.removeChild(drag.proxy)
     drag.lineLayer.destroy({ children: true })
@@ -1494,11 +1638,19 @@ export class PixiBoardAdapter {
     const textCompensationScale = getTextCompensationScale(this.zoom)
     const root = new Container()
     root.eventMode = 'static'
+    const contentContainer = new Container()
+    root.addChild(contentContainer)
+    const displayPos = this.getNodeDisplayPosition(node)
+    const positionSpring = createSpring2D(displayPos.x, displayPos.y)
+    positionSpring.targetX = displayPos.x
+    positionSpring.targetY = displayPos.y
 
     const slotCount = node.slotCount
-    const totalMeterWidth = meterWidthForSlots(slotCount)
+    const isExpanded = this.isNodeExpanded(node.id)
+    const visibleSlotCount = isExpanded ? slotCount : collapsedVisibleSlotCount(node.segments, slotCount)
+    const totalMeterWidth = meterWidthForSlots(visibleSlotCount)
     const totalWidth = SLOT_START_X + totalMeterWidth + 20
-    const totalHeight = TOP_BAND_H + slotAreaHeightForSlots(slotCount)
+    const totalHeight = TOP_BAND_H + slotAreaHeightForSlots(visibleSlotCount)
     const totalSixths = totalSixthsForSlots(slotCount)
 
     let moveToRootBtn: Graphics | undefined
@@ -1518,20 +1670,20 @@ export class PixiBoardAdapter {
         if (this.activeDrag.type !== 'idle') return
         this.handlers.onMoveNodeToRoot?.(node.id, root.position.x, root.position.y)
       })
-      root.addChild(moveToRootBtn)
+      contentContainer.addChild(moveToRootBtn)
     }
 
     const bg = new Graphics()
     bg.roundRect(0, 0, totalWidth, totalHeight, 10)
     bg.fill({ color: 0x0d1a30, alpha: 0.92 })
     bg.stroke({ width: 1, color: 0x2f4878, alpha: 0.85 })
-    root.addChild(bg)
+    contentContainer.addChild(bg)
 
     const speedColor = SPEED_COLORS[node.speedBand ?? 'green'] ?? 0x3dba72
     const speedBar = new Graphics()
     speedBar.roundRect(0, 0, 6, totalHeight, 3)
     speedBar.fill({ color: speedColor, alpha: 0.92 })
-    root.addChild(speedBar)
+    contentContainer.addChild(speedBar)
 
     const dragHandle = new Graphics()
     dragHandle.eventMode = 'static'
@@ -1546,9 +1698,35 @@ export class PixiBoardAdapter {
       dragHandle.circle(3, y, 1.5)
       dragHandle.fill({ color: 0xe3f0ff, alpha: 0.86 })
     }
-    root.addChild(dragHandle)
+    contentContainer.addChild(dragHandle)
+
+    const addExpandCaret = (): void => {
+      const caret = new Graphics()
+      caret.eventMode = 'static'
+      caret.cursor = 'pointer'
+      ;(caret as Container & { __dragHandle?: boolean }).__dragHandle = true
+      // Larger transparent target so caret is easy to click.
+      caret.roundRect(6, 5, 18, 18, 5)
+      caret.fill({ color: 0xffffff, alpha: 0.001 })
+      if (isExpanded) {
+        caret.moveTo(11, 11)
+        caret.lineTo(19, 11)
+        caret.lineTo(15, 16)
+      } else {
+        caret.moveTo(12, 9)
+        caret.lineTo(12, 17)
+        caret.lineTo(17, 13)
+      }
+      caret.fill({ color: 0xc5d8ff, alpha: 0.95 })
+      caret.on('pointertap', (event: any) => {
+        event.stopPropagation()
+        this.setNodeExpanded(node.id, !isExpanded)
+      })
+      contentContainer.addChild(caret)
+    }
 
     if (tier !== 'far') {
+      addExpandCaret()
       const title = new BitmapText({
         text: node.title,
         style: { fill: '#e8f0ff', fontSize: 13, fontFamily: FONT_SEMIBOLD },
@@ -1556,7 +1734,7 @@ export class PixiBoardAdapter {
       title.eventMode = 'none'
       title.scale.set(textCompensationScale)
       title.position.set(20, 8)
-      root.addChild(title)
+      contentContainer.addChild(title)
 
       const meta = new BitmapText({
         text: `${node.speedFeet}' • ${node.usedStoneText} / ${node.capacityStoneText}`,
@@ -1565,8 +1743,9 @@ export class PixiBoardAdapter {
       meta.eventMode = 'none'
       meta.scale.set(textCompensationScale)
       meta.position.set(20 + title.width * textCompensationScale + 12, 8)
-      root.addChild(meta)
+      contentContainer.addChild(meta)
     } else {
+      addExpandCaret()
       const compact = new BitmapText({
         text: `${compactToken(node.title, 4)} ${node.speedFeet}'`,
         style: { fill: '#b0c2e8', fontSize: 11, fontFamily: FONT_REGULAR },
@@ -1574,7 +1753,7 @@ export class PixiBoardAdapter {
       compact.eventMode = 'none'
       compact.scale.set(textCompensationScale)
       compact.position.set(20, 8)
-      root.addChild(compact)
+      contentContainer.addChild(compact)
     }
 
     const occupiedSixths = occupiedSixthsFromSegments(node.segments, totalSixths)
@@ -1583,7 +1762,7 @@ export class PixiBoardAdapter {
     const dimAlpha = tier === 'far' ? 0.1 : 0.14
     const brightAlpha = tier === 'far' ? 0.36 : 0.48
     const slotColorFn = node.twoBandSlots ? twoBandSlotColor : fixedSlotBandColor
-    for (let stone = 0; stone < slotCount; stone += 1) {
+    for (let stone = 0; stone < visibleSlotCount; stone += 1) {
       const sx = SLOT_START_X + stoneToX(stone)
       const sy = TOP_BAND_H + stoneToY(stone)
       const slotBandColor = slotColorFn(stone, node.fixedGreenStoneSlots)
@@ -1598,9 +1777,15 @@ export class PixiBoardAdapter {
         })
       }
     }
-    root.addChild(slotFillLayer)
+    contentContainer.addChild(slotFillLayer)
 
     const segmentContainer = new Container()
+    const segmentClip = new Graphics()
+    segmentClip.eventMode = 'none'
+    segmentClip.rect(0, 0, totalWidth, totalHeight)
+    segmentClip.fill({ color: 0xffffff, alpha: 0.001 })
+    contentContainer.addChild(segmentClip)
+    segmentContainer.mask = segmentClip
     const segmentViews = new Map<string, SegmentView>()
     node.segments.forEach((segment) => {
       const pos = segmentPositionInNode(segment)
@@ -1636,12 +1821,12 @@ export class PixiBoardAdapter {
       )
       segmentContainer.addChild(segContainer)
     })
-    root.addChild(segmentContainer)
+    contentContainer.addChild(segmentContainer)
 
-    root.position.set(node.x, node.y)
+    root.position.set(displayPos.x, displayPos.y)
     this.enableDrag(dragHandle, root, node.id)
     this.worldLayer.addChild(root)
-    return { root, segmentContainer, segmentViews, moveToRootBtn }
+    return { root, positionSpring, segmentContainer, contentContainer, segmentViews, moveToRootBtn }
   }
 
   private updateNode(
@@ -1651,7 +1836,19 @@ export class PixiBoardAdapter {
     filterCategory: string | null,
     selectedSegmentIds: readonly string[],
   ): void {
-    const totalHeight = TOP_BAND_H + slotAreaHeightForSlots(node.slotCount)
+    const displayPos = this.getNodeDisplayPosition(node)
+    setSpringTarget(view.positionSpring, displayPos.x, displayPos.y)
+    if (this.skipNodeAnimationOnce.delete(node.id)) {
+      view.positionSpring.x = displayPos.x
+      view.positionSpring.y = displayPos.y
+      view.positionSpring.targetX = displayPos.x
+      view.positionSpring.targetY = displayPos.y
+      view.positionSpring.vx = 0
+      view.positionSpring.vy = 0
+      view.positionSpring.active = false
+      view.root.position.set(displayPos.x, displayPos.y)
+    }
+    const totalHeight = this.getNodeDisplayDimensions(node).height
     if (node.parentNodeId && this.handlers.onMoveNodeToRoot) {
       if (!view.moveToRootBtn) {
         const moveToRootBtn = new Graphics()
@@ -1669,11 +1866,11 @@ export class PixiBoardAdapter {
           if (this.activeDrag.type !== 'idle') return
           this.handlers.onMoveNodeToRoot?.(node.id, view.root.position.x, view.root.position.y)
         })
-        view.root.addChildAt(moveToRootBtn, 0)
+        view.contentContainer.addChildAt(moveToRootBtn, 0)
         ;(view as NodeView).moveToRootBtn = moveToRootBtn
       }
     } else if (view.moveToRootBtn) {
-      view.root.removeChild(view.moveToRootBtn)
+      view.contentContainer.removeChild(view.moveToRootBtn)
       view.moveToRootBtn.destroy()
       ;(view as NodeView).moveToRootBtn = undefined
     }
@@ -1727,6 +1924,16 @@ export class PixiBoardAdapter {
         view.segmentContainer.addChild(segContainer)
       } else {
         setSpringTarget(segView.spring, pos.x, pos.y)
+        if (this.skipSegmentAnimationOnce.delete(segment.id)) {
+          segView.spring.x = pos.x
+          segView.spring.y = pos.y
+          segView.spring.targetX = pos.x
+          segView.spring.targetY = pos.y
+          segView.spring.vx = 0
+          segView.spring.vy = 0
+          segView.spring.active = false
+          segView.container.position.set(pos.x, pos.y)
+        }
         const hovered = segment.id === hoveredSegmentId
         segView.container.removeChildren()
         drawSegmentBlock(
@@ -1770,10 +1977,13 @@ export class PixiBoardAdapter {
       }
       if (nodeContainers.length === 0) return
       const initialPositions = nodeContainers.map((c) => ({ x: c.position.x, y: c.position.y }))
-      const point = event.global
-      const offset = {
-        x: (point.x - this.pan.x) / this.zoom - nodeContainer.position.x,
-        y: (point.y - this.pan.y) / this.zoom - nodeContainer.position.y,
+      const canvasRect = this.app.canvas.getBoundingClientRect()
+      const clientX = typeof event.clientX === 'number' ? event.clientX : event.global.x + canvasRect.left
+      const clientY = typeof event.clientY === 'number' ? event.clientY : event.global.y + canvasRect.top
+      const point = this.screenToWorld(clientX, clientY)
+      const anchorOffset = {
+        x: point.x - nodeContainer.position.x,
+        y: point.y - nodeContainer.position.y,
       }
       this.activeDrag = {
         type: 'nodeReorder',
@@ -1782,12 +1992,13 @@ export class PixiBoardAdapter {
           nodeContainers,
           initialPositions,
           handleView,
-          offset,
+          anchorOffset,
           targetGroupId: null,
           targetIndex: 0,
           targetNestParentNodeId: null,
         },
       }
+      this.setNodeContentVisibility(nodeIds, false)
       handleView.cursor = 'grabbing'
       event.stopPropagation()
     })
@@ -1802,9 +2013,10 @@ export class PixiBoardAdapter {
   private createGroup(group: SceneGroupVM): GroupView {
     const root = new Container()
     root.position.set(group.x, group.y)
+    const displayHeight = this.getGroupDisplayHeight(group)
 
     const bg = new Graphics()
-    bg.roundRect(0, 0, group.width, group.height, 14)
+    bg.roundRect(0, 0, group.width, displayHeight, 14)
     bg.fill({ color: 0x101b33, alpha: 0.36 })
     bg.stroke({ width: 2, color: 0x6f8fc5, alpha: 0.75 })
     root.addChild(bg)
@@ -1815,9 +2027,9 @@ export class PixiBoardAdapter {
     ;(handle as Container & { __groupHandle?: boolean; __groupHandleId?: string }).__groupHandle = true
     ;(handle as Container & { __groupHandle?: boolean; __groupHandleId?: string }).__groupHandleId = group.id
     const handleW = 14
-    handle.roundRect(0, 0, handleW, group.height, 10)
+    handle.roundRect(0, 0, handleW, displayHeight, 10)
     handle.fill({ color: 0x2a476f, alpha: 0.22 })
-    const groupDotY = group.height / 2 - 18
+    const groupDotY = displayHeight / 2 - 18
     for (let i = 0; i < 4; i += 1) {
       const y = groupDotY + i * 12
       handle.circle(6.2, y, 1.5)
@@ -1835,6 +2047,44 @@ export class PixiBoardAdapter {
     root.addChild(title)
 
     this.groupLayer.addChild(root)
+    return { root }
+  }
+
+  private createFreeSegment(
+    free: SceneFreeSegmentVM,
+    hoveredSegmentId: string | null,
+    filterCategory: string | null,
+    selectedSegmentIds: readonly string[],
+  ): FreeSegmentView {
+    const tier = getZoomTier(this.zoom)
+    const textCompensationScale = getTextCompensationScale(this.zoom)
+    const root = new Container()
+    root.position.set(free.x - SLOT_START_X, free.y - TOP_BAND_H)
+    const hovered = free.segment.id === hoveredSegmentId
+    drawSegmentBlock(
+      root,
+      free.segment,
+      tier,
+      this.zoom,
+      hovered,
+      this.handlers,
+      textCompensationScale,
+      this.minVisibleLabelPx,
+      this.maxVisibleLabelPx,
+      Math.max(6, free.segment.sizeSixths),
+      (seg, x, y) => this.showTooltip(seg, x, y),
+      (x, y) => this.moveTooltip(x, y),
+      () => this.hideTooltip(),
+      free.nodeId,
+      (seg, nodeId, x, y) => this.beginSegmentDrag(seg, nodeId, x, y),
+      undefined,
+      filterCategory,
+      selectedSegmentIds,
+      this.handlers.onSegmentClick,
+      this.handlers.onSegmentDoubleClick,
+      () => this.lastDragEndTime,
+    )
+    this.worldLayer.addChild(root)
     return { root }
   }
 
@@ -1883,14 +2133,15 @@ export class PixiBoardAdapter {
     }
     handle.on('pointerdown', (event: any) => {
       if (event.button !== 0 || this.activeDrag.type !== 'idle') return
-      const point = event.global
-      const worldX = (point.x - this.pan.x) / this.zoom
-      const worldY = (point.y - this.pan.y) / this.zoom
+      const canvasRect = this.app.canvas.getBoundingClientRect()
+      const clientX = typeof event.clientX === 'number' ? event.clientX : event.global.x + canvasRect.left
+      const clientY = typeof event.clientY === 'number' ? event.clientY : event.global.y + canvasRect.top
+      const world = this.screenToWorld(clientX, clientY)
       this.activeDrag = {
         type: 'label',
         state: {
           labelId: label.id,
-          offset: { x: worldX - root.position.x, y: worldY - root.position.y },
+          offset: { x: world.x - root.position.x, y: world.y - root.position.y },
         },
       }
       this.handlers.onSelectLabel?.(label.id)
@@ -1932,12 +2183,14 @@ export class PixiBoardAdapter {
     for (const node of Object.values(this.currentScene.nodes)) {
       if (nodeIds.includes(node.id)) continue
       if (node.parentNodeId) continue
-      const bodyLeft = node.x + BODY_INSET
-      const bodyRight = node.x + node.width - BODY_INSET
-      const bodyTop = node.y + TOP_BAND_H
-      const bodyBottom = node.y + node.height - BODY_INSET
+      const pos = this.getNodeDisplayPosition(node)
+      const dims = this.getNodeDisplayDimensions(node)
+      const bodyLeft = pos.x + BODY_INSET
+      const bodyRight = pos.x + dims.width - BODY_INSET
+      const bodyTop = pos.y + TOP_BAND_H
+      const bodyBottom = pos.y + dims.height - BODY_INSET
       if (worldX >= bodyLeft && worldX <= bodyRight && worldY >= bodyTop && worldY <= bodyBottom) {
-        return { type: 'nest', parentNodeId: node.id, lineY: node.y + node.height / 2 }
+        return { type: 'nest', parentNodeId: node.id, lineY: pos.y + dims.height / 2 }
       }
     }
 
@@ -1946,7 +2199,8 @@ export class PixiBoardAdapter {
     for (let i = groups.length - 1; i >= 0; i -= 1) {
       const g = groups[i]
       if (!g) continue
-      if (worldX >= g.x && worldX <= g.x + g.width && worldY >= g.y && worldY <= g.y + g.height) {
+      const displayH = this.getGroupDisplayHeight(g)
+      if (worldX >= g.x && worldX <= g.x + g.width && worldY >= g.y && worldY <= g.y + displayH) {
         target = g
         break
       }
@@ -1968,10 +2222,17 @@ export class PixiBoardAdapter {
       lineY = target.y + 56
     } else if (index >= candidateIds.length) {
       const last = this.currentScene.nodes[candidateIds[candidateIds.length - 1]]
-      lineY = last ? last.y + last.height + 4 : lineY
+      if (last) {
+        const lastDims = this.getNodeDisplayDimensions(last)
+        const lastPos = this.getNodeDisplayPosition(last)
+        lineY = lastPos.y + lastDims.height + 4
+      }
     } else {
       const n = this.currentScene.nodes[candidateIds[index]]
-      lineY = n ? n.y - 4 : lineY
+      if (n) {
+        const nPos = this.getNodeDisplayPosition(n)
+        lineY = nPos.y - 4
+      }
     }
     return { type: 'reorder', groupId: target.id, index, lineY }
   }
@@ -1996,7 +2257,9 @@ export class PixiBoardAdapter {
     } else {
       const node = this.currentScene.nodes[drop.parentNodeId]
       if (!node) return
-      indicator.roundRect(node.x - 2, node.y - 2, node.width + 4, node.height + 4, 12)
+      const pos = this.getNodeDisplayPosition(node)
+      const dims = this.getNodeDisplayDimensions(node)
+      indicator.roundRect(pos.x - 2, pos.y - 2, dims.width + 4, dims.height + 4, 12)
       indicator.stroke({ width: 3, color: 0x5cadee, alpha: 0.9 })
     }
   }
@@ -2005,8 +2268,8 @@ export class PixiBoardAdapter {
     if (this.activeDrag.type !== 'nodeReorder' || !this.currentScene) return
     const drag = this.activeDrag.state
     const world = this.screenToWorld(clientX, clientY)
-    const x = world.x - drag.offset.x
-    const y = world.y - drag.offset.y
+    const x = world.x - drag.anchorOffset.x
+    const y = world.y - drag.anchorOffset.y
     const dx = x - drag.initialPositions[0].x
     const dy = y - drag.initialPositions[0].y
     for (let i = 0; i < drag.nodeContainers.length; i++) {
@@ -2015,8 +2278,9 @@ export class PixiBoardAdapter {
       c.position.set(ip.x + dx, ip.y + dy)
     }
     const primaryNode = this.currentScene.nodes[drag.nodeIds[0]]
-    const probeX = primaryNode ? x + primaryNode.width / 2 : world.x
-    const probeY = primaryNode ? y + primaryNode.height / 2 : world.y
+    const primaryDims = primaryNode ? this.getNodeDisplayDimensions(primaryNode) : null
+    const probeX = primaryDims ? x + primaryDims.width / 2 : world.x
+    const probeY = primaryDims ? y + primaryDims.height / 2 : world.y
     const drop = this.findNodeDropTarget(drag.nodeIds, probeX, probeY)
     if (drop) {
       if (drop.type === 'reorder') {
@@ -2039,14 +2303,16 @@ export class PixiBoardAdapter {
   private finishNodeReorderDrag(finalClientX?: number, finalClientY?: number): void {
     if (this.activeDrag.type !== 'nodeReorder') return
     const drag = this.activeDrag.state
+    this.setNodeContentVisibility(drag.nodeIds, true)
     if (finalClientX != null && finalClientY != null && this.currentScene) {
       const primaryNode = this.currentScene.nodes[drag.nodeIds[0]]
       if (primaryNode) {
+        const primaryDims = this.getNodeDisplayDimensions(primaryNode)
         const world = this.screenToWorld(finalClientX, finalClientY)
-        const x = world.x - drag.offset.x
-        const y = world.y - drag.offset.y
-        const probeX = x + primaryNode.width / 2
-        const probeY = y + primaryNode.height / 2
+        const x = world.x - drag.anchorOffset.x
+        const y = world.y - drag.anchorOffset.y
+        const probeX = x + primaryDims.width / 2
+        const probeY = y + primaryDims.height / 2
         const finalDrop = this.findNodeDropTarget(drag.nodeIds, probeX, probeY)
         if (finalDrop) {
           if (finalDrop.type === 'reorder') {
@@ -2063,22 +2329,44 @@ export class PixiBoardAdapter {
     }
     drag.handleView.cursor = 'grab'
     this.groupDropIndicator.clear()
-    for (let i = 0; i < drag.nodeContainers.length; i++) {
-      const ip = drag.initialPositions[i]
-      drag.nodeContainers[i].position.set(ip.x, ip.y)
-    }
+    this.skipNodeAnimationOnce.clear()
     if (drag.targetNestParentNodeId && this.handlers.onNestNodeUnder) {
+      drag.nodeIds.forEach((nodeId) => this.skipNodeAnimationOnce.add(nodeId))
       this.handlers.onNestNodeUnder(drag.nodeIds[0], drag.targetNestParentNodeId)
     } else if (drag.targetGroupId && this.handlers.onMoveNodeToGroupIndex) {
+      drag.nodeIds.forEach((nodeId) => this.skipNodeAnimationOnce.add(nodeId))
       this.handlers.onMoveNodeToGroupIndex(drag.nodeIds[0], drag.targetGroupId, drag.targetIndex)
     } else if (finalClientX != null && finalClientY != null && this.handlers.onMoveNodeToRoot) {
       const world = this.screenToWorld(finalClientX, finalClientY)
-      this.handlers.onMoveNodeToRoot(drag.nodeIds[0], world.x - drag.offset.x, world.y - drag.offset.y)
+      drag.nodeIds.forEach((nodeId) => this.skipNodeAnimationOnce.add(nodeId))
+      this.handlers.onMoveNodeToRoot(drag.nodeIds[0], world.x - drag.anchorOffset.x, world.y - drag.anchorOffset.y)
     }
     this.endDrag()
   }
 
+  private setNodeContentVisibility(nodeIds: readonly string[], visible: boolean): void {
+    nodeIds.forEach((nodeId) => {
+      const view = this.nodeViews.get(nodeId)
+      if (!view) return
+      view.contentContainer.visible = visible
+      if (!visible) this.hiddenNodeContentIds.add(nodeId)
+      else this.hiddenNodeContentIds.delete(nodeId)
+    })
+  }
+
+  private setGroupNodeContentVisibility(groupId: string, visible: boolean): void {
+    if (!this.currentScene) return
+    const group = this.currentScene.groups[groupId]
+    if (!group) return
+    this.setNodeContentVisibility(group.nodeIds, visible)
+  }
+
   private endDrag(): void {
+    if (this.activeDrag.type === 'group') {
+      this.setGroupNodeContentVisibility(this.activeDrag.state.groupId, true)
+    } else if (this.activeDrag.type === 'nodeReorder') {
+      this.setNodeContentVisibility(this.activeDrag.state.nodeIds, true)
+    }
     this.activeDrag = { type: 'idle' }
     if (this.pendingRebuild && this.currentScene) {
       this.rebuildAllNodes(this.currentScene)
@@ -2089,6 +2377,7 @@ export class PixiBoardAdapter {
 
   private rebuildAllNodes(scene: SceneVM): void {
     if (!this.fontsLoaded) return
+    this.recomputeDisplayFlow(scene)
     for (const [, view] of this.groupViews) {
       this.groupLayer.removeChild(view.root)
       view.root.destroy({ children: true })
@@ -2099,15 +2388,33 @@ export class PixiBoardAdapter {
       view.root.destroy({ children: true })
     }
     this.nodeViews.clear()
+    for (const [, view] of this.freeSegmentViews) {
+      this.worldLayer.removeChild(view.root)
+      view.root.destroy({ children: true })
+    }
+    this.freeSegmentViews.clear()
     for (const [, view] of this.labelViews) {
       this.labelLayer.removeChild(view.root)
       view.root.destroy({ children: true })
     }
     this.labelViews.clear()
+    const liveNodeIds = new Set(Object.keys(scene.nodes))
+    for (const nodeId of this.nodeExpandedState.keys()) {
+      if (!liveNodeIds.has(nodeId)) this.nodeExpandedState.delete(nodeId)
+    }
     const filterCategory = scene.filterCategory ?? null
     const selectedSegmentIds = scene.selectedSegmentIds ?? []
     Object.values(scene.nodes).forEach((node) => {
       this.nodeViews.set(node.id, this.createNode(node, scene.hoveredSegmentId ?? null, filterCategory, selectedSegmentIds))
+    })
+    if (this.hiddenNodeContentIds.size > 0) {
+      this.setNodeContentVisibility([...this.hiddenNodeContentIds], false)
+    }
+    Object.values(scene.freeSegments ?? {}).forEach((free) => {
+      this.freeSegmentViews.set(
+        free.id,
+        this.createFreeSegment(free, scene.hoveredSegmentId ?? null, filterCategory, selectedSegmentIds),
+      )
     })
     Object.values(scene.groups ?? {}).forEach((group) => {
       this.groupViews.set(group.id, this.createGroup(group))
@@ -2118,8 +2425,39 @@ export class PixiBoardAdapter {
     this.updateSelectionOverlay()
   }
 
+  private rebuildGroups(scene: SceneVM): void {
+    for (const [, view] of this.groupViews) {
+      this.groupLayer.removeChild(view.root)
+      view.root.destroy({ children: true })
+    }
+    this.groupViews.clear()
+    Object.values(scene.groups ?? {}).forEach((group) => {
+      this.groupViews.set(group.id, this.createGroup(group))
+    })
+  }
+
+  private rebuildFreeSegments(scene: SceneVM): void {
+    for (const [, view] of this.freeSegmentViews) {
+      this.worldLayer.removeChild(view.root)
+      view.root.destroy({ children: true })
+    }
+    this.freeSegmentViews.clear()
+    Object.values(scene.freeSegments ?? {}).forEach((free) => {
+      this.freeSegmentViews.set(
+        free.id,
+        this.createFreeSegment(
+          free,
+          scene.hoveredSegmentId ?? null,
+          scene.filterCategory ?? null,
+          scene.selectedSegmentIds ?? [],
+        ),
+      )
+    })
+  }
+
   applyInit(scene: SceneVM): void {
     this.currentScene = scene
+    this.recomputeDisplayFlow(scene)
     this.paceText.text = `Party ${scene.partyPaceText}`
     this.rebuildAllNodes(scene)
   }
@@ -2137,6 +2475,8 @@ export class PixiBoardAdapter {
     const dt = 1 / 60
     let anyActive = false
     for (const [, view] of this.nodeViews) {
+      if (updateSpring2D(view.positionSpring, dt)) anyActive = true
+      view.root.position.set(view.positionSpring.x, view.positionSpring.y)
       for (const [, segView] of view.segmentViews) {
         if (updateSpring2D(segView.spring, dt)) anyActive = true
         segView.container.position.set(segView.spring.x, segView.spring.y)
@@ -2148,18 +2488,73 @@ export class PixiBoardAdapter {
     }
   }
 
+  private isNodeExpanded(nodeId: string): boolean {
+    return this.nodeExpandedState.get(nodeId) === true
+  }
+
+  private setNodeExpanded(nodeId: string, expanded: boolean): void {
+    this.nodeExpandedState.set(nodeId, expanded)
+    if (!this.currentScene) return
+    this.rebuildAllNodes(this.currentScene)
+    this.startSpringTicker()
+  }
+
+  private getVisibleSlotCount(node: SceneNodeVM): number {
+    if (this.isNodeExpanded(node.id)) return node.slotCount
+    return collapsedVisibleSlotCount(node.segments, node.slotCount)
+  }
+
+  private getNodeDisplayDimensions(node: SceneNodeVM): { width: number; height: number } {
+    const visibleSlotCount = this.getVisibleSlotCount(node)
+    const totalMeterWidth = meterWidthForSlots(visibleSlotCount)
+    return {
+      width: SLOT_START_X + totalMeterWidth + 20,
+      height: TOP_BAND_H + slotAreaHeightForSlots(visibleSlotCount),
+    }
+  }
+
+  private recomputeDisplayFlow(scene: SceneVM): void {
+    this.nodeDisplayOffsetY.clear()
+    this.groupDisplayHeights.clear()
+    for (const group of Object.values(scene.groups ?? {})) {
+      let yOffset = 0
+      for (const nodeId of group.nodeIds) {
+        const node = scene.nodes[nodeId]
+        if (!node) continue
+        this.nodeDisplayOffsetY.set(node.id, yOffset)
+        const dims = this.getNodeDisplayDimensions(node)
+        yOffset += dims.height - node.height
+      }
+      this.groupDisplayHeights.set(group.id, Math.max(40, group.height + yOffset))
+    }
+  }
+
+  private getNodeDisplayPosition(node: SceneNodeVM): { x: number; y: number } {
+    return { x: node.x, y: node.y + (this.nodeDisplayOffsetY.get(node.id) ?? 0) }
+  }
+
+  private getGroupDisplayHeight(group: SceneGroupVM): number {
+    return this.groupDisplayHeights.get(group.id) ?? group.height
+  }
+
   applyPatches(patches: readonly ScenePatch[], scene: SceneVM): void {
     this.currentScene = scene
+    this.recomputeDisplayFlow(scene)
     let needsFullRebuild = false
+    let metaChanged = false
     patches.forEach((patch) => {
       if (patch.type === 'UPDATE_META') {
         this.paceText.text = `Party ${patch.partyPaceText}`
-        needsFullRebuild = true
+        metaChanged = true
         return
       }
       if (patch.type === 'UPDATE_NODE') {
         const view = this.nodeViews.get(patch.node.id)
         if (view) {
+          if (!this.isNodeExpanded(patch.node.id)) {
+            needsFullRebuild = true
+            return
+          }
           this.updateNode(
             patch.node,
             view,
@@ -2180,6 +2575,26 @@ export class PixiBoardAdapter {
       }
       needsFullRebuild = true
     })
+    if (!needsFullRebuild && metaChanged) {
+      this.rebuildGroups(scene)
+      this.rebuildFreeSegments(scene)
+      for (const node of Object.values(scene.nodes)) {
+        const view = this.nodeViews.get(node.id)
+        if (!view) {
+          needsFullRebuild = true
+          break
+        }
+        this.updateNode(
+          node,
+          view,
+          scene.hoveredSegmentId ?? null,
+          scene.filterCategory ?? null,
+          scene.selectedSegmentIds ?? [],
+        )
+      }
+      this.updateSelectionOverlay()
+      this.startSpringTicker()
+    }
     if (needsFullRebuild) {
       if (this.activeDrag.type !== 'idle') {
         this.pendingRebuild = true

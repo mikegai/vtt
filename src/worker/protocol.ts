@@ -55,6 +55,14 @@ export type SceneLabelVM = {
   readonly y: number
 }
 
+export type SceneFreeSegmentVM = {
+  readonly id: string
+  readonly nodeId: string
+  readonly x: number
+  readonly y: number
+  readonly segment: SceneSegmentVM
+}
+
 export type SceneGroupVM = {
   readonly id: string
   readonly title: string
@@ -71,6 +79,7 @@ export type SceneVM = {
   readonly filterCategory: ItemCategory | null
   readonly selectedSegmentIds: readonly string[]
   readonly nodes: Record<string, SceneNodeVM>
+  readonly freeSegments: Record<string, SceneFreeSegmentVM>
   readonly groups: Record<string, SceneGroupVM>
   readonly labels: Record<string, SceneLabelVM>
   readonly selectedLabelId: string | null
@@ -80,7 +89,7 @@ export type ScenePatch =
   | { readonly type: 'ADD_NODE'; readonly node: SceneNodeVM }
   | { readonly type: 'REMOVE_NODE'; readonly nodeId: string }
   | { readonly type: 'UPDATE_NODE'; readonly node: SceneNodeVM }
-  | { readonly type: 'UPDATE_META'; readonly partyPaceText: string; readonly hoveredSegmentId: string | null; readonly filterCategory: ItemCategory | null; readonly selectedSegmentIds: readonly string[]; readonly groups: Record<string, SceneGroupVM>; readonly labels: Record<string, SceneLabelVM>; readonly selectedLabelId: string | null }
+  | { readonly type: 'UPDATE_META'; readonly partyPaceText: string; readonly hoveredSegmentId: string | null; readonly filterCategory: ItemCategory | null; readonly selectedSegmentIds: readonly string[]; readonly groups: Record<string, SceneGroupVM>; readonly freeSegments: Record<string, SceneFreeSegmentVM>; readonly labels: Record<string, SceneLabelVM>; readonly selectedLabelId: string | null }
 
 export type DropIntent = {
   readonly segmentIds: readonly string[]
@@ -96,6 +105,7 @@ export type WorkerIntent =
   | { readonly type: 'SELECT_SEGMENTS_REMOVE'; readonly segmentIds: readonly string[] }
   | { readonly type: 'SELECT_ALL_OF_TYPE'; readonly itemDefId: string; readonly nodeId?: string }
   | { readonly type: 'MOVE_GROUP'; readonly groupId: string; readonly x: number; readonly y: number }
+  | { readonly type: 'ADD_GROUP'; readonly x: number; readonly y: number }
   | { readonly type: 'MOVE_NODE_TO_GROUP_INDEX'; readonly nodeId: string; readonly groupId: string; readonly index: number }
   | { readonly type: 'NEST_NODE_UNDER'; readonly nodeId: string; readonly parentNodeId: string }
   | { readonly type: 'MOVE_NODE_TO_ROOT'; readonly nodeId: string; readonly x: number; readonly y: number }

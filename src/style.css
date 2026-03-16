@@ -89,7 +89,7 @@ html, body {
 
 .left-drawer-toggle {
   position: fixed;
-  top: 14px;
+  top: 56px;
   left: 14px;
   z-index: 100;
   min-width: 82px;
@@ -187,7 +187,7 @@ html, body {
 /* --- Drawer Toggle --- */
 .drawer-toggle {
   position: fixed;
-  top: 14px;
+  top: 56px;
   right: 14px;
   z-index: 100;
   width: 40px;

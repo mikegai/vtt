@@ -13,6 +13,7 @@ export const diffSceneVM = (prev: SceneVM | null, next: SceneVM): ScenePatch[] =
         filterCategory: next.filterCategory ?? null,
         selectedSegmentIds: next.selectedSegmentIds ?? [],
         groups: next.groups,
+        freeSegments: next.freeSegments,
         labels: next.labels,
         selectedLabelId: next.selectedLabelId,
       },
@@ -47,6 +48,7 @@ export const diffSceneVM = (prev: SceneVM | null, next: SceneVM): ScenePatch[] =
     prev.hoveredSegmentId !== next.hoveredSegmentId ||
     prev.filterCategory !== next.filterCategory ||
     JSON.stringify(prev.groups) !== JSON.stringify(next.groups) ||
+    JSON.stringify(prev.freeSegments) !== JSON.stringify(next.freeSegments) ||
     JSON.stringify(prev.labels) !== JSON.stringify(next.labels) ||
     prev.selectedLabelId !== next.selectedLabelId ||
     (prev.selectedSegmentIds?.length ?? 0) !== (next.selectedSegmentIds?.length ?? 0) ||
@@ -59,6 +61,7 @@ export const diffSceneVM = (prev: SceneVM | null, next: SceneVM): ScenePatch[] =
       filterCategory: next.filterCategory,
       selectedSegmentIds: next.selectedSegmentIds,
       groups: next.groups,
+      freeSegments: next.freeSegments,
       labels: next.labels,
       selectedLabelId: next.selectedLabelId,
     })

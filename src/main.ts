@@ -302,6 +302,43 @@ const showContextMenu = (
   }, 0)
 }
 
+const showCanvasContextMenu = (worldX: number, worldY: number, clientX: number, clientY: number): void => {
+  closeContextMenu()
+
+  contextMenuEl.innerHTML = `<button class="context-menu-item" data-action="add-group" type="button">Add Group</button>`
+  contextMenuEl.hidden = false
+
+  const padding = 8
+  const maxX = window.innerWidth - contextMenuEl.offsetWidth - padding
+  const maxY = window.innerHeight - contextMenuEl.offsetHeight - padding
+  contextMenuEl.style.left = `${Math.min(clientX, maxX)}px`
+  contextMenuEl.style.top = `${Math.min(clientY, maxY)}px`
+
+  contextMenuEl.querySelectorAll('.context-menu-item').forEach((btn) => {
+    const b = btn as HTMLButtonElement
+    b.addEventListener('click', (e) => {
+      e.stopPropagation()
+      if (b.dataset.action === 'add-group') {
+        postToWorker({
+          type: 'INTENT',
+          intent: { type: 'ADD_GROUP', x: worldX, y: worldY },
+        })
+      }
+      setTimeout(closeContextMenu, 0)
+    })
+  })
+
+  setTimeout(() => {
+    activeContextMenuClose = (event: Event): void => {
+      const target = event.target
+      if (target instanceof Node && contextMenuEl.contains(target)) return
+      closeContextMenu()
+    }
+    document.addEventListener('click', activeContextMenuClose)
+    document.addEventListener('contextmenu', activeContextMenuClose)
+  }, 0)
+}
+
 const escapeAttr = (s: string): string =>
   s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
@@ -356,6 +393,19 @@ const pixiAdapter = new PixiBoardAdapter(canvasHost, {
     if (segment) {
       showContextMenu(segmentId, nodeId, segment.itemDefId, clientX, clientY)
     }
+  },
+  onCanvasContextMenu(worldX, worldY, clientX, clientY) {
+    if (currentScene) {
+      const insideAnyGroup = Object.values(currentScene.groups).some(
+        (group) =>
+          worldX >= group.x &&
+          worldX <= group.x + group.width &&
+          worldY >= group.y &&
+          worldY <= group.y + group.height,
+      )
+      if (insideAnyGroup) return
+    }
+    showCanvasContextMenu(worldX, worldY, clientX, clientY)
   },
   onSegmentClick(segmentId, _nodeId, addToSelection) {
     if (addToSelection) {

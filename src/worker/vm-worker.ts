@@ -15,7 +15,9 @@ let localState: WorkerLocalState = {
   groupPositions: {},
   nodeGroupOverrides: {},
   nodePositions: {},
+  freeSegmentPositions: {},
   groupNodeOrders: {},
+  customGroups: {},
   dropIntent: null,
   stonesPerRow: 25,
   filterCategory: null,
@@ -146,6 +148,15 @@ const applyIntent = (intent: WorkerIntent): void => {
         if (seg.itemDefId === intent.itemDefId) allOfType.push(seg.id)
       }
     }
+    if (!intent.nodeId) {
+      for (const free of Object.values(scene.freeSegments ?? {})) {
+        if (free.segment.itemDefId === intent.itemDefId) allOfType.push(free.segment.id)
+      }
+    } else if (!scene.nodes[intent.nodeId]) {
+      for (const free of Object.values(scene.freeSegments ?? {})) {
+        if (free.nodeId === intent.nodeId && free.segment.itemDefId === intent.itemDefId) allOfType.push(free.segment.id)
+      }
+    }
     localState = { ...localState, selectedSegmentIds: allOfType }
     recompute()
     return
@@ -157,6 +168,28 @@ const applyIntent = (intent: WorkerIntent): void => {
       groupPositions: {
         ...localState.groupPositions,
         [intent.groupId]: { x: intent.x, y: intent.y },
+      },
+    }
+    recompute()
+    return
+  }
+
+  if (intent.type === 'ADD_GROUP') {
+    const groupId = `custom-group:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 7)}`
+    const title = `Group ${Object.keys(localState.customGroups).length + 1}`
+    localState = {
+      ...localState,
+      customGroups: {
+        ...localState.customGroups,
+        [groupId]: { title },
+      },
+      groupPositions: {
+        ...localState.groupPositions,
+        [groupId]: { x: intent.x, y: intent.y },
+      },
+      groupNodeOrders: {
+        ...localState.groupNodeOrders,
+        [groupId]: [],
       },
     }
     recompute()
@@ -373,6 +406,9 @@ const applyIntent = (intent: WorkerIntent): void => {
           }
         }
       }
+      const freeSegmentPositions = { ...localState.freeSegmentPositions }
+      for (const segmentId of segmentIds) delete freeSegmentPositions[segmentId]
+      localState = { ...localState, freeSegmentPositions }
     } else if (localState.dropIntent && worldState && intent.x != null && intent.y != null) {
       const { segmentIds, sourceNodeIds } = localState.dropIntent
       const firstSourceNodeId = segmentIds[0] ? sourceNodeIds[segmentIds[0]] : null
@@ -429,11 +465,15 @@ const applyIntent = (intent: WorkerIntent): void => {
           }
         }
 
-        const droppedNodeId = `${source.actorId}:dropped:${droppedGroupId}`
+        const freeSegmentPositions = { ...localState.freeSegmentPositions }
+        let yOffset = 0
+        for (const segmentId of segmentIds) {
+          freeSegmentPositions[segmentId] = { x: intent.x, y: intent.y + yOffset }
+          yOffset += 14
+        }
         localState = {
           ...localState,
-          nodeGroupOverrides: { ...localState.nodeGroupOverrides, [droppedNodeId]: null },
-          nodePositions: { ...localState.nodePositions, [droppedNodeId]: { x: intent.x, y: intent.y } },
+          freeSegmentPositions,
         }
       }
     }
@@ -484,6 +524,12 @@ const applyIntent = (intent: WorkerIntent): void => {
           }
         }
       }
+    }
+    localState = {
+      ...localState,
+      freeSegmentPositions: Object.fromEntries(
+        Object.entries(localState.freeSegmentPositions).filter(([id]) => segmentIdToEntryId(id) !== segmentIdToEntryId(segmentId)),
+      ),
     }
     recompute()
     return

@@ -5,14 +5,16 @@ import { buildBoardVM } from '../vm/vm'
 import type { ActorRowVM } from '../vm/vm-types'
 import type { CanonicalState } from '../domain/types'
 import type { DropIntent } from './protocol'
-import type { SceneGroupVM, SceneNodeVM, SceneVM } from './protocol'
+import type { SceneFreeSegmentVM, SceneGroupVM, SceneNodeVM, SceneVM } from './protocol'
 
 export type WorkerLocalState = {
   readonly hoveredSegmentId: string | null
   readonly groupPositions: Record<string, { x: number; y: number }>
   readonly nodeGroupOverrides: Record<string, string | null>
   readonly nodePositions: Record<string, { x: number; y: number }>
+  readonly freeSegmentPositions: Record<string, { x: number; y: number }>
   readonly groupNodeOrders: Record<string, readonly string[]>
+  readonly customGroups: Record<string, { title: string }>
   readonly dropIntent: DropIntent | null
   readonly stonesPerRow: number
   readonly filterCategory: ItemCategory | null
@@ -48,12 +50,15 @@ const NODE_ROW_GAP = 8
 const GROUP_PADDING_X = 20
 const GROUP_PADDING_TOP = 40
 const GROUP_PADDING_BOTTOM = 18
+const EMPTY_GROUP_MIN_WIDTH = 300
+const EMPTY_GROUP_MIN_HEIGHT = 140
 const NODE_INDENT = 24
 const ROOT_NODE_X = 80
 const ROOT_NODE_Y = 80
 const ROOT_NODE_COL_GAP = 16
 const ROOT_NODE_ROW_GAP = 16
 const ROOT_NODE_MAX_W = 1800
+const FREE_SEGMENT_STACK_GAP = 8
 
 const flattenRows = (rows: readonly ActorRowVM[]): ActorRowVM[] => {
   const result: ActorRowVM[] = []
@@ -74,9 +79,44 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
   const dropIntent = localState.dropIntent
   const rows = flattenRows(board.rows)
   const nodes: Record<string, SceneNodeVM> = {}
+  const freeSegments: Record<string, SceneFreeSegmentVM> = {}
   const groupsById = new Map<string, { id: string; title: string; nodeIds: string[] }>()
 
+  for (const [groupId, group] of Object.entries(localState.customGroups)) {
+    groupsById.set(groupId, { id: groupId, title: group.title, nodeIds: [] })
+  }
+
   for (const row of rows) {
+    if (row.isDroppedRow) {
+      // Dropped inventory lives directly on the canvas as free segments (no wrapper node).
+      let yCursor = 0
+      for (const segment of row.segments) {
+        const pos = localState.freeSegmentPositions[segment.id] ?? { x: 120, y: 120 + yCursor }
+        freeSegments[segment.id] = {
+          id: segment.id,
+          nodeId: row.id,
+          x: pos.x,
+          y: pos.y,
+          segment: {
+            id: segment.id,
+            shortLabel: segment.labels.short,
+            mediumLabel: segment.labels.medium,
+            fullLabel: segment.labels.full,
+            startSixth: 0,
+            sizeSixths: segment.sizeSixths,
+            isOverflow: segment.isOverflow,
+            isDropPreview: false,
+            itemDefId: segment.itemDefId,
+            category: segment.category,
+            wield: segment.state?.wield,
+            tooltip: segment.tooltip,
+          },
+        }
+        yCursor += STONE_H + FREE_SEGMENT_STACK_GAP
+      }
+      continue
+    }
+
     const actor = worldState.actors[row.actorId]
     const twoBandSlots = actor?.kind === 'animal' || actor?.kind === 'vehicle'
     const totalStoneSlots = Math.ceil(row.capacitySixths / SIXTHS_PER_STONE)
@@ -89,7 +129,9 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
     const baseGroupId = actor?.movementGroupId ?? 'ungrouped'
     const hasOverride = Object.prototype.hasOwnProperty.call(localState.nodeGroupOverrides, row.id)
     const groupId = hasOverride ? localState.nodeGroupOverrides[row.id] : baseGroupId
-    const groupTitle = groupId ? (worldState.movementGroups[groupId]?.name ?? groupId) : null
+    const groupTitle = groupId
+      ? (localState.customGroups[groupId]?.title ?? worldState.movementGroups[groupId]?.name ?? groupId)
+      : null
     const parentNodeId = groupId == null ? undefined : row.parentActorId
 
     nodes[row.id] = {
@@ -165,14 +207,16 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
     const hasNodes = orderedNodeIds.length > 0
     const groupHeight = hasNodes
       ? cursorY - NODE_ROW_GAP - pos.y + GROUP_PADDING_BOTTOM
-      : GROUP_PADDING_TOP + GROUP_PADDING_BOTTOM + 20
+      : EMPTY_GROUP_MIN_HEIGHT
     groups[groupId] = {
       id: groupId,
       title: meta.title,
       nodeIds: orderedNodeIds,
       x: pos.x,
       y: pos.y,
-      width: maxNodeW + GROUP_PADDING_X * 2,
+      width: hasNodes
+        ? maxNodeW + GROUP_PADDING_X * 2
+        : EMPTY_GROUP_MIN_WIDTH,
       height: groupHeight,
     }
     if (!localState.groupPositions[groupId]) flowY = pos.y + groupHeight + GROUP_STACK_GAP
@@ -208,6 +252,7 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
     filterCategory: localState.filterCategory,
     selectedSegmentIds: localState.selectedSegmentIds,
     nodes,
+    freeSegments,
     groups,
     labels: Object.fromEntries(
       Object.entries(localState.labels).map(([id, l]) => [id, { id, text: l.text, x: l.x, y: l.y }]),
