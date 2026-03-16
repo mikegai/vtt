@@ -69,6 +69,15 @@ app.innerHTML = `
           <option value="9">Label minimum text size: 9 px</option>
           <option value="10">Label minimum text size: 10 px</option>
         </select>
+        <select id="stones-per-row" class="tool-input" style="margin-top: 8px">
+          <option value="10">Stones per row: 10</option>
+          <option value="15">Stones per row: 15</option>
+          <option value="20">Stones per row: 20</option>
+          <option value="25" selected>Stones per row: 25</option>
+          <option value="30">Stones per row: 30</option>
+          <option value="40">Stones per row: 40</option>
+          <option value="50">Stones per row: 50</option>
+        </select>
       </section>
 
       <div class="tool-meta">
@@ -286,8 +295,6 @@ vmWorker.onmessage = (event: MessageEvent<WorkerToMainMessage>) => {
   }
 }
 
-postToWorker({ type: 'INIT', worldState: sampleState })
-
 const inputEl = document.querySelector<HTMLInputElement>('#search-input')!
 const chipsEl = document.querySelector<HTMLElement>('#search-chips')!
 const suggestionsEl = document.querySelector<HTMLElement>('#search-suggestions')!
@@ -297,6 +304,15 @@ const parseResultsEl = document.querySelector<HTMLElement>('#parse-results')!
 const bulkInputEl = document.querySelector<HTMLTextAreaElement>('#bulk-input')!
 const bulkResultsEl = document.querySelector<HTMLElement>('#bulk-results')!
 const labelMinVisiblePxEl = document.querySelector<HTMLSelectElement>('#label-min-visible-px')!
+const stonesPerRowEl = document.querySelector<HTMLSelectElement>('#stones-per-row')!
+
+const initialStonesPerRow = Number(stonesPerRowEl.value ?? 25)
+pixiAdapter.setStonesPerRow(initialStonesPerRow)
+postToWorker({
+  type: 'INIT',
+  worldState: sampleState,
+  stonesPerRow: initialStonesPerRow,
+})
 
 const escapeRegex = (v: string): string => v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 const appendToken = (q: string, t: string): string => (q.trim().length === 0 ? `${t} ` : `${q.trim()} ${t} `)
@@ -434,4 +450,10 @@ bulkInputEl.addEventListener('input', () => renderBulkImport(bulkInputEl.value))
 pixiAdapter.setLabelMinVisiblePx(Number(labelMinVisiblePxEl.value))
 labelMinVisiblePxEl.addEventListener('change', () => {
   pixiAdapter.setLabelMinVisiblePx(Number(labelMinVisiblePxEl.value))
+})
+
+stonesPerRowEl.addEventListener('change', () => {
+  const v = Number(stonesPerRowEl.value)
+  pixiAdapter.setStonesPerRow(v)
+  postToWorker({ type: 'SET_STONES_PER_ROW', stonesPerRow: v })
 })

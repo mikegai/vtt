@@ -9,29 +9,29 @@ export type WorkerLocalState = {
   readonly hoveredSegmentId: string | null
   readonly nodePositions: Record<string, { x: number; y: number }>
   readonly dropIntent: DropIntent | null
+  readonly stonesPerRow: number
 }
 
 const STONE_W = 36
 const STONE_GAP = 3
 const STONE_H = 54
 const STONE_ROW_GAP = 3
-const STONES_PER_ROW = 25
 const SLOT_START_X = 10
 const TOP_BAND_H = 34
 
-const slotAreaHeightForSlots = (slotCount: number): number => {
-  const numRows = Math.ceil(slotCount / STONES_PER_ROW)
+const slotAreaHeightForSlots = (slotCount: number, stonesPerRow: number): number => {
+  const numRows = Math.ceil(slotCount / stonesPerRow)
   return numRows * (STONE_H + STONE_ROW_GAP) - STONE_ROW_GAP
 }
 
-const meterWidthForSlots = (slotCount: number): number =>
-  Math.min(slotCount, STONES_PER_ROW) * (STONE_W + STONE_GAP) - STONE_GAP
+const meterWidthForSlots = (slotCount: number, stonesPerRow: number): number =>
+  Math.min(slotCount, stonesPerRow) * (STONE_W + STONE_GAP) - STONE_GAP
 
-const nodeHeightForSlots = (slotCount: number): number =>
-  TOP_BAND_H + slotAreaHeightForSlots(slotCount)
+const nodeHeightForSlots = (slotCount: number, stonesPerRow: number): number =>
+  TOP_BAND_H + slotAreaHeightForSlots(slotCount, stonesPerRow)
 
-const nodeWidthForSlots = (slotCount: number): number =>
-  SLOT_START_X + meterWidthForSlots(slotCount) + 20
+const nodeWidthForSlots = (slotCount: number, stonesPerRow: number): number =>
+  SLOT_START_X + meterWidthForSlots(slotCount, stonesPerRow) + 20
 
 const INDENT_X = 40
 
@@ -70,8 +70,8 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
       title: row.title,
       x: position.x,
       y: position.y,
-      width: nodeWidthForSlots(slotCount),
-      height: nodeHeightForSlots(slotCount),
+      width: nodeWidthForSlots(slotCount, localState.stonesPerRow),
+      height: nodeHeightForSlots(slotCount, localState.stonesPerRow),
       speedFeet: row.speed.explorationFeet,
       speedBand: row.speedBand.band,
       fixedGreenStoneSlots,
@@ -117,8 +117,8 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
         title: child.title,
         x: childPosition.x,
         y: childPosition.y,
-        width: nodeWidthForSlots(childSlotCount),
-        height: nodeHeightForSlots(childSlotCount),
+        width: nodeWidthForSlots(childSlotCount, localState.stonesPerRow),
+        height: nodeHeightForSlots(childSlotCount, localState.stonesPerRow),
         speedFeet: child.speed.explorationFeet,
         speedBand: child.speedBand.band,
         fixedGreenStoneSlots: childFixedGreenStoneSlots,

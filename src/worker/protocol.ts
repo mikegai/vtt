@@ -73,7 +73,8 @@ export type WorkerIntent =
   | { readonly type: 'SET_WORLD_STATE'; readonly worldState: CanonicalState }
 
 export type MainToWorkerMessage =
-  | { readonly type: 'INIT'; readonly worldState: CanonicalState }
+  | { readonly type: 'INIT'; readonly worldState: CanonicalState; readonly stonesPerRow?: number }
+  | { readonly type: 'SET_STONES_PER_ROW'; readonly stonesPerRow: number }
   | { readonly type: 'INTENT'; readonly intent: WorkerIntent }
 
 export type WorkerToMainMessage =

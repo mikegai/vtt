@@ -12,6 +12,7 @@ let localState: WorkerLocalState = {
   hoveredSegmentId: null,
   nodePositions: {},
   dropIntent: null,
+  stonesPerRow: 25,
 }
 let previousScene: SceneVM | null = null
 
@@ -282,6 +283,14 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
   const message = event.data
   if (message.type === 'INIT') {
     worldState = migrateWieldToActor(message.worldState)
+    if (message.stonesPerRow != null) {
+      localState = { ...localState, stonesPerRow: message.stonesPerRow }
+    }
+    recompute(true)
+    return
+  }
+  if (message.type === 'SET_STONES_PER_ROW') {
+    localState = { ...localState, stonesPerRow: message.stonesPerRow }
     recompute(true)
     return
   }

@@ -44,11 +44,13 @@ const CELL_H = STONE_H / SIXTH_ROWS
 const TOP_BAND_H = 34
 const SLOT_START_X = 10
 const SLOT_PADDING = 4
-const STONES_PER_ROW = 25
+const DEFAULT_STONES_PER_ROW = 25
 const STONE_ROW_GAP = 3
 
+let stonesPerRow = DEFAULT_STONES_PER_ROW
+
 const meterWidthForSlots = (slotCount: number): number =>
-  Math.min(slotCount, STONES_PER_ROW) * (STONE_W + STONE_GAP) - STONE_GAP
+  Math.min(slotCount, stonesPerRow) * (STONE_W + STONE_GAP) - STONE_GAP
 const totalSixthsForSlots = (slotCount: number): number => slotCount * 6
 
 const SPEED_COLORS: Record<string, number> = {
@@ -224,12 +226,12 @@ const isMultiStone = (segment: SceneSegmentVM): boolean =>
   segment.sizeSixths >= 6 && segment.sizeSixths % 6 === 0
 
 const stoneToX = (stoneIndex: number): number =>
-  (stoneIndex % STONES_PER_ROW) * (STONE_W + STONE_GAP)
+  (stoneIndex % stonesPerRow) * (STONE_W + STONE_GAP)
 const stoneToY = (stoneIndex: number): number =>
-  Math.floor(stoneIndex / STONES_PER_ROW) * (STONE_H + STONE_ROW_GAP)
+  Math.floor(stoneIndex / stonesPerRow) * (STONE_H + STONE_ROW_GAP)
 
 const slotAreaHeightForSlots = (slotCount: number): number => {
-  const numRows = Math.ceil(slotCount / STONES_PER_ROW)
+  const numRows = Math.ceil(slotCount / stonesPerRow)
   return numRows * (STONE_H + STONE_ROW_GAP) - STONE_ROW_GAP
 }
 
@@ -342,7 +344,7 @@ const drawArrowLine = (g: Graphics, x1: number, y1: number, x2: number, y2: numb
   g.stroke({ width: 2, color: 0x5cadee, alpha: 0.85 })
 }
 
-/** Split stone range into chunks at STONES_PER_ROW boundaries. */
+/** Split stone range into chunks at stonesPerRow boundaries. */
 const splitStonesAtWrap = (
   startStone: number,
   endStone: number,
@@ -350,8 +352,8 @@ const splitStonesAtWrap = (
   const chunks: { start: number; end: number }[] = []
   let s = startStone
   while (s < endStone) {
-    const rowStart = Math.floor(s / STONES_PER_ROW) * STONES_PER_ROW
-    const rowEnd = rowStart + STONES_PER_ROW
+    const rowStart = Math.floor(s / stonesPerRow) * stonesPerRow
+    const rowEnd = rowStart + stonesPerRow
     const chunkEnd = Math.min(endStone, rowEnd)
     chunks.push({ start: s, end: chunkEnd })
     s = chunkEnd
@@ -400,27 +402,27 @@ const occupiedSixthsFromSegments = (
 const localToSixth = (localX: number, localY: number, slotCount: number): number => {
   if (localX <= 0) return 0
   const totalSixths = totalSixthsForSlots(slotCount)
-  const numRows = Math.ceil(slotCount / STONES_PER_ROW)
+  const numRows = Math.ceil(slotCount / stonesPerRow)
   for (let rowIndex = 0; rowIndex < numRows; rowIndex += 1) {
     const rowY = rowIndex * (STONE_H + STONE_ROW_GAP)
     const rowBottom = rowY + STONE_H
-    if (localY < rowY) return Math.min(totalSixths, rowIndex * STONES_PER_ROW * 6)
+    if (localY < rowY) return Math.min(totalSixths, rowIndex * stonesPerRow * 6)
     if (localY >= rowBottom + (rowIndex < numRows - 1 ? STONE_ROW_GAP : 0)) continue
-    const stonesInRow = Math.min(STONES_PER_ROW, slotCount - rowIndex * STONES_PER_ROW)
+    const stonesInRow = Math.min(stonesPerRow, slotCount - rowIndex * stonesPerRow)
     const rowWidth = stonesInRow * (STONE_W + STONE_GAP) - STONE_GAP
-    if (localX >= rowWidth + STONE_W) return Math.min(totalSixths, (rowIndex * STONES_PER_ROW + stonesInRow) * 6)
+    if (localX >= rowWidth + STONE_W) return Math.min(totalSixths, (rowIndex * stonesPerRow + stonesInRow) * 6)
     for (let col = 0; col < stonesInRow; col += 1) {
       const stoneStart = col * (STONE_W + STONE_GAP)
       const stoneEnd = stoneStart + STONE_W
       if (localX >= stoneStart && localX < stoneEnd) {
         const sixthRow = Math.max(0, Math.min(5, Math.floor((localY - rowY) / CELL_H)))
-        return (rowIndex * STONES_PER_ROW + col) * 6 + sixthRow
+        return (rowIndex * stonesPerRow + col) * 6 + sixthRow
       }
       if (localX >= stoneEnd && localX < stoneStart + STONE_W + STONE_GAP) {
-        return (rowIndex * STONES_PER_ROW + col + 1) * 6
+        return (rowIndex * stonesPerRow + col + 1) * 6
       }
     }
-    return Math.min(totalSixths, (rowIndex * STONES_PER_ROW + stonesInRow) * 6)
+    return Math.min(totalSixths, (rowIndex * stonesPerRow + stonesInRow) * 6)
   }
   return totalSixths
 }
@@ -900,6 +902,14 @@ export class PixiBoardAdapter {
     this.minVisibleLabelPx = Math.max(4, Math.min(12, Math.round(value)))
     textFitCache.clear()
     if (this.currentScene) this.rebuildAllNodes(this.currentScene)
+  }
+
+  setStonesPerRow(value: number): void {
+    const v = Math.max(10, Math.min(50, Math.round(value)))
+    if (stonesPerRow === v) return
+    stonesPerRow = v
+    textFitCache.clear()
+    // Worker will send new scene with updated node dimensions; applyInit will rebuild
   }
 
   /** Hit-test at client coords; returns segment context if over a segment block. */
