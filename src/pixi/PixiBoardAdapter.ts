@@ -408,8 +408,9 @@ const drawSegmentBlock = (
       style: { fill: '#f0f8ff', fontSize: fit.fontSize, fontFamily: FONT_SEMIBOLD, align: 'center' },
     })
     txt.scale.set(visualScale)
+    txt.anchor.set(0.5, 0.5)
 
-    txt.position.set(centerX - txt.width / 2, centerY - txt.height / 2)
+    txt.position.set(centerX, centerY)
 
     const clip = new Graphics()
     clip.rect(centerX - availableWorldWidth / 2, centerY - availableWorldHeight / 2, availableWorldWidth, availableWorldHeight)
