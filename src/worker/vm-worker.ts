@@ -42,6 +42,46 @@ const buildSegmentIdToNodeId = (state: CanonicalState): Record<string, string> =
   return sourceNodeIds
 }
 
+const collectActorSubtreeIds = (state: CanonicalState, rootActorId: string): string[] => {
+  const byOwner = new Map<string, string[]>()
+  Object.values(state.actors).forEach((actor) => {
+    if (!actor.ownerActorId) return
+    const owned = byOwner.get(actor.ownerActorId) ?? []
+    owned.push(actor.id)
+    byOwner.set(actor.ownerActorId, owned)
+  })
+  const out: string[] = []
+  const stack: string[] = [rootActorId]
+  while (stack.length > 0) {
+    const actorId = stack.pop()
+    if (!actorId || out.includes(actorId)) continue
+    out.push(actorId)
+    const children = byOwner.get(actorId) ?? []
+    for (let i = children.length - 1; i >= 0; i -= 1) stack.push(children[i])
+  }
+  return out
+}
+
+const collectSceneSubtreeNodeIds = (scene: SceneVM, rootNodeId: string): string[] => {
+  const byParent = new Map<string, string[]>()
+  Object.values(scene.nodes).forEach((node) => {
+    if (!node.parentNodeId) return
+    const children = byParent.get(node.parentNodeId) ?? []
+    children.push(node.id)
+    byParent.set(node.parentNodeId, children)
+  })
+  const out: string[] = []
+  const stack: string[] = [rootNodeId]
+  while (stack.length > 0) {
+    const nodeId = stack.pop()
+    if (!nodeId || out.includes(nodeId)) continue
+    out.push(nodeId)
+    const children = byParent.get(nodeId) ?? []
+    for (let i = children.length - 1; i >= 0; i -= 1) stack.push(children[i])
+  }
+  return out
+}
+
 const droppedGroupIdForActor = (actorId: string): string => `${actorId}:ground`
 
 const STONE_W = 36
@@ -365,10 +405,7 @@ const applyIntent = (intent: WorkerIntent): void => {
       return
     }
     const scene = buildSceneVM(worldState, localState)
-    const nodeIdsToMove: string[] = [intent.nodeId]
-    for (const n of Object.values(scene.nodes)) {
-      if (n.parentNodeId === intent.nodeId) nodeIdsToMove.push(n.id)
-    }
+    const nodeIdsToMove = collectSceneSubtreeNodeIds(scene, intent.nodeId)
     const baseOrders: Record<string, readonly string[]> = {}
     for (const [gid, g] of Object.entries(scene.groups ?? {})) {
       baseOrders[gid] = [...g.nodeIds]
@@ -389,7 +426,12 @@ const applyIntent = (intent: WorkerIntent): void => {
           ...worldState,
           actors: {
             ...worldState.actors,
-            [nid]: { ...actor, movementGroupId: intent.groupId },
+            [nid]: {
+              ...actor,
+              movementGroupId: intent.groupId,
+              // Moving a child as the primary dragged node detaches it from its previous parent.
+              ownerActorId: nid === intent.nodeId ? undefined : actor.ownerActorId,
+            },
           },
         }
       }
@@ -419,37 +461,45 @@ const applyIntent = (intent: WorkerIntent): void => {
       recompute()
       return
     }
-    worldState = {
-      ...worldState,
-      actors: {
-        ...worldState.actors,
-        [intent.nodeId]: {
-          ...childActor,
-          ownerActorId: intent.parentNodeId,
-          movementGroupId: parentActor.movementGroupId,
-        },
-      },
-    }
+    const subtreeActorIds = collectActorSubtreeIds(worldState, intent.nodeId)
+    const nextActors = { ...worldState.actors }
+    subtreeActorIds.forEach((actorId) => {
+      const actor = nextActors[actorId]
+      if (!actor) return
+      nextActors[actorId] = {
+        ...actor,
+        ownerActorId: actorId === intent.nodeId ? intent.parentNodeId : actor.ownerActorId,
+        movementGroupId: parentActor.movementGroupId,
+      }
+    })
+    worldState = { ...worldState, actors: nextActors }
     const scene = buildSceneVM(worldState, localState)
+    const subtreeNodeIds = collectSceneSubtreeNodeIds(scene, intent.nodeId)
     const baseOrders: Record<string, readonly string[]> = {}
     for (const [gid, g] of Object.entries(scene.groups ?? {})) {
       baseOrders[gid] = [...g.nodeIds]
     }
     const nextOrders: Record<string, readonly string[]> = { ...baseOrders }
     for (const [gid, order] of Object.entries(nextOrders)) {
-      nextOrders[gid] = order.filter((id) => id !== intent.nodeId)
+      nextOrders[gid] = order.filter((id) => !subtreeNodeIds.includes(id))
     }
     const targetGroupId = parentActor.movementGroupId
     const target = [...(nextOrders[targetGroupId] ?? [])]
     const parentIndex = target.indexOf(intent.parentNodeId)
     const insertIndex = parentIndex >= 0 ? parentIndex + 1 : target.length
-    target.splice(insertIndex, 0, intent.nodeId)
+    target.splice(insertIndex, 0, ...subtreeNodeIds)
     nextOrders[targetGroupId] = target
+    const nextOverrides = { ...localState.nodeGroupOverrides }
+    const nextNodePositions = { ...localState.nodePositions }
+    subtreeNodeIds.forEach((nodeId) => {
+      nextOverrides[nodeId] = parentActor.movementGroupId
+      delete nextNodePositions[nodeId]
+    })
     localState = {
       ...localState,
-      nodeGroupOverrides: { ...localState.nodeGroupOverrides, [intent.nodeId]: parentActor.movementGroupId },
+      nodeGroupOverrides: nextOverrides,
       groupNodeOrders: nextOrders,
-      nodePositions: Object.fromEntries(Object.entries(localState.nodePositions).filter(([id]) => id !== intent.nodeId)),
+      nodePositions: nextNodePositions,
     }
     recompute()
     return
@@ -465,6 +515,7 @@ const applyIntent = (intent: WorkerIntent): void => {
       recompute()
       return
     }
+    const subtreeNodeIds = collectActorSubtreeIds(worldState, intent.nodeId)
     worldState = {
       ...worldState,
       actors: {
@@ -472,10 +523,17 @@ const applyIntent = (intent: WorkerIntent): void => {
         [intent.nodeId]: { ...actor, ownerActorId: undefined },
       },
     }
+    const nextNodeGroupOverrides = { ...localState.nodeGroupOverrides }
+    const nextNodePositions = { ...localState.nodePositions }
+    subtreeNodeIds.forEach((nodeId) => {
+      nextNodeGroupOverrides[nodeId] = null
+      delete nextNodePositions[nodeId]
+    })
+    nextNodePositions[intent.nodeId] = { x: intent.x, y: intent.y }
     localState = {
       ...localState,
-      nodeGroupOverrides: { ...localState.nodeGroupOverrides, [intent.nodeId]: null },
-      nodePositions: { ...localState.nodePositions, [intent.nodeId]: { x: intent.x, y: intent.y } },
+      nodeGroupOverrides: nextNodeGroupOverrides,
+      nodePositions: nextNodePositions,
     }
     recompute()
     return

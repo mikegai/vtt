@@ -60,6 +60,60 @@ const ROOT_NODE_ROW_GAP = 16
 const ROOT_NODE_MAX_W = 1800
 const FREE_SEGMENT_STACK_GAP = 8
 
+const subtreeSizeForUngrouped = (
+  nodes: Record<string, SceneNodeVM>,
+  childrenByParent: Map<string, string[]>,
+  nodeId: string,
+  memo: Map<string, { width: number; height: number }>,
+): { width: number; height: number } => {
+  const cached = memo.get(nodeId)
+  if (cached) return cached
+  const node = nodes[nodeId]
+  if (!node) return { width: 0, height: 0 }
+  const children = childrenByParent.get(nodeId) ?? []
+  if (children.length === 0) {
+    const leaf = { width: node.width, height: node.height }
+    memo.set(nodeId, leaf)
+    return leaf
+  }
+  let childMaxWidth = 0
+  let childStackHeight = 0
+  children.forEach((childId, index) => {
+    const childSize = subtreeSizeForUngrouped(nodes, childrenByParent, childId, memo)
+    childMaxWidth = Math.max(childMaxWidth, childSize.width)
+    childStackHeight += childSize.height
+    if (index < children.length - 1) childStackHeight += NODE_ROW_GAP
+  })
+  const size = {
+    width: Math.max(node.width, NODE_INDENT + childMaxWidth),
+    height: node.height + NODE_ROW_GAP + childStackHeight,
+  }
+  memo.set(nodeId, size)
+  return size
+}
+
+const layoutUngroupedSubtree = (
+  nodes: Record<string, SceneNodeVM>,
+  childrenByParent: Map<string, string[]>,
+  nodeId: string,
+  x: number,
+  y: number,
+  memo: Map<string, { width: number; height: number }>,
+): void => {
+  const node = nodes[nodeId]
+  if (!node) return
+  const mutableNode = node as SceneNodeVM & { x: number; y: number }
+  mutableNode.x = x
+  mutableNode.y = y
+  let childY = y + node.height + NODE_ROW_GAP
+  const children = childrenByParent.get(nodeId) ?? []
+  children.forEach((childId) => {
+    layoutUngroupedSubtree(nodes, childrenByParent, childId, x + NODE_INDENT, childY, memo)
+    const childSize = memo.get(childId)
+    childY += (childSize?.height ?? 0) + NODE_ROW_GAP
+  })
+}
+
 const flattenRows = (rows: readonly ActorRowVM[]): ActorRowVM[] => {
   const result: ActorRowVM[] = []
   const visit = (row: ActorRowVM): void => {
@@ -132,7 +186,7 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
     const groupTitle = groupId
       ? (localState.customGroups[groupId]?.title ?? worldState.movementGroups[groupId]?.name ?? groupId)
       : null
-    const parentNodeId = groupId == null ? undefined : row.parentActorId
+    const parentNodeId = row.parentActorId
 
     nodes[row.id] = {
       id: row.id,
@@ -192,19 +246,38 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
     meta.nodeIds = orderedNodeIds
 
     const pos = localState.groupPositions[groupId] ?? { x: GROUP_X, y: flowY }
+    const nodeIdsInGroup = new Set(orderedNodeIds)
+    const childrenByParent = new Map<string, string[]>()
+    orderedNodeIds.forEach((nodeId) => {
+      const node = nodes[nodeId]
+      const parentId = node?.parentNodeId
+      if (!parentId || !nodeIdsInGroup.has(parentId)) return
+      const siblings = childrenByParent.get(parentId) ?? []
+      siblings.push(nodeId)
+      childrenByParent.set(parentId, siblings)
+    })
+    const orderedRoots = orderedNodeIds.filter((nodeId) => {
+      const parentId = nodes[nodeId]?.parentNodeId
+      return !parentId || !nodeIdsInGroup.has(parentId)
+    })
+
     let cursorY = pos.y + GROUP_PADDING_TOP
     let maxNodeW = 0
-    for (const nodeId of orderedNodeIds) {
+    const layoutGroupSubtree = (nodeId: string, depth: number): void => {
       const node = nodes[nodeId]
-      if (!node) continue
+      if (!node) return
       const mutableNode = node as SceneNodeVM & { x: number; y: number }
-      const indentPx = node.parentNodeId ? NODE_INDENT : 0
+      const indentPx = depth * NODE_INDENT
       mutableNode.x = pos.x + GROUP_PADDING_X + indentPx
       mutableNode.y = cursorY
       cursorY += node.height + NODE_ROW_GAP
       maxNodeW = Math.max(maxNodeW, node.width + indentPx)
+      const children = childrenByParent.get(nodeId) ?? []
+      children.forEach((childId) => layoutGroupSubtree(childId, depth + 1))
     }
-    const hasNodes = orderedNodeIds.length > 0
+    orderedRoots.forEach((rootId) => layoutGroupSubtree(rootId, 0))
+
+    const hasNodes = orderedRoots.length > 0
     const groupHeight = hasNodes
       ? cursorY - NODE_ROW_GAP - pos.y + GROUP_PADDING_BOTTOM
       : EMPTY_GROUP_MIN_HEIGHT
@@ -223,27 +296,45 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
   }
 
   // Ungrouped nodes are freely positioned on the world canvas.
+  const ungroupedNodeIds = Object.values(nodes)
+    .filter((node) => node.groupId == null)
+    .map((node) => node.id)
+  const ungroupedNodeSet = new Set(ungroupedNodeIds)
+  const childrenByParent = new Map<string, string[]>()
+  ungroupedNodeIds.forEach((nodeId) => {
+    const node = nodes[nodeId]
+    const parentId = node?.parentNodeId
+    if (!parentId || !ungroupedNodeSet.has(parentId)) return
+    const existing = childrenByParent.get(parentId) ?? []
+    existing.push(nodeId)
+    childrenByParent.set(parentId, existing)
+  })
+  const subtreeSizeMemo = new Map<string, { width: number; height: number }>()
+  const ungroupedRoots = ungroupedNodeIds.filter((nodeId) => {
+    const parentId = nodes[nodeId]?.parentNodeId
+    return !parentId || !ungroupedNodeSet.has(parentId)
+  })
+
   let rootFlowX = ROOT_NODE_X
   let rootFlowY = ROOT_NODE_Y
   let tallestInRow = 0
-  for (const node of Object.values(nodes)) {
-    if (node.groupId != null) continue
-    const preferred = localState.nodePositions[node.id]
-    const mutableNode = node as SceneNodeVM & { x: number; y: number }
+  for (const nodeId of ungroupedRoots) {
+    const node = nodes[nodeId]
+    if (!node) continue
+    const preferred = localState.nodePositions[nodeId]
+    const subtreeSize = subtreeSizeForUngrouped(nodes, childrenByParent, nodeId, subtreeSizeMemo)
     if (preferred) {
-      mutableNode.x = preferred.x
-      mutableNode.y = preferred.y
+      layoutUngroupedSubtree(nodes, childrenByParent, nodeId, preferred.x, preferred.y, subtreeSizeMemo)
       continue
     }
-    if (rootFlowX + node.width > ROOT_NODE_MAX_W) {
+    if (rootFlowX + subtreeSize.width > ROOT_NODE_MAX_W) {
       rootFlowX = ROOT_NODE_X
       rootFlowY += tallestInRow + ROOT_NODE_ROW_GAP
       tallestInRow = 0
     }
-    mutableNode.x = rootFlowX
-    mutableNode.y = rootFlowY
-    rootFlowX += node.width + ROOT_NODE_COL_GAP
-    tallestInRow = Math.max(tallestInRow, node.height)
+    layoutUngroupedSubtree(nodes, childrenByParent, nodeId, rootFlowX, rootFlowY, subtreeSizeMemo)
+    rootFlowX += subtreeSize.width + ROOT_NODE_COL_GAP
+    tallestInRow = Math.max(tallestInRow, subtreeSize.height)
   }
 
   return {
