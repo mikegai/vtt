@@ -5,7 +5,6 @@ import {
   capacitySixthsForActor,
   encumbranceCostSixths,
   formatSixthsAsStone,
-  ironRationEffectiveSixths,
   speedProfileForSixths,
 } from '../domain/rules'
 import { BASE_CAPACITY_SIXTHS, SIXTHS_PER_STONE, type Actor, type CanonicalState, type InventoryEntry, type ItemDefinition, type WieldGrip } from '../domain/types'
@@ -68,6 +67,66 @@ const deriveWieldFromActor = (actor: Actor, entryId: string): { wield?: WieldGri
   return {}
 }
 
+const segmentIdToBaseEntryId = (segmentId: string): string => {
+  const colon = segmentId.indexOf(':')
+  return colon >= 0 ? segmentId.slice(0, colon) : segmentId
+}
+
+const normalizeEntriesForPacking = (
+  entries: readonly InventoryEntry[],
+  definitions: CanonicalState['itemDefinitions'],
+): PackInput[] => {
+  const result: PackInput[] = []
+  const rationEntries = entries.filter((e) => e.itemDefId === 'ironRationsDay')
+  const nonRationEntries = entries.filter((e) => e.itemDefId !== 'ironRationsDay')
+
+  for (const entry of nonRationEntries) {
+    const definition = definitions[entry.itemDefId]
+    if (!definition) continue
+    result.push({ entry, definition })
+  }
+
+  const rationDef = definitions.ironRationsDay
+  if (!rationDef || rationEntries.length === 0) {
+    return result
+  }
+
+  const fullGroups = Math.floor(rationEntries.length / 7)
+  for (let group = 0; group < fullGroups; group += 1) {
+    const start = group * 7
+    for (let i = 0; i < 5; i += 1) {
+      const entry = rationEntries[start + i]
+      if (!entry) continue
+      result.push({ entry, definition: rationDef })
+    }
+
+    const pairAnchor = rationEntries[start + 5]
+    if (pairAnchor) {
+      result.push({
+        entry: {
+          ...pairAnchor,
+          id: `${pairAnchor.id}:paired`,
+          quantity: 2,
+        },
+        definition: {
+          ...rationDef,
+          canonicalName: '2 iron rations',
+          sixthsPerUnit: 0.5,
+        },
+      })
+    }
+  }
+
+  const remainderStart = fullGroups * 7
+  for (let i = remainderStart; i < rationEntries.length; i += 1) {
+    const entry = rationEntries[i]
+    if (!entry) continue
+    result.push({ entry, definition: rationDef })
+  }
+
+  return result
+}
+
 const toSegmentVM = (
   actor: Actor,
   packedSegment: {
@@ -87,7 +146,7 @@ const toSegmentVM = (
   const canonicalName = definition.canonicalName
   const zoneLabel = packedSegment.zone[0].toUpperCase() + packedSegment.zone.slice(1)
   const stoneText = formatSixthsAsStone(packedSegment.sizeSixths)
-  const baseEntryId = packedSegment.inventoryEntryId.replace(':overflow', '')
+  const baseEntryId = segmentIdToBaseEntryId(packedSegment.inventoryEntryId)
   const derivedWield = deriveWieldFromActor(actor, baseEntryId)
   const baseState = { ...(packedSegment.state ?? {}), ...derivedWield }
 
@@ -114,68 +173,6 @@ const toSegmentVM = (
   }
 }
 
-const IRON_RATIONS_SYNTHETIC_ID = '__ironRations__'
-
-/**
- * For display, every 7 rations compress into 6 slots: [1,1,1,1,1,2,...].
- * Returns one display record per effective slot, each bound to a real entry ID.
- */
-const expandRationSegment = (
-  actor: Actor,
-  rationEntries: readonly InventoryEntry[],
-  startSixth: number,
-  isOverflow: boolean,
-  canonicalName: string,
-): SegmentVM[] => {
-  const count = rationEntries.length
-  const effectiveSixths = ironRationEffectiveSixths(count)
-  const zoneLabel = rationEntries[0].zone[0].toUpperCase() + rationEntries[0].zone.slice(1)
-  const result: SegmentVM[] = []
-
-  // Build [1,1,1,1,1,2, 1,1,1,1,1,2, ...remainder 1s] display pattern
-  const displaySlots: number[] = []
-  const pairs = Math.floor(count / 7)
-  const remainder = count % 7
-  for (let i = 0; i < pairs; i += 1) {
-    displaySlots.push(1, 1, 1, 1, 1, 2)
-  }
-  for (let i = 0; i < remainder; i += 1) {
-    displaySlots.push(1)
-  }
-
-  // Each display slot consumes one effective sixth and references real entries.
-  // The "2 rations" slot references the entry that gets consumed plus the next one.
-  let entryIdx = 0
-  for (let slotIdx = 0; slotIdx < effectiveSixths; slotIdx += 1) {
-    const displayQty = displaySlots[slotIdx]
-    const entry = rationEntries[entryIdx]
-    const slotStart = startSixth + slotIdx
-    const title = displayQty === 2 ? '2 iron rations' : canonicalName
-    result.push({
-      id: `${entry.id}:display:${slotIdx}`,
-      actorId: actor.id,
-      itemDefId: entry.itemDefId,
-      category: 'adventuring-equipment',
-      quantity: displayQty,
-      zone: entry.zone,
-      state: entry.state ?? {},
-      startSixth: slotStart,
-      endSixth: slotStart + 1,
-      sizeSixths: 1,
-      isOverflow,
-      labels: buildLabelLadder(title),
-      tooltip: {
-        title,
-        quantityText: `${displayQty}`,
-        encumbranceText: formatSixthsAsStone(1),
-        zoneText: zoneLabel,
-      },
-    })
-    entryIdx += displayQty
-  }
-  return result
-}
-
 const buildRow = (
   state: CanonicalState,
   actor: Actor,
@@ -185,61 +182,24 @@ const buildRow = (
   isDroppedRow = false,
 ): ActorRowVM => {
   const capacitySixths = capacitySixthsForActor(actor)
+  const normalizedInputs = normalizeEntriesForPacking(entries, state.itemDefinitions)
 
-  const rationEntries = entries.filter((e) => e.itemDefId === 'ironRationsDay')
-  const nonRationEntries = entries.filter((e) => e.itemDefId !== 'ironRationsDay')
-
-  const nonRationInputs: PackInput[] = nonRationEntries
-    .map((entry) => {
-      const definition = state.itemDefinitions[entry.itemDefId]
-      if (!definition) return null
-      return { entry, definition }
-    })
-    .filter((value): value is PackInput => value !== null)
-
-  const rationCount = rationEntries.length
-  const rationDef = state.itemDefinitions['ironRationsDay']
-  const rationPackInputs: PackInput[] = rationCount > 0 && rationDef
-    ? [{
-        entry: {
-          id: IRON_RATIONS_SYNTHETIC_ID,
-          actorId: actor.id,
-          itemDefId: 'ironRationsDay',
-          quantity: rationCount,
-          zone: rationEntries[0].zone,
-          state: rationEntries[0].state,
-        },
-        definition: {
-          ...rationDef,
-          sixthsPerUnit: ironRationEffectiveSixths(rationCount) / rationCount,
-        },
-      }]
-    : []
-
-  const packInputs = [...nonRationInputs, ...rationPackInputs]
   const entryMap = new Map(entries.map((entry) => [entry.id, entry]))
+  const normalizedDefById = new Map(normalizedInputs.map((input) => [input.entry.id, input.definition]))
 
-  const packed = packDeterministic(packInputs, capacitySixths)
+  const packed = packDeterministic(normalizedInputs, capacitySixths)
   const segments = packed.flatMap((segment) => {
-    const baseId = segment.inventoryEntryId.replace(':overflow', '')
-    if (baseId === IRON_RATIONS_SYNTHETIC_ID && rationDef) {
-      return expandRationSegment(actor, rationEntries, segment.startSixth, segment.isOverflow, rationDef.canonicalName)
-    }
-    const definition = state.itemDefinitions[segment.itemDefId]
+    const normalizedId = segment.inventoryEntryId.replace(':overflow', '')
+    const baseId = segmentIdToBaseEntryId(segment.inventoryEntryId)
+    const definition = normalizedDefById.get(normalizedId)
     const baseEntry = entryMap.get(baseId)
     if (!baseEntry || !definition) return []
     const vm = toSegmentVM(actor, segment, definition)
     return Array.isArray(vm) ? vm : [vm]
   })
-
-  const rationEncumbranceSixths = rationCount > 0 ? ironRationEffectiveSixths(rationCount) : 0
-  const nonRationEncumbranceSixths = nonRationEntries
-    .map((entry) => {
-      const definition = state.itemDefinitions[entry.itemDefId]
-      return definition ? encumbranceCostSixths(definition, entry.quantity) : 0
-    })
+  const encumbranceSixths = normalizedInputs
+    .map((input) => encumbranceCostSixths(input.definition, input.entry.quantity))
     .reduce((sum, value) => sum + value, 0)
-  const encumbranceSixths = rationEncumbranceSixths + nonRationEncumbranceSixths
 
   const speed = speedProfileForSixths(encumbranceSixths, actor.stats.hasLoadBearing)
   const overflowSixths = segments.filter((segment) => segment.isOverflow).reduce((sum, segment) => sum + segment.sizeSixths, 0)

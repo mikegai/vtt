@@ -11,6 +11,7 @@ const defs: Record<string, ItemDefinition> = {
   rope: { id: 'rope', canonicalName: "50' rope", kind: 'standard', sixthsPerUnit: 6 },
   torch: { id: 'torch', canonicalName: 'Torch', kind: 'standard', sixthsPerUnit: 1 },
   fiveSixths: { id: 'fiveSixths', canonicalName: '5/6 item', kind: 'standard', sixthsPerUnit: 5 },
+  ironRationsDay: { id: 'ironRationsDay', canonicalName: "1 day's iron rations", kind: 'standard', sixthsPerUnit: 1 },
 }
 
 const mkEntry = (id: string, itemDefId: string, zone: InventoryEntry['zone'], quantity = 1): InventoryEntry => ({
@@ -73,6 +74,35 @@ describe('deterministic packing', () => {
     expect(ropeSegment).toBeDefined()
     expect(ropeSegment!.startSixth % 6).toBe(0)
     expect(ropeSegment!.sizeSixths).toBe(6)
+  })
+
+  it('packs 1-stone items before smaller items; rations sort with other 1/6-stone items', () => {
+    const items = [
+      asInput(mkEntry('d', 'ironRationsDay', 'stowed', 1)),
+      asInput(mkEntry('c', 'torch', 'stowed', 1)),
+      asInput(mkEntry('b', 'shield', 'stowed', 1)),
+    ]
+    const packed = packDeterministic(items, stoneToSixths(20))
+    const placed = packed.filter((s) => !s.isOverflow).map((s) => s.itemDefId)
+    expect(placed).toEqual(['shield', 'torch', 'ironRationsDay'])
+  })
+
+  it('normalized ration pair (2 days in 1 sixth) still sorts as a smaller item', () => {
+    const rationPairEntry = { ...mkEntry('d', 'ironRationsDay', 'stowed', 2) }
+    const rationPairDef: ItemDefinition = {
+      ...defs.ironRationsDay,
+      canonicalName: '2 iron rations',
+      sixthsPerUnit: 0.5,
+    }
+    const items: PackInput[] = [
+      asInput(mkEntry('c', 'torch', 'stowed', 1)),
+      asInput(mkEntry('b', 'shield', 'stowed', 1)),
+      { entry: rationPairEntry, definition: rationPairDef },
+    ]
+
+    const packed = packDeterministic(items, stoneToSixths(20))
+    const placed = packed.filter((s) => !s.isOverflow).map((s) => s.itemDefId)
+    expect(placed).toEqual(['shield', 'torch', 'ironRationsDay'])
   })
 
   it('packs full-stone items first: armor, shields, poles, rope; 1/6-stone items (sword, torch) last', () => {
