@@ -111,7 +111,13 @@ export type WorkerIntent =
   | { readonly type: 'MOVE_NODE_TO_ROOT'; readonly nodeId: string; readonly x: number; readonly y: number }
   | { readonly type: 'DRAG_SEGMENT_START'; readonly segmentIds: readonly string[] }
   | { readonly type: 'DRAG_SEGMENT_UPDATE'; readonly targetNodeId: string | null }
-  | { readonly type: 'DRAG_SEGMENT_END'; readonly targetNodeId: string | null; readonly x?: number; readonly y?: number }
+  | {
+      readonly type: 'DRAG_SEGMENT_END'
+      readonly targetNodeId: string | null
+      readonly x?: number
+      readonly y?: number
+      readonly freeSegmentPositions?: Readonly<Record<string, { x: number; y: number }>>
+    }
   | {
       readonly type: 'SPAWN_ITEM_INSTANCE'
       readonly itemDefId: string

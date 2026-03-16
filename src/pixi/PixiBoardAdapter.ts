@@ -48,7 +48,12 @@ type AdapterHandlers = {
   onZoomChange(zoom: number): void
   onDragSegmentStart(segmentIds: string[]): void
   onDragSegmentUpdate(targetNodeId: string | null): void
-  onDragSegmentEnd(targetNodeId: string | null, x?: number, y?: number): void
+  onDragSegmentEnd(
+    targetNodeId: string | null,
+    x?: number,
+    y?: number,
+    freeSegmentPositions?: Readonly<Record<string, { x: number; y: number }>>,
+  ): void
   onContextMenu(segmentId: string, nodeId: string, clientX: number, clientY: number): void
   onCanvasContextMenu?(worldX: number, worldY: number, clientX: number, clientY: number): void
   onSegmentClick?(segmentId: string, nodeId: string, addToSelection: boolean): void
@@ -101,7 +106,17 @@ type SegmentDragState = {
   readonly proxyAnchorOffset: { x: number; y: number }
   /** Pointer offset from grabbed segment's visible top-left in world units. */
   readonly dropAnchorOffset: { x: number; y: number }
+  /** World position of each segment's top-left at drag start (for absolute drop). */
+  readonly initialSegmentPositions: Readonly<Record<string, { x: number; y: number }>>
+  /** Pointer world position at drag start (for computing delta on absolute drop). */
+  readonly pointerWorldAtStart: { x: number; y: number }
+  /** Id of the segment that was grabbed (primary for anchor). */
+  readonly grabbedSegmentId: string
   snap: { nodeId: string; startSixth: number } | null
+  /** 'compact' when over a node, 'absolute' when outside (drawing-tool style). */
+  proxyMode: 'compact' | 'absolute'
+  /** For absolute mode: pointerAtStart - grabbedPos (constant). */
+  readonly absoluteProxyAnchorOffset: { x: number; y: number }
 }
 
 type ZoomTier = 'far' | 'medium' | 'close'
@@ -1554,6 +1569,49 @@ export class PixiBoardAdapter {
     return { proxy, pivot, segmentBounds }
   }
 
+  /** Build proxy with segments at their absolute relative positions (for outside-group drop). */
+  private buildDragProxyAbsolute(
+    segments: readonly SceneSegmentVM[],
+    initialPositions: Readonly<Record<string, { x: number; y: number }>>,
+    grabbedSegmentId: string,
+  ): Container {
+    const proxy = new Container()
+    const grabbed = initialPositions[grabbedSegmentId]
+    if (!grabbed) return proxy
+    for (const segment of segments) {
+      const pos = initialPositions[segment.id]
+      if (!pos) continue
+      const relX = pos.x - grabbed.x
+      const relY = pos.y - grabbed.y
+      const color = segment.isOverflow ? 0xa83f62 : isMultiStone(segment) ? 0x61b5ff : 0x7bd7cf
+      const alpha = 0.75
+      if (isMultiStone(segment)) {
+        const w = (segment.sizeSixths / 6) * (STONE_W + STONE_GAP) - STONE_GAP
+        const rect = new Graphics()
+        rect.roundRect(relX, relY, w, STONE_H, 6)
+        rect.fill({ color, alpha })
+        rect.stroke({ width: 1.5, color: 0xd3ebff, alpha: 0.9 })
+        proxy.addChild(rect)
+      } else {
+        drawGhostCells(proxy, 0, relX, relY, segment.sizeSixths, color, alpha)
+        const groups = groupSixthsByStone(0, segment.sizeSixths)
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+        groups.forEach((g) => {
+          const gy = relY + stoneToY(g.stone) + g.startRow * CELL_H
+          minX = Math.min(minX, relX + stoneToX(g.stone))
+          minY = Math.min(minY, gy)
+          maxX = Math.max(maxX, relX + stoneToX(g.stone) + STONE_W)
+          maxY = Math.max(maxY, gy + g.count * CELL_H)
+        })
+        const stroke = new Graphics()
+        stroke.roundRect(minX, minY, maxX - minX, maxY - minY, 4)
+        stroke.stroke({ width: 1.5, color: 0xd3ebff, alpha: 0.85 })
+        proxy.addChild(stroke)
+      }
+    }
+    return proxy
+  }
+
   private getDropTargetCenters(): { x: number; y: number }[] {
     const centers: { x: number; y: number }[] = []
     if (this.activeDrag.type !== 'segment') return centers
@@ -1643,9 +1701,24 @@ export class PixiBoardAdapter {
       .map((id) => segmentById.get(id))
       .filter((seg): seg is SceneSegmentVM => seg != null)
     if (segments.length === 0) return
-    const { proxy, pivot, segmentBounds } = this.buildDragProxy(segments)
     const pointerWorld = this.screenToWorld(clientX, clientY)
+    const initialSegmentPositions: Record<string, { x: number; y: number }> = {}
+    for (const seg of segments) {
+      const b = this.getSegmentWorldBounds(seg.id, sourceNodeIds[seg.id])
+      if (b) initialSegmentPositions[seg.id] = { x: b.x, y: b.y }
+    }
+    const { proxy: compactProxy, pivot, segmentBounds } = this.buildDragProxy(segments)
+    const absoluteProxy = this.buildDragProxyAbsolute(segments, initialSegmentPositions, segment.id)
+    absoluteProxy.visible = false
+    const proxy = new Container()
+    proxy.addChild(compactProxy)
+    proxy.addChild(absoluteProxy)
     const grabbedWorldBounds = this.getSegmentWorldBounds(segment.id, sourceNodeId)
+    const grabbedPos = initialSegmentPositions[segment.id] ?? { x: 0, y: 0 }
+    const absoluteProxyAnchorOffset = {
+      x: pointerWorld.x - grabbedPos.x,
+      y: pointerWorld.y - grabbedPos.y,
+    }
     const pointerInSegment = grabbedWorldBounds
       ? {
           x: Math.max(0, Math.min(grabbedWorldBounds.w, pointerWorld.x - grabbedWorldBounds.x)),
@@ -1672,7 +1745,12 @@ export class PixiBoardAdapter {
         lineLayer,
         proxyAnchorOffset,
         dropAnchorOffset: pointerInSegment,
+        initialSegmentPositions,
+        pointerWorldAtStart: pointerWorld,
+        grabbedSegmentId: segment.id,
         snap: null,
+        proxyMode: 'compact',
+        absoluteProxyAnchorOffset,
       },
     }
     this.handlers.onDragSegmentStart(segmentIds)
@@ -1689,15 +1767,31 @@ export class PixiBoardAdapter {
     const snap = this.findSnapTarget(world.x, world.y, drag.segments[0])
     drag.snap = snap
 
-    const proxyCenterX = world.x - drag.proxyAnchorOffset.x
-    const proxyCenterY = world.y - drag.proxyAnchorOffset.y
-    drag.proxy.position.set(proxyCenterX, proxyCenterY)
+    const useAbsolute = !targetNodeId
+    if (useAbsolute && drag.proxyMode !== 'absolute') {
+      drag.proxyMode = 'absolute'
+      const compact = drag.proxy.getChildAt(0) as Container
+      const absolute = drag.proxy.getChildAt(1) as Container
+      compact.visible = false
+      absolute.visible = true
+    } else if (!useAbsolute && drag.proxyMode !== 'compact') {
+      drag.proxyMode = 'compact'
+      const compact = drag.proxy.getChildAt(0) as Container
+      const absolute = drag.proxy.getChildAt(1) as Container
+      compact.visible = true
+      absolute.visible = false
+    }
+
+    const anchorOffset = useAbsolute ? drag.absoluteProxyAnchorOffset : drag.proxyAnchorOffset
+    const proxyX = world.x - anchorOffset.x
+    const proxyY = world.y - anchorOffset.y
+    drag.proxy.position.set(proxyX, proxyY)
 
     drag.lineLayer.removeChildren()
     const targetCenters = this.getDropTargetCenters()
     for (const target of targetCenters) {
       const lineG = new Graphics()
-      drawArrowLine(lineG, proxyCenterX, proxyCenterY, target.x, target.y)
+      drawArrowLine(lineG, proxyX, proxyY, target.x, target.y)
       drag.lineLayer.addChild(lineG)
     }
   }
@@ -1712,9 +1806,28 @@ export class PixiBoardAdapter {
     const effectiveTarget = targetNodeId && anyDifferentSource ? targetNodeId : null
     this.skipSegmentAnimationOnce.clear()
     drag.segmentIds.forEach((segmentId) => this.skipSegmentAnimationOnce.add(segmentId))
-    const dropX = world ? world.x - drag.dropAnchorOffset.x : undefined
-    const dropY = world ? world.y - drag.dropAnchorOffset.y : undefined
-    this.handlers.onDragSegmentEnd(effectiveTarget, dropX, dropY)
+    let dropX: number | undefined
+    let dropY: number | undefined
+    let freeSegmentPositions: Record<string, { x: number; y: number }> | undefined
+    if (world) {
+      if (effectiveTarget) {
+        dropX = world.x - drag.dropAnchorOffset.x
+        dropY = world.y - drag.dropAnchorOffset.y
+      } else {
+        const deltaX = world.x - drag.pointerWorldAtStart.x
+        const deltaY = world.y - drag.pointerWorldAtStart.y
+        freeSegmentPositions = {}
+        for (const segId of drag.segmentIds) {
+          const pos = drag.initialSegmentPositions[segId]
+          if (pos) {
+            freeSegmentPositions[segId] = { x: pos.x + deltaX, y: pos.y + deltaY }
+          }
+        }
+        dropX = world.x - drag.dropAnchorOffset.x
+        dropY = world.y - drag.dropAnchorOffset.y
+      }
+    }
+    this.handlers.onDragSegmentEnd(effectiveTarget, dropX, dropY, freeSegmentPositions)
     this.worldLayer.removeChild(drag.lineLayer)
     this.worldLayer.removeChild(drag.proxy)
     drag.lineLayer.destroy({ children: true })

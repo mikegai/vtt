@@ -723,13 +723,15 @@ const applyIntent = (intent: WorkerIntent): void => {
         }
 
         const sceneAtDrop = buildSceneVM(worldState, localState)
-        const droppedLayout = computeDroppedFreeSegmentPositions(
-          sceneAtDrop,
-          segmentIds,
-          intent.x,
-          intent.y,
-          localState.stonesPerRow,
-        )
+        const droppedLayout =
+          intent.freeSegmentPositions ??
+          computeDroppedFreeSegmentPositions(
+            sceneAtDrop,
+            segmentIds,
+            intent.x,
+            intent.y,
+            localState.stonesPerRow,
+          )
         const freeSegmentPositions = { ...localState.freeSegmentPositions }
         for (const segmentId of segmentIds) {
           const nextPos = droppedLayout[segmentId] ?? { x: intent.x, y: intent.y }

@@ -365,8 +365,11 @@ const pixiAdapter = new PixiBoardAdapter(canvasHost, {
   onDragSegmentUpdate(targetNodeId) {
     postToWorker({ type: 'INTENT', intent: { type: 'DRAG_SEGMENT_UPDATE', targetNodeId } })
   },
-  onDragSegmentEnd(targetNodeId, x, y) {
-    postToWorker({ type: 'INTENT', intent: { type: 'DRAG_SEGMENT_END', targetNodeId, x, y } })
+  onDragSegmentEnd(targetNodeId, x, y, freeSegmentPositions) {
+    postToWorker({
+      type: 'INTENT',
+      intent: { type: 'DRAG_SEGMENT_END', targetNodeId, x, y, freeSegmentPositions },
+    })
   },
   onMoveLabel(labelId, x, y) {
     postToWorker({ type: 'INTENT', intent: { type: 'MOVE_LABEL', labelId, x, y } })
