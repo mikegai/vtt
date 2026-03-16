@@ -133,7 +133,12 @@ export type WorkerIntent =
       readonly freeSegmentPositions?: Readonly<Record<string, { x: number; y: number }>>
     }
   | { readonly type: 'MOVE_ENTRY_TO'; readonly segmentId: string; readonly sourceNodeId: string; readonly targetNodeId: string }
-  | { readonly type: 'DELETE_ENTRY'; readonly segmentId: string }
+  | {
+      readonly type: 'MOVE_ENTRIES_TO'
+      readonly moves: readonly { readonly segmentId: string; readonly sourceNodeId: string }[]
+      readonly targetNodeId: string
+    }
+  | { readonly type: 'DELETE_ENTRY'; readonly segmentIds: readonly string[] }
   | { readonly type: 'SET_WIELD'; readonly segmentId: string; readonly wield: WieldGrip }
   | { readonly type: 'UNWIELD'; readonly segmentId: string }
   | { readonly type: 'ADD_LABEL'; readonly text: string; readonly x: number; readonly y: number }

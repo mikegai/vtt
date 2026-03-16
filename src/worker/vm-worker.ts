@@ -889,9 +889,12 @@ const applyIntent = (intent: WorkerIntent): void => {
     return
   }
 
-  if (intent.type === 'MOVE_ENTRY_TO') {
+  const applyMoveEntryTo = (
+    segmentId: string,
+    sourceNodeId: string,
+    targetNodeId: string,
+  ): void => {
     if (!worldState) return
-    const { segmentId, sourceNodeId, targetNodeId } = intent
     const source = parseNodeId(sourceNodeId)
     const target = parseNodeId(targetNodeId)
     if (source.actorId !== target.actorId || source.carryGroupId !== target.carryGroupId) {
@@ -938,36 +941,57 @@ const applyIntent = (intent: WorkerIntent): void => {
         Object.entries(localState.freeSegmentPositions).filter(([id]) => segmentIdToEntryId(id) !== segmentIdToEntryId(segmentId)),
       ),
     }
+  }
+
+  if (intent.type === 'MOVE_ENTRY_TO') {
+    if (!worldState) return
+    applyMoveEntryTo(intent.segmentId, intent.sourceNodeId, intent.targetNodeId)
+    recompute()
+    return
+  }
+
+  if (intent.type === 'MOVE_ENTRIES_TO') {
+    if (!worldState) return
+    for (const { segmentId, sourceNodeId } of intent.moves) {
+      applyMoveEntryTo(segmentId, sourceNodeId, intent.targetNodeId)
+    }
     recompute()
     return
   }
 
   if (intent.type === 'DELETE_ENTRY') {
     if (!worldState) return
-    const entryId = segmentIdToEntryId(intent.segmentId)
-    const entry = worldState.inventoryEntries[entryId]
-    if (!entry) {
-      recompute()
-      return
+    const entryIdsToRemove = new Set<string>()
+    for (const segmentId of intent.segmentIds) {
+      const entryId = segmentIdToEntryId(segmentId)
+      if (worldState.inventoryEntries[entryId]) entryIdsToRemove.add(entryId)
     }
-    const { [entryId]: _, ...restEntries } = worldState.inventoryEntries
-    worldState = { ...worldState, inventoryEntries: restEntries }
-    const actor = worldState.actors[entry.actorId]
-    if (actor && (actor.leftWieldingEntryId === entryId || actor.rightWieldingEntryId === entryId)) {
-      const nextActor: Actor = {
-        ...actor,
-        leftWieldingEntryId: actor.leftWieldingEntryId === entryId ? undefined : actor.leftWieldingEntryId,
-        rightWieldingEntryId: actor.rightWieldingEntryId === entryId ? undefined : actor.rightWieldingEntryId,
-      }
-      worldState = {
-        ...worldState,
-        actors: { ...worldState.actors, [actor.id]: nextActor },
+    let nextEntries = worldState.inventoryEntries
+    for (const entryId of entryIdsToRemove) {
+      const { [entryId]: entry, ...rest } = nextEntries
+      nextEntries = rest
+      if (entry) {
+        worldState = { ...worldState, inventoryEntries: nextEntries }
+        const actor: Actor | undefined = worldState.actors[entry.actorId]
+        if (actor && (actor.leftWieldingEntryId === entryId || actor.rightWieldingEntryId === entryId)) {
+          const nextActor: Actor = {
+            ...actor,
+            leftWieldingEntryId: actor.leftWieldingEntryId === entryId ? undefined : actor.leftWieldingEntryId,
+            rightWieldingEntryId: actor.rightWieldingEntryId === entryId ? undefined : actor.rightWieldingEntryId,
+          }
+          worldState = {
+            ...worldState,
+            actors: { ...worldState.actors, [actor.id]: nextActor },
+          }
+        }
       }
     }
+    worldState = { ...worldState, inventoryEntries: nextEntries }
     localState = {
       ...localState,
+      selectedSegmentIds: [],
       freeSegmentPositions: Object.fromEntries(
-        Object.entries(localState.freeSegmentPositions).filter(([id]) => segmentIdToEntryId(id) !== entryId),
+        Object.entries(localState.freeSegmentPositions).filter(([id]) => !entryIdsToRemove.has(segmentIdToEntryId(id))),
       ),
     }
     recompute()

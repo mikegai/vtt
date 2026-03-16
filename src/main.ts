@@ -179,9 +179,17 @@ const closeContextMenu = (): void => {
   }
 }
 
+/** Resolve segmentId -> nodeId from the current scene. */
+const getNodeIdForSegment = (scene: SceneVM, segmentId: string): string | null => {
+  for (const node of Object.values(scene.nodes)) {
+    if (node.segments.some((s) => s.id === segmentId)) return node.id
+  }
+  return scene.freeSegments?.[segmentId]?.nodeId ?? null
+}
+
 const showContextMenu = (
   segmentId: string,
-  nodeId: string,
+  _nodeId: string,
   itemDefId: string,
   clientX: number,
   clientY: number,
@@ -199,14 +207,25 @@ const showContextMenu = (
   }
   if (!segment) return
 
+  // Multi-select: if right-clicked segment is in selection and multiple selected, apply to all
+  const selectedIds = currentScene.selectedSegmentIds ?? []
+  const effectiveSegmentIds =
+    selectedIds.includes(segmentId) && selectedIds.length > 1 ? [...selectedIds] : [segmentId]
+
   const itemDef = sampleState.itemDefinitions[itemDefId]
   const isFreeSegment = !!currentScene.freeSegments?.[segmentId]
   const wieldOptions = !isFreeSegment && itemDef ? getWieldOptions(itemDef) : []
 
   const groupOrder: ActorKind[] = ['pc', 'retainer', 'hireling', 'animal', 'vehicle', 'loot-pile']
 
+  const sourceNodeIds = new Map<string, string>()
+  for (const sid of effectiveSegmentIds) {
+    const nid = getNodeIdForSegment(currentScene, sid)
+    if (nid) sourceNodeIds.set(sid, nid)
+  }
+
   const targetNodes = Object.values(currentScene.nodes)
-    .filter((n) => n.id !== nodeId)
+    .filter((n) => !effectiveSegmentIds.some((sid) => sourceNodeIds.get(sid) === n.id))
     .sort((a, b) => {
       const ai = groupOrder.indexOf(a.actorKind)
       const bi = groupOrder.indexOf(b.actorKind)
@@ -273,10 +292,20 @@ const showContextMenu = (
       if (action === 'move') {
         const target = b.dataset.target
         if (target) {
-          postToWorker({
-            type: 'INTENT',
-            intent: { type: 'MOVE_ENTRY_TO', segmentId, sourceNodeId: nodeId, targetNodeId: target },
-          })
+          const moves = effectiveSegmentIds
+            .map((sid) => ({ segmentId: sid, sourceNodeId: sourceNodeIds.get(sid) }))
+            .filter((m): m is { segmentId: string; sourceNodeId: string } => !!m.sourceNodeId)
+          if (moves.length === 1) {
+            postToWorker({
+              type: 'INTENT',
+              intent: { type: 'MOVE_ENTRY_TO', segmentId: moves[0].segmentId, sourceNodeId: moves[0].sourceNodeId, targetNodeId: target },
+            })
+          } else if (moves.length > 1) {
+            postToWorker({
+              type: 'INTENT',
+              intent: { type: 'MOVE_ENTRIES_TO', moves, targetNodeId: target },
+            })
+          }
         }
       } else if (action === 'wield') {
         const wield = b.dataset.wield as 'left' | 'right' | 'both'
@@ -294,7 +323,7 @@ const showContextMenu = (
       } else if (action === 'delete') {
         postToWorker({
           type: 'INTENT',
-          intent: { type: 'DELETE_ENTRY', segmentId },
+          intent: { type: 'DELETE_ENTRY', segmentIds: effectiveSegmentIds },
         })
       }
       setTimeout(closeContextMenu, 0)
@@ -861,6 +890,15 @@ window.addEventListener('keydown', (event) => {
   if (event.key === 'Escape' && activeCanvasTool === 'text') {
     activeCanvasTool = 'select'
     renderCanvasToolUI()
+  }
+  if ((event.key === 'Delete' || event.key === 'Backspace') && currentScene?.selectedSegmentIds?.length) {
+    const active = document.activeElement
+    if (active?.tagName === 'INPUT' || active?.tagName === 'TEXTAREA') return
+    event.preventDefault()
+    postToWorker({
+      type: 'INTENT',
+      intent: { type: 'DELETE_ENTRY', segmentIds: currentScene.selectedSegmentIds },
+    })
   }
 })
 
