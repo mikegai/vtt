@@ -8,7 +8,7 @@ describe('inventory import plan', () => {
   it('parses multiple blocks into containers with inferred kinds', () => {
     const input = `
 Fighter:
-plate armor, shield, spear
+plate armor, shield, short sword
 
 Loot Pile - Crypt Chest:
 2 sacks, 14 torches and 3 flasks of oil
@@ -23,7 +23,7 @@ Loot Pile - Crypt Chest:
   })
 
   it('supports unlabeled freeform lists as generic containers', () => {
-    const plan = parseInventoryImportPlan('plate armor, shield, spear', index)
+    const plan = parseInventoryImportPlan('plate armor, shield, short sword', index)
     expect(plan.containers).toHaveLength(1)
     expect(plan.containers[0]?.label).toContain('Inventory')
   })

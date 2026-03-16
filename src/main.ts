@@ -54,7 +54,7 @@ app.innerHTML = `
 
       <section class="tool-panel">
         <label for="bulk-input" class="tool-label">Bulk Import</label>
-        <textarea id="bulk-input" class="tool-textarea" rows="6" placeholder="Fighter: plate armor, shield, spear&#10;&#10;Loot Pile - Crypt Chest: 2 sacks, 14 torches"></textarea>
+        <textarea id="bulk-input" class="tool-textarea" rows="6" placeholder="Fighter: plate armor, shield, short sword&#10;&#10;Loot Pile - Crypt Chest: 2 sacks, 14 torches"></textarea>
         <div id="bulk-results" class="parsed-list"></div>
       </section>
 
@@ -99,6 +99,18 @@ let currentScene: SceneVM | null = null
 
 const contextMenuEl = document.querySelector<HTMLElement>('#context-menu')!
 
+let activeContextMenuClose: ((e: Event) => void) | null = null
+
+const closeContextMenu = (): void => {
+  contextMenuEl.hidden = true
+  contextMenuEl.innerHTML = ''
+  if (activeContextMenuClose) {
+    document.removeEventListener('click', activeContextMenuClose)
+    document.removeEventListener('contextmenu', activeContextMenuClose)
+    activeContextMenuClose = null
+  }
+}
+
 const showContextMenu = (
   segmentId: string,
   nodeId: string,
@@ -106,6 +118,9 @@ const showContextMenu = (
   clientX: number,
   clientY: number,
 ): void => {
+  // Always tear down old menu + listeners first
+  closeContextMenu()
+
   if (!currentScene) return
 
   const segment = Object.values(currentScene.nodes)
@@ -117,7 +132,7 @@ const showContextMenu = (
   if (!sourceNode) return
 
   const itemDef = sampleState.itemDefinitions[itemDefId]
-  const wieldOptions = itemDef ? getWieldOptions(itemDef) : null
+  const wieldOptions = itemDef ? getWieldOptions(itemDef) : []
 
   const groupOrder: ActorKind[] = ['pc', 'retainer', 'hireling', 'animal', 'vehicle', 'loot-pile']
 
@@ -136,7 +151,7 @@ const showContextMenu = (
   )
 
   const wieldItems =
-    wieldOptions && wieldOptions.length > 0
+    wieldOptions.length > 0
       ? [
           ...(segment.wield
             ? [
@@ -171,22 +186,6 @@ const showContextMenu = (
   const maxY = window.innerHeight - contextMenuEl.offsetHeight - padding
   contextMenuEl.style.left = `${Math.min(clientX, maxX)}px`
   contextMenuEl.style.top = `${Math.min(clientY, maxY)}px`
-
-  const close = (): void => {
-    contextMenuEl.hidden = true
-    contextMenuEl.innerHTML = ''
-    document.removeEventListener('click', closeIfOutside)
-    document.removeEventListener('contextmenu', closeIfOutside)
-  }
-
-  const scheduleClose = (): void => {
-    setTimeout(close, 0)
-  }
-  const closeIfOutside = (event: Event): void => {
-    const target = event.target
-    if (target instanceof Node && contextMenuEl.contains(target)) return
-    close()
-  }
 
   contextMenuEl.querySelectorAll('.context-menu-submenu-trigger').forEach((el) => {
     el.addEventListener('mouseenter', () => {
@@ -223,13 +222,18 @@ const showContextMenu = (
           intent: { type: 'UNWIELD', segmentId },
         })
       }
-      scheduleClose()
+      setTimeout(closeContextMenu, 0)
     })
   })
 
   setTimeout(() => {
-    document.addEventListener('click', closeIfOutside)
-    document.addEventListener('contextmenu', closeIfOutside)
+    activeContextMenuClose = (event: Event): void => {
+      const target = event.target
+      if (target instanceof Node && contextMenuEl.contains(target)) return
+      closeContextMenu()
+    }
+    document.addEventListener('click', activeContextMenuClose)
+    document.addEventListener('contextmenu', activeContextMenuClose)
   }, 0)
 }
 
@@ -423,7 +427,7 @@ parseResultsEl.addEventListener('click', (e) => {
   }
 })
 
-bulkInputEl.value = `Fighter:\nplate armor, shield, spear\n\nLoot Pile - Crypt Chest:\n2 sacks, 14 torches and 3 flasks of oil`
+bulkInputEl.value = `Fighter:\nplate armor, shield, short sword\n\nLoot Pile - Crypt Chest:\n2 sacks, 14 torches and 3 flasks of oil`
 renderBulkImport(bulkInputEl.value)
 bulkInputEl.addEventListener('input', () => renderBulkImport(bulkInputEl.value))
 

@@ -7,7 +7,6 @@ import {
   coinsToSixths,
   encumbranceCostSixths,
   formatSixthsAsStone,
-  ironRationEffectiveSixths,
   speedBandForSixths,
   stoneToSixths,
 } from '../domain/rules'
@@ -80,20 +79,4 @@ describe('ACKS rules', () => {
     expect(formatSixthsAsStone(0)).toBe('0 stone')
   })
 
-  it('iron rations: every 7, 2 double up (effective sixths = n - floor(n/7))', () => {
-    expect(ironRationEffectiveSixths(5)).toBe(5)
-    expect(ironRationEffectiveSixths(6)).toBe(6)
-    expect(ironRationEffectiveSixths(7)).toBe(6)
-    expect(ironRationEffectiveSixths(8)).toBe(7)
-    expect(ironRationEffectiveSixths(14)).toBe(12)
-    expect(ironRationEffectiveSixths(15)).toBe(13)
-    const ironRations: ItemDefinition = {
-      id: 'ironRationsDay',
-      canonicalName: "1 day's iron rations",
-      kind: 'standard',
-      sixthsPerUnit: 1,
-    }
-    expect(encumbranceCostSixths(ironRations, 7)).toBe(6)
-    expect(encumbranceCostSixths(ironRations, 14)).toBe(12)
-  })
 })

@@ -56,19 +56,6 @@ const buildSlots = (capacitySixths: number, packedSegments: readonly SegmentVM[]
   return slots
 }
 
-/** Returns display quantities per slot for iron rations: [1,1,1,1,1,2] for 7, etc. */
-const ironRationDisplaySlots = (quantity: number): number[] => {
-  const result: number[] = []
-  const pairs = Math.floor(quantity / 7)
-  const remainder = quantity % 7
-  for (let i = 0; i < pairs; i += 1) {
-    result.push(1, 1, 1, 1, 1, 2)
-  }
-  for (let i = 0; i < remainder; i += 1) {
-    result.push(1)
-  }
-  return result
-}
 
 const deriveWieldFromActor = (actor: Actor, entryId: string): { wield?: WieldGrip; heldHands?: 0 | 1 | 2 } => {
   const left = actor.leftWieldingEntryId === entryId
@@ -101,35 +88,6 @@ const toSegmentVM = (
   const derivedWield = deriveWieldFromActor(actor, baseEntryId)
   const baseState = { ...(packedSegment.state ?? {}), ...derivedWield }
 
-  if (packedSegment.itemDefId === 'ironRationsDay' && packedSegment.quantity > 0) {
-    const displaySlots = ironRationDisplaySlots(packedSegment.quantity)
-    return displaySlots.map((displayQty, i) => {
-      const startSixth = packedSegment.startSixth + i
-      const endSixth = startSixth + 1
-      const title = displayQty === 2 ? '2 iron rations' : canonicalName
-      const labels = buildLabelLadder(title)
-      return {
-        id: `${baseEntryId}:${i}`,
-        actorId,
-        itemDefId: packedSegment.itemDefId,
-        quantity: displayQty,
-        zone: packedSegment.zone,
-        state: baseState,
-        startSixth,
-        endSixth,
-        sizeSixths: 1,
-        isOverflow: packedSegment.isOverflow,
-        labels,
-        tooltip: {
-          title,
-          quantityText: `${displayQty}`,
-          encumbranceText: formatSixthsAsStone(1),
-          zoneText: zoneLabel,
-        },
-      }
-    })
-  }
-
   const labels = buildLabelLadder(canonicalName)
   return {
     id: packedSegment.inventoryEntryId,
@@ -152,20 +110,6 @@ const toSegmentVM = (
   }
 }
 
-/** Coalesce iron rations entries into one so the doubling rule applies. */
-const coalesceIronRations = (entries: readonly InventoryEntry[]): InventoryEntry[] => {
-  const ironRationEntries = entries.filter((e) => e.itemDefId === 'ironRationsDay')
-  const others = entries.filter((e) => e.itemDefId !== 'ironRationsDay')
-  if (ironRationEntries.length <= 1) return [...entries]
-  const totalQty = ironRationEntries.reduce((sum, e) => sum + e.quantity, 0)
-  const first = ironRationEntries[0]
-  const coalesced: InventoryEntry = {
-    ...first,
-    id: first.id,
-    quantity: totalQty,
-  }
-  return [coalesced, ...others]
-}
 
 const buildRow = (
   state: CanonicalState,
@@ -176,8 +120,7 @@ const buildRow = (
   isDroppedRow = false,
 ): ActorRowVM => {
   const capacitySixths = capacitySixthsForActor(actor)
-  const coalescedEntries = coalesceIronRations(entries)
-  const packInputs: PackInput[] = coalescedEntries
+  const packInputs: PackInput[] = entries
     .map((entry) => {
       const definition = state.itemDefinitions[entry.itemDefId]
       if (!definition) return null
@@ -185,7 +128,7 @@ const buildRow = (
     })
     .filter((value): value is PackInput => value !== null)
 
-  const entryMap = new Map(coalescedEntries.map((entry) => [entry.id, entry]))
+  const entryMap = new Map(entries.map((entry) => [entry.id, entry]))
 
   const packed = packDeterministic(packInputs, capacitySixths)
   const segments = packed.flatMap((segment) => {
@@ -197,7 +140,7 @@ const buildRow = (
     return Array.isArray(vm) ? vm : [vm]
   })
 
-  const encumbranceSixths = coalescedEntries
+  const encumbranceSixths = entries
     .map((entry) => {
       const definition = state.itemDefinitions[entry.itemDefId]
       return definition ? encumbranceCostSixths(definition, entry.quantity) : 0

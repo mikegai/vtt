@@ -19,20 +19,20 @@ describe('inventory text parser', () => {
   })
 
   it('resolves obvious catalog items and keeps unknowns', () => {
-    const parsed = parseInventoryText('plate armor, shield, spear, 2 sacks of silver dust')
+    const parsed = parseInventoryText('plate armor, shield, short sword, 2 sacks of silver dust')
     expect(parsed.chunks.length).toBe(4)
 
     const plate = parsed.chunks[0]
     const shield = parsed.chunks[1]
-    const spear = parsed.chunks[2]
+    const sword = parsed.chunks[2]
     const dust = parsed.chunks[3]
 
     expect(plate?.status).toBe('resolved')
     expect(plate?.resolvedItemName?.toLowerCase()).toContain('plate armor')
     expect(shield?.status).toBe('resolved')
     expect(shield?.resolvedItemName?.toLowerCase()).toContain('shield')
-    expect(spear?.status).toBe('resolved')
-    expect(spear?.resolvedItemName?.toLowerCase()).toContain('spear')
+    expect(sword?.status).toBe('resolved')
+    expect(sword?.resolvedItemName?.toLowerCase()).toContain('short sword')
     expect(dust?.status).not.toBe('resolved')
   })
 })

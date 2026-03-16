@@ -43,16 +43,4 @@ describe('board view model', () => {
     expect(horseRow!.parentActorId).toBe('cataphract')
   })
 
-  it('expands iron rations into display segments: 7 rations = 6 slots (5 singles + 1 "2 iron rations")', () => {
-    const board = buildBoardVM(sampleState)
-    const cutthroatRow = board.rows.find((r) => r.actorId === 'cutthroat')
-    expect(cutthroatRow).toBeDefined()
-    const ironRationSegments = cutthroatRow!.segments.filter((s) => s.itemDefId === 'ironRationsDay')
-    expect(ironRationSegments.length).toBe(6)
-    const pairSegment = ironRationSegments.find((s) => s.tooltip.title === '2 iron rations')
-    expect(pairSegment).toBeDefined()
-    expect(pairSegment!.quantity).toBe(2)
-    const singleCount = ironRationSegments.filter((s) => s.tooltip.title === "1 day's iron rations").length
-    expect(singleCount).toBe(5)
-  })
 })

@@ -63,13 +63,13 @@ The app currently includes:
 ### Paste Inventory Text
 
 - `2 sacks, 14 torches and 3 flasks of oil`
-- `plate armor, shield, spear`
+- `plate armor, shield, short sword`
 
 ### Bulk Import
 
 ```text
 Fighter:
-plate armor, shield, spear
+plate armor, shield, short sword
 
 Loot Pile - Crypt Chest:
 2 sacks, 14 torches and 3 flasks of oil

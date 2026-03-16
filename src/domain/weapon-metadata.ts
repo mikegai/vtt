@@ -1,5 +1,3 @@
-import { SIXTHS_PER_STONE } from './types'
-import { encumbranceCostSixths } from './rules'
 import type { ItemDefinition } from './types'
 import type { WieldGrip } from './types'
 
@@ -57,11 +55,10 @@ const matchHandedness = (name: string): WeaponHandedness | null => {
 
 /**
  * Returns wield options for an item.
- * - Weapons/shields: use handedness (twoHandedOnly, handy, versatile, oneHanded).
- * - Other items 1 stone or above (standard, bulky): "Wield left", "Wield right", "Wield 2-handed".
- * - Armor and sub-1-stone items: null.
+ * Everything is wieldable (in-hand). Known weapons/shields have handedness
+ * restrictions; everything else defaults to left/right/both.
  */
-export const getWieldOptions = (itemDef: ItemDefinition): WieldGrip[] | null => {
+export const getWieldOptions = (itemDef: ItemDefinition): WieldGrip[] => {
   const handedness = matchHandedness(itemDef.canonicalName)
   if (handedness) {
     switch (handedness) {
@@ -72,21 +69,15 @@ export const getWieldOptions = (itemDef: ItemDefinition): WieldGrip[] | null => 
         return ['left', 'right', 'both']
       case 'oneHanded':
         return ['left', 'right']
-      default:
-        return null
     }
   }
 
-  // Generic: anything 1 stone or above (except armor) is wieldable
-  if (itemDef.kind === 'armor') return null
-  const sixthsPerUnit = encumbranceCostSixths(itemDef, 1)
-  if (sixthsPerUnit >= SIXTHS_PER_STONE) return ['left', 'right', 'both']
-  return null
+  return ['left', 'right', 'both']
 }
 
-/** Check if an item supports wield options. */
+/** Check if an item supports wield options (always true now). */
 export const isWieldableWeapon = (itemDef: ItemDefinition): boolean =>
-  getWieldOptions(itemDef) !== null
+  getWieldOptions(itemDef).length > 0
 
 /** True if item can only be wielded 2-handed (bows, polearms, etc). Loses both hands if either is reassigned. */
 export const isTwoHandedOnly = (itemDef: ItemDefinition): boolean => {
