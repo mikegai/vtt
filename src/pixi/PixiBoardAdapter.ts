@@ -4,18 +4,29 @@ import type { SceneGroupVM, SceneNodeVM, ScenePatch, SceneVM, SceneSegmentVM } f
 
 /** Stored on segment blocks for context-menu hit testing. */
 type SegmentContext = { segmentId: string; nodeId: string }
-type GroupDragState = {
+
+type GroupDragData = {
   readonly groupId: string
   readonly startWorld: { x: number; y: number }
   readonly initialGroupPos: { x: number; y: number }
 }
 
-type NodeReorderDragState = {
+type NodeReorderDragData = {
   readonly nodeId: string
+  readonly nodeContainer: Container
+  readonly handleView: Container
   readonly initialPos: { x: number; y: number }
+  readonly offset: { x: number; y: number }
   targetGroupId: string | null
   targetIndex: number
 }
+
+type ActiveDrag =
+  | { type: 'idle' }
+  | { type: 'segment'; state: SegmentDragState }
+  | { type: 'group'; state: GroupDragData }
+  | { type: 'nodeReorder'; state: NodeReorderDragData }
+  | { type: 'marquee'; startX: number; startY: number; endX: number; endY: number }
 
 type AdapterHandlers = {
   onHoverSegment(segmentId: string | null): void
@@ -497,6 +508,8 @@ const drawGripIndicators = (
   container: Container,
   wield: 'left' | 'right' | 'both' | undefined,
   bounds: { x: number; y: number; w: number; h: number },
+  dimmed: boolean,
+  dimmedAlpha: number,
 ): void => {
   if (!wield) return
   const cy = bounds.y + bounds.h / 2
@@ -505,6 +518,7 @@ const drawGripIndicators = (
   const drawOneGrip = (x: number, flip = false): void => {
     const g = new Graphics()
     g.eventMode = 'none'
+    g.alpha = dimmed ? dimmedAlpha : 1
     g.svg(GRIP_ICON_SVG)
     // Anchor at icon center, then mirror/scale so left/right markers stay edge-aligned.
     g.pivot.set(12, 12)
@@ -557,6 +571,8 @@ const drawBlendedSegmentRects = (
   textCompensationScale: number,
   minVisibleLabelPx: number,
   maxVisibleLabelPx: number,
+  dimmed: boolean,
+  dimmedAlpha: number,
 ): { hitBounds: { x: number; y: number; w: number; h: number } } => {
   const groups = groupSixthsByStone(segment.startSixth, segment.sizeSixths)
   const PAD = 1.2
@@ -613,6 +629,7 @@ const drawBlendedSegmentRects = (
       style: { fill: '#f0f8ff', fontSize: fit.fontSize, fontFamily: FONT_SEMIBOLD, align: 'center' },
     })
     txt.eventMode = 'none'
+    txt.alpha = dimmed ? dimmedAlpha : 1
     txt.scale.set(visualScale)
     txt.anchor.set(0.5, 0.5)
     txt.position.set(centerX, centerY)
@@ -664,7 +681,8 @@ const drawSegmentBlock = (
   const isDropPreview = segment.isDropPreview === true
   const dimmed = filterCategory != null && segment.category !== filterCategory
   const color = isDropPreview ? 0x5cadee : segment.isOverflow ? 0x932d4e : hovered ? 0x5cadee : 0x3d9ac9
-  const alpha = isDropPreview ? 0.25 : segment.isOverflow ? 0.88 : dimmed ? 0.65 : 0.95
+  const dimmedAlpha = 0.12
+  const alpha = isDropPreview ? 0.25 : segment.isOverflow ? 0.88 : dimmed ? dimmedAlpha : 0.95
 
   const block = new Graphics()
   block.eventMode = 'static'
@@ -712,7 +730,7 @@ const drawSegmentBlock = (
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
     const strokeOpt = isDropPreview
       ? { width: 2, color: 0x5cadee, alpha: 0.7 }
-      : { width: 1.5, color: 0xd3ebff, alpha: 0.9 }
+      : { width: 1.5, color: 0xd3ebff, alpha: dimmed ? dimmedAlpha : 0.9 }
     const fillOpt = { color, alpha }
 
     container.addChild(block)
@@ -763,6 +781,7 @@ const drawSegmentBlock = (
           style: { fill: '#f0f8ff', fontSize: fit.fontSize, fontFamily: FONT_SEMIBOLD, align: 'center' },
         })
         txt.eventMode = 'none'
+        txt.alpha = dimmed ? dimmedAlpha : 1
         txt.scale.set(visualScale)
         txt.anchor.set(0.5, 0.5)
         txt.position.set(centerX, centerY)
@@ -781,7 +800,7 @@ const drawSegmentBlock = (
     block.rect(blockBounds.x, blockBounds.y, blockBounds.w, blockBounds.h)
     block.fill({ color: 0xffffff, alpha: 0.001 })
     block.hitArea = new Rectangle(blockBounds.x, blockBounds.y, blockBounds.w, blockBounds.h)
-    drawGripIndicators(container, segment.wield, blockBounds)
+    drawGripIndicators(container, segment.wield, blockBounds, dimmed, dimmedAlpha)
   } else {
     const { hitBounds } = drawBlendedSegmentRects(
       container,
@@ -796,12 +815,14 @@ const drawSegmentBlock = (
       textCompensationScale,
       minVisibleLabelPx,
       maxVisibleLabelPx,
+      dimmed,
+      dimmedAlpha,
     )
     block.rect(hitBounds.x, hitBounds.y, hitBounds.w, hitBounds.h)
     block.fill({ color: 0xffffff, alpha: 0.001 })
     block.hitArea = new Rectangle(hitBounds.x, hitBounds.y, hitBounds.w, hitBounds.h)
     container.addChild(block)
-    drawGripIndicators(container, segment.wield, hitBounds)
+    drawGripIndicators(container, segment.wield, hitBounds, dimmed, dimmedAlpha)
   }
 }
 
@@ -822,12 +843,10 @@ export class PixiBoardAdapter {
   private readonly tooltipBg: Graphics
   private readonly tooltipText: BitmapText
   private currentScene: SceneVM | null = null
-  private segmentDrag: SegmentDragState | null = null
-  private groupDrag: GroupDragState | null = null
-  private nodeReorderDrag: NodeReorderDragState | null = null
+  private activeDrag: ActiveDrag = { type: 'idle' }
   private groupDropIndicator: Graphics
   private lastDragEndTime = 0
-  private marqueeState: { startX: number; startY: number; endX: number; endY: number } | null = null
+  private pendingRebuild = false
   private marqueeGraphics: Graphics | null = null
   private minVisibleLabelPx = DEFAULT_MIN_VISIBLE_PX
   private readonly maxVisibleLabelPx = DEFAULT_MAX_VISIBLE_PX
@@ -921,11 +940,11 @@ export class PixiBoardAdapter {
     }
 
     const onDown = (event: PointerEvent): void => {
-      if (event.button === 0) {
-        if (this.startGroupDragFromPointer(event)) return
+      if (event.button === 0 && this.activeDrag.type === 'idle') {
+        if (this.tryStartGroupDrag(event)) return
         if (!this.hitTestSkipMarquee(event.clientX, event.clientY) && this.handlers.onMarqueeSelect) {
           const { x, y } = canvasCoords(event)
-          this.marqueeState = { startX: x, startY: y, endX: x, endY: y }
+          this.activeDrag = { type: 'marquee', startX: x, startY: y, endX: x, endY: y }
           this.drawMarquee()
         }
         return
@@ -937,38 +956,53 @@ export class PixiBoardAdapter {
     }
 
     const onUp = (event: PointerEvent): void => {
-      if (event.button === 0 && this.groupDrag) {
-        this.groupDrag = null
-        return
-      }
-      if (event.button === 0 && this.marqueeState) {
-        const { x, y } = canvasCoords(event)
-        this.marqueeState.endX = x
-        this.marqueeState.endY = y
-        this.finishMarquee(event.shiftKey || event.ctrlKey || event.metaKey)
-        this.marqueeState = null
-        this.drawMarquee()
-        return
+      if (event.button === 0) {
+        switch (this.activeDrag.type) {
+          case 'nodeReorder':
+            this.finishNodeReorderDrag(event.clientX, event.clientY)
+            return
+          case 'group':
+            this.endDrag()
+            return
+          case 'marquee': {
+            const { x, y } = canvasCoords(event)
+            this.activeDrag.endX = x
+            this.activeDrag.endY = y
+            this.finishMarquee(event.shiftKey || event.ctrlKey || event.metaKey)
+            this.activeDrag = { type: 'idle' }
+            this.drawMarquee()
+            return
+          }
+          case 'segment':
+            this.endSegmentDrag(event)
+            return
+          case 'idle':
+            break
+        }
       }
       panning = false
-      if (this.segmentDrag) this.endSegmentDrag(event)
     }
 
     const onMove = (event: PointerEvent): void => {
-      if (this.groupDrag) {
-        this.updateGroupDrag(event.clientX, event.clientY)
-        return
-      }
-      if (this.marqueeState) {
-        const { x, y } = canvasCoords(event)
-        this.marqueeState.endX = x
-        this.marqueeState.endY = y
-        this.drawMarquee()
-        return
-      }
-      if (this.segmentDrag) {
-        this.updateSegmentDrag(event.clientX, event.clientY)
-        return
+      switch (this.activeDrag.type) {
+        case 'nodeReorder':
+          this.updateNodeReorderDrag(event.clientX, event.clientY)
+          return
+        case 'group':
+          this.updateGroupDrag(event.clientX, event.clientY)
+          return
+        case 'marquee': {
+          const { x, y } = canvasCoords(event)
+          this.activeDrag.endX = x
+          this.activeDrag.endY = y
+          this.drawMarquee()
+          return
+        }
+        case 'segment':
+          this.updateSegmentDrag(event.clientX, event.clientY)
+          return
+        case 'idle':
+          break
       }
       if (!panning) return
       this.pan.x += event.clientX - last.x
@@ -1032,8 +1066,8 @@ export class PixiBoardAdapter {
   private drawMarquee(): void {
     if (!this.marqueeGraphics) return
     this.marqueeGraphics.clear()
-    if (!this.marqueeState) return
-    const { startX, startY, endX, endY } = this.marqueeState
+    if (this.activeDrag.type !== 'marquee') return
+    const { startX, startY, endX, endY } = this.activeDrag
     const x = Math.min(startX, endX)
     const y = Math.min(startY, endY)
     const w = Math.abs(endX - startX)
@@ -1045,8 +1079,8 @@ export class PixiBoardAdapter {
   }
 
   private finishMarquee(addToSelection: boolean): void {
-    if (!this.marqueeState || !this.currentScene || !this.handlers.onMarqueeSelect) return
-    const { startX, startY, endX, endY } = this.marqueeState
+    if (this.activeDrag.type !== 'marquee' || !this.currentScene || !this.handlers.onMarqueeSelect) return
+    const { startX, startY, endX, endY } = this.activeDrag
     const x1 = Math.min(startX, endX)
     const y1 = Math.min(startY, endY)
     const x2 = Math.max(startX, endX)
@@ -1175,31 +1209,35 @@ export class PixiBoardAdapter {
     return null
   }
 
-  private startGroupDragFromPointer(event: PointerEvent): boolean {
+  private tryStartGroupDrag(event: PointerEvent): boolean {
     if (!this.currentScene || !this.handlers.onMoveGroup) return false
     if (this.hitTestSegmentOrNodeHandle(event.clientX, event.clientY)) return false
     const world = this.screenToWorld(event.clientX, event.clientY)
     const group = this.findTopGroupAtWorld(world.x, world.y)
     if (!group) return false
 
-    this.groupDrag = {
-      groupId: group.id,
-      startWorld: world,
-      initialGroupPos: { x: group.x, y: group.y },
+    this.activeDrag = {
+      type: 'group',
+      state: {
+        groupId: group.id,
+        startWorld: world,
+        initialGroupPos: { x: group.x, y: group.y },
+      },
     }
     return true
   }
 
   private updateGroupDrag(clientX: number, clientY: number): void {
-    if (!this.groupDrag || !this.currentScene || !this.handlers.onMoveGroup) return
+    if (this.activeDrag.type !== 'group' || !this.currentScene || !this.handlers.onMoveGroup) return
+    const drag = this.activeDrag.state
     const world = this.screenToWorld(clientX, clientY)
-    const dx = world.x - this.groupDrag.startWorld.x
-    const dy = world.y - this.groupDrag.startWorld.y
-    const groupView = this.groupViews.get(this.groupDrag.groupId)
+    const dx = world.x - drag.startWorld.x
+    const dy = world.y - drag.startWorld.y
+    const groupView = this.groupViews.get(drag.groupId)
     if (groupView) {
-      groupView.root.position.set(this.groupDrag.initialGroupPos.x + dx, this.groupDrag.initialGroupPos.y + dy)
+      groupView.root.position.set(drag.initialGroupPos.x + dx, drag.initialGroupPos.y + dy)
     }
-    this.handlers.onMoveGroup(this.groupDrag.groupId, this.groupDrag.initialGroupPos.x + dx, this.groupDrag.initialGroupPos.y + dy)
+    this.handlers.onMoveGroup(drag.groupId, drag.initialGroupPos.x + dx, drag.initialGroupPos.y + dy)
   }
 
   private screenToWorld(clientX: number, clientY: number): { x: number; y: number } {
@@ -1292,8 +1330,10 @@ export class PixiBoardAdapter {
 
   private getDropTargetCenters(): { x: number; y: number }[] {
     const centers: { x: number; y: number }[] = []
-    if (!this.segmentDrag?.snap || !this.currentScene || this.segmentDrag.segments.length === 0) return centers
-    const { nodeId, startSixth } = this.segmentDrag.snap
+    if (this.activeDrag.type !== 'segment') return centers
+    const drag = this.activeDrag.state
+    if (!drag.snap || !this.currentScene || drag.segments.length === 0) return centers
+    const { nodeId, startSixth } = drag.snap
     const node = this.currentScene.nodes[nodeId]
     if (!node) return centers
     const previewSegs = node.segments.filter((s) => s.isDropPreview === true)
@@ -1302,8 +1342,8 @@ export class PixiBoardAdapter {
       return centers
     }
     let cursorSixth = startSixth
-    for (const seg of this.segmentDrag.segments) {
-      const isSameAsSource = nodeId === this.segmentDrag.sourceNodeIds[seg.id]
+    for (const seg of drag.segments) {
+      const isSameAsSource = nodeId === drag.sourceNodeIds[seg.id]
       if (isSameAsSource) {
         const actualSeg = node.segments.find((s) => s.id === seg.id)
         if (actualSeg) {
@@ -1322,7 +1362,7 @@ export class PixiBoardAdapter {
   }
 
   private beginSegmentDrag(segment: SceneSegmentVM, _sourceNodeId: string, globalX: number, globalY: number): void {
-    if (this.segmentDrag) this.endSegmentDrag()
+    if (this.activeDrag.type !== 'idle') return
     const selectedIds = this.currentScene?.selectedSegmentIds ?? []
     const segmentIds = selectedIds.includes(segment.id) && selectedIds.length > 1
       ? [...selectedIds]
@@ -1346,46 +1386,48 @@ export class PixiBoardAdapter {
     const lineLayer = new Container()
     this.worldLayer.addChild(lineLayer)
     this.worldLayer.addChild(proxy)
-    this.segmentDrag = { segments, segmentIds, sourceNodeIds, proxy, lineLayer, snap: null }
+    this.activeDrag = { type: 'segment', state: { segments, segmentIds, sourceNodeIds, proxy, lineLayer, snap: null } }
     this.handlers.onDragSegmentStart(segmentIds)
     this.updateSegmentDrag(globalX, globalY)
   }
 
   private updateSegmentDrag(clientX: number, clientY: number): void {
-    if (!this.segmentDrag) return
+    if (this.activeDrag.type !== 'segment') return
+    const drag = this.activeDrag.state
     const world = this.screenToWorld(clientX, clientY)
     const targetNodeId = this.findDropTarget(world.x, world.y)
     this.handlers.onDragSegmentUpdate(targetNodeId ?? null)
 
-    const snap = this.findSnapTarget(world.x, world.y, this.segmentDrag.segments[0])
-    this.segmentDrag.snap = snap
+    const snap = this.findSnapTarget(world.x, world.y, drag.segments[0])
+    drag.snap = snap
 
-    this.segmentDrag.proxy.position.set(world.x, world.y)
+    drag.proxy.position.set(world.x, world.y)
     const proxyCenterX = world.x
     const proxyCenterY = world.y
 
-    this.segmentDrag.lineLayer.removeChildren()
+    drag.lineLayer.removeChildren()
     const targetCenters = this.getDropTargetCenters()
     for (const target of targetCenters) {
       const lineG = new Graphics()
       drawArrowLine(lineG, proxyCenterX, proxyCenterY, target.x, target.y)
-      this.segmentDrag.lineLayer.addChild(lineG)
+      drag.lineLayer.addChild(lineG)
     }
   }
 
   private endSegmentDrag(event?: PointerEvent): void {
-    if (!this.segmentDrag) return
+    if (this.activeDrag.type !== 'segment') return
+    const drag = this.activeDrag.state
     this.lastDragEndTime = Date.now()
     const world = event ? this.screenToWorld(event.clientX, event.clientY) : null
-    const targetNodeId = world ? this.findDropTarget(world.x, world.y) : this.segmentDrag.snap?.nodeId ?? null
-    const anyDifferentSource = this.segmentDrag.segmentIds.some((id) => this.segmentDrag!.sourceNodeIds[id] !== targetNodeId)
+    const targetNodeId = world ? this.findDropTarget(world.x, world.y) : drag.snap?.nodeId ?? null
+    const anyDifferentSource = drag.segmentIds.some((id) => drag.sourceNodeIds[id] !== targetNodeId)
     const effectiveTarget = targetNodeId && anyDifferentSource ? targetNodeId : null
     this.handlers.onDragSegmentEnd(effectiveTarget)
-    this.worldLayer.removeChild(this.segmentDrag.lineLayer)
-    this.worldLayer.removeChild(this.segmentDrag.proxy)
-    this.segmentDrag.lineLayer.destroy({ children: true })
-    this.segmentDrag.proxy.destroy({ children: true })
-    this.segmentDrag = null
+    this.worldLayer.removeChild(drag.lineLayer)
+    this.worldLayer.removeChild(drag.proxy)
+    drag.lineLayer.destroy({ children: true })
+    drag.proxy.destroy({ children: true })
+    this.endDrag()
   }
 
   private createNode(
@@ -1609,57 +1651,33 @@ export class PixiBoardAdapter {
   }
 
   private enableDrag(handleView: Container, nodeContainer: Container, nodeId: string): void {
-    let dragging = false
-    let offset = { x: 0, y: 0 }
     handleView.on('pointerdown', (event) => {
-      if (event.button !== 0) return
-      dragging = true
+      if (event.button !== 0 || this.activeDrag.type !== 'idle') return
       const point = event.global
-      offset = {
+      const offset = {
         x: (point.x - this.pan.x) / this.zoom - nodeContainer.position.x,
         y: (point.y - this.pan.y) / this.zoom - nodeContainer.position.y,
       }
-      this.nodeReorderDrag = {
-        nodeId,
-        initialPos: { x: nodeContainer.position.x, y: nodeContainer.position.y },
-        targetGroupId: null,
-        targetIndex: 0,
+      this.activeDrag = {
+        type: 'nodeReorder',
+        state: {
+          nodeId,
+          nodeContainer,
+          handleView,
+          initialPos: { x: nodeContainer.position.x, y: nodeContainer.position.y },
+          offset,
+          targetGroupId: null,
+          targetIndex: 0,
+        },
       }
       handleView.cursor = 'grabbing'
       event.stopPropagation()
     })
-    const stop = (): void => {
-      dragging = false
+    handleView.on('pointerup', () => {
       handleView.cursor = 'grab'
-      this.groupDropIndicator.clear()
-      if (this.nodeReorderDrag?.targetGroupId && this.handlers.onMoveNodeToGroupIndex) {
-        nodeContainer.position.set(this.nodeReorderDrag.initialPos.x, this.nodeReorderDrag.initialPos.y)
-        this.handlers.onMoveNodeToGroupIndex(this.nodeReorderDrag.nodeId, this.nodeReorderDrag.targetGroupId, this.nodeReorderDrag.targetIndex)
-      } else if (this.nodeReorderDrag) {
-        nodeContainer.position.set(this.nodeReorderDrag.initialPos.x, this.nodeReorderDrag.initialPos.y)
-      }
-      this.nodeReorderDrag = null
-    }
-    handleView.on('pointerup', stop)
-    handleView.on('pointerupoutside', stop)
-    handleView.on('globalpointermove', (event) => {
-      if (!dragging) return
-      const point = event.global
-      const x = (point.x - this.pan.x) / this.zoom - offset.x
-      const y = (point.y - this.pan.y) / this.zoom - offset.y
-      nodeContainer.position.set(x, y)
-      const world = {
-        x: (point.x - this.pan.x) / this.zoom,
-        y: (point.y - this.pan.y) / this.zoom,
-      }
-      const drop = this.findNodeDropTarget(nodeId, world.x, world.y)
-      if (drop && this.nodeReorderDrag) {
-        this.nodeReorderDrag.targetGroupId = drop.groupId
-        this.nodeReorderDrag.targetIndex = drop.index
-        this.drawGroupDropIndicator(drop.groupId, drop.lineY)
-      } else {
-        this.groupDropIndicator.clear()
-      }
+    })
+    handleView.on('pointerupoutside', () => {
+      handleView.cursor = 'grab'
     })
   }
 
@@ -1752,6 +1770,63 @@ export class PixiBoardAdapter {
     indicator.stroke({ width: 3, color: 0xffffff, alpha: 0.95 })
   }
 
+  private updateNodeReorderDrag(clientX: number, clientY: number): void {
+    if (this.activeDrag.type !== 'nodeReorder' || !this.currentScene) return
+    const drag = this.activeDrag.state
+    const world = this.screenToWorld(clientX, clientY)
+    const x = world.x - drag.offset.x
+    const y = world.y - drag.offset.y
+    drag.nodeContainer.position.set(x, y)
+    const node = this.currentScene.nodes[drag.nodeId]
+    const probeX = node ? x + node.width / 2 : world.x
+    const probeY = node ? y + node.height / 2 : world.y
+    const drop = this.findNodeDropTarget(drag.nodeId, probeX, probeY)
+    if (drop) {
+      drag.targetGroupId = drop.groupId
+      drag.targetIndex = drop.index
+      this.drawGroupDropIndicator(drop.groupId, drop.lineY)
+    } else {
+      this.groupDropIndicator.clear()
+      drag.targetGroupId = null
+    }
+  }
+
+  private finishNodeReorderDrag(finalClientX?: number, finalClientY?: number): void {
+    if (this.activeDrag.type !== 'nodeReorder') return
+    const drag = this.activeDrag.state
+    if (finalClientX != null && finalClientY != null && this.currentScene) {
+      const node = this.currentScene.nodes[drag.nodeId]
+      if (node) {
+        const world = this.screenToWorld(finalClientX, finalClientY)
+        const x = world.x - drag.offset.x
+        const y = world.y - drag.offset.y
+        const probeX = x + node.width / 2
+        const probeY = y + node.height / 2
+        const finalDrop = this.findNodeDropTarget(drag.nodeId, probeX, probeY)
+        if (finalDrop) {
+          drag.targetGroupId = finalDrop.groupId
+          drag.targetIndex = finalDrop.index
+        }
+      }
+    }
+    drag.handleView.cursor = 'grab'
+    this.groupDropIndicator.clear()
+    drag.nodeContainer.position.set(drag.initialPos.x, drag.initialPos.y)
+    if (drag.targetGroupId && this.handlers.onMoveNodeToGroupIndex) {
+      this.handlers.onMoveNodeToGroupIndex(drag.nodeId, drag.targetGroupId, drag.targetIndex)
+    }
+    this.endDrag()
+  }
+
+  private endDrag(): void {
+    this.activeDrag = { type: 'idle' }
+    if (this.pendingRebuild && this.currentScene) {
+      this.rebuildAllNodes(this.currentScene)
+      this.startSpringTicker()
+      this.pendingRebuild = false
+    }
+  }
+
   private rebuildAllNodes(scene: SceneVM): void {
     if (!this.fontsLoaded) return
     for (const [, view] of this.groupViews) {
@@ -1838,8 +1913,12 @@ export class PixiBoardAdapter {
       needsFullRebuild = true
     })
     if (needsFullRebuild) {
-      this.rebuildAllNodes(scene)
-      this.startSpringTicker()
+      if (this.activeDrag.type !== 'idle') {
+        this.pendingRebuild = true
+      } else {
+        this.rebuildAllNodes(scene)
+        this.startSpringTicker()
+      }
     }
   }
 }

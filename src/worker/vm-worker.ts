@@ -159,7 +159,16 @@ const applyIntent = (intent: WorkerIntent): void => {
   }
 
   if (intent.type === 'MOVE_NODE_TO_GROUP_INDEX') {
-    const nextOrders: Record<string, readonly string[]> = { ...localState.groupNodeOrders }
+    if (!worldState) {
+      recompute()
+      return
+    }
+    const scene = buildSceneVM(worldState, localState)
+    const baseOrders: Record<string, readonly string[]> = {}
+    for (const [gid, g] of Object.entries(scene.groups ?? {})) {
+      baseOrders[gid] = [...g.nodeIds]
+    }
+    const nextOrders: Record<string, readonly string[]> = { ...baseOrders }
     for (const [gid, order] of Object.entries(nextOrders)) {
       nextOrders[gid] = order.filter((id) => id !== intent.nodeId)
     }
@@ -168,7 +177,7 @@ const applyIntent = (intent: WorkerIntent): void => {
     target.splice(clamped, 0, intent.nodeId)
     nextOrders[intent.groupId] = target
 
-    if (worldState && worldState.actors[intent.nodeId]) {
+    if (worldState.actors[intent.nodeId]) {
       const actor = worldState.actors[intent.nodeId]
       worldState = {
         ...worldState,
