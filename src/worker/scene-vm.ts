@@ -10,12 +10,15 @@ import type { SceneGroupVM, SceneNodeVM, SceneVM } from './protocol'
 export type WorkerLocalState = {
   readonly hoveredSegmentId: string | null
   readonly groupPositions: Record<string, { x: number; y: number }>
-  readonly nodeGroupOverrides: Record<string, string>
+  readonly nodeGroupOverrides: Record<string, string | null>
+  readonly nodePositions: Record<string, { x: number; y: number }>
   readonly groupNodeOrders: Record<string, readonly string[]>
   readonly dropIntent: DropIntent | null
   readonly stonesPerRow: number
   readonly filterCategory: ItemCategory | null
   readonly selectedSegmentIds: readonly string[]
+  readonly labels: Record<string, { text: string; x: number; y: number }>
+  readonly selectedLabelId: string | null
 }
 
 const STONE_W = 36
@@ -46,6 +49,11 @@ const GROUP_PADDING_X = 20
 const GROUP_PADDING_TOP = 40
 const GROUP_PADDING_BOTTOM = 18
 const NODE_INDENT = 24
+const ROOT_NODE_X = 80
+const ROOT_NODE_Y = 80
+const ROOT_NODE_COL_GAP = 16
+const ROOT_NODE_ROW_GAP = 16
+const ROOT_NODE_MAX_W = 1800
 
 const flattenRows = (rows: readonly ActorRowVM[]): ActorRowVM[] => {
   const result: ActorRowVM[] = []
@@ -79,15 +87,17 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
         : 5
     const slotCount = totalStoneSlots
     const baseGroupId = actor?.movementGroupId ?? 'ungrouped'
-    const groupId = localState.nodeGroupOverrides[row.id] ?? baseGroupId
-    const groupTitle = worldState.movementGroups[groupId]?.name ?? groupId
+    const hasOverride = Object.prototype.hasOwnProperty.call(localState.nodeGroupOverrides, row.id)
+    const groupId = hasOverride ? localState.nodeGroupOverrides[row.id] : baseGroupId
+    const groupTitle = groupId ? (worldState.movementGroups[groupId]?.name ?? groupId) : null
+    const parentNodeId = groupId == null ? undefined : row.parentActorId
 
     nodes[row.id] = {
       id: row.id,
       rowId: row.id,
       actorId: row.actorId,
       groupId,
-      parentNodeId: row.parentActorId,
+      parentNodeId,
       actorKind: actor?.kind ?? 'pc',
       title: row.title,
       x: 0,
@@ -118,9 +128,11 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
       })),
     }
 
-    const existing = groupsById.get(groupId)
-    if (existing) existing.nodeIds.push(row.id)
-    else groupsById.set(groupId, { id: groupId, title: groupTitle, nodeIds: [row.id] })
+    if (groupId && groupTitle) {
+      const existing = groupsById.get(groupId)
+      if (existing) existing.nodeIds.push(row.id)
+      else groupsById.set(groupId, { id: groupId, title: groupTitle, nodeIds: [row.id] })
+    }
   }
 
   const groupOrder = [...groupsById.keys()]
@@ -166,6 +178,30 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
     if (!localState.groupPositions[groupId]) flowY = pos.y + groupHeight + GROUP_STACK_GAP
   }
 
+  // Ungrouped nodes are freely positioned on the world canvas.
+  let rootFlowX = ROOT_NODE_X
+  let rootFlowY = ROOT_NODE_Y
+  let tallestInRow = 0
+  for (const node of Object.values(nodes)) {
+    if (node.groupId != null) continue
+    const preferred = localState.nodePositions[node.id]
+    const mutableNode = node as SceneNodeVM & { x: number; y: number }
+    if (preferred) {
+      mutableNode.x = preferred.x
+      mutableNode.y = preferred.y
+      continue
+    }
+    if (rootFlowX + node.width > ROOT_NODE_MAX_W) {
+      rootFlowX = ROOT_NODE_X
+      rootFlowY += tallestInRow + ROOT_NODE_ROW_GAP
+      tallestInRow = 0
+    }
+    mutableNode.x = rootFlowX
+    mutableNode.y = rootFlowY
+    rootFlowX += node.width + ROOT_NODE_COL_GAP
+    tallestInRow = Math.max(tallestInRow, node.height)
+  }
+
   return {
     partyPaceText: `${board.partyPace.explorationFeet}'/${board.partyPace.combatFeet}'/${board.partyPace.runningFeet}' • ${board.partyPace.milesPerDay} mi/day`,
     hoveredSegmentId: localState.hoveredSegmentId,
@@ -173,6 +209,10 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
     selectedSegmentIds: localState.selectedSegmentIds,
     nodes,
     groups,
+    labels: Object.fromEntries(
+      Object.entries(localState.labels).map(([id, l]) => [id, { id, text: l.text, x: l.x, y: l.y }]),
+    ),
+    selectedLabelId: localState.selectedLabelId,
   }
 }
 

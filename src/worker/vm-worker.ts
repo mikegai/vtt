@@ -14,11 +14,14 @@ let localState: WorkerLocalState = {
   hoveredSegmentId: null,
   groupPositions: {},
   nodeGroupOverrides: {},
+  nodePositions: {},
   groupNodeOrders: {},
   dropIntent: null,
   stonesPerRow: 25,
   filterCategory: null,
   selectedSegmentIds: [],
+  labels: {},
+  selectedLabelId: null,
 }
 let previousScene: SceneVM | null = null
 
@@ -36,6 +39,8 @@ const buildSegmentIdToNodeId = (state: CanonicalState): Record<string, string> =
   for (const row of board.rows) visit(row)
   return sourceNodeIds
 }
+
+const droppedGroupIdForActor = (actorId: string): string => `${actorId}:ground`
 
 /** Migrate legacy entry.state.wield to actor.leftWieldingEntryId/rightWieldingEntryId. */
 const migrateWieldToActor = (state: CanonicalState): CanonicalState => {
@@ -195,8 +200,10 @@ const applyIntent = (intent: WorkerIntent): void => {
     }
 
     const overrides = { ...localState.nodeGroupOverrides }
+    const nodePositions = { ...localState.nodePositions }
     for (const nid of nodeIdsToMove) overrides[nid] = intent.groupId
-    localState = { ...localState, nodeGroupOverrides: overrides, groupNodeOrders: nextOrders }
+    for (const nid of nodeIdsToMove) delete nodePositions[nid]
+    localState = { ...localState, nodeGroupOverrides: overrides, nodePositions, groupNodeOrders: nextOrders }
     recompute()
     return
   }
@@ -227,9 +234,26 @@ const applyIntent = (intent: WorkerIntent): void => {
         },
       },
     }
+    const scene = buildSceneVM(worldState, localState)
+    const baseOrders: Record<string, readonly string[]> = {}
+    for (const [gid, g] of Object.entries(scene.groups ?? {})) {
+      baseOrders[gid] = [...g.nodeIds]
+    }
+    const nextOrders: Record<string, readonly string[]> = { ...baseOrders }
+    for (const [gid, order] of Object.entries(nextOrders)) {
+      nextOrders[gid] = order.filter((id) => id !== intent.nodeId)
+    }
+    const targetGroupId = parentActor.movementGroupId
+    const target = [...(nextOrders[targetGroupId] ?? [])]
+    const parentIndex = target.indexOf(intent.parentNodeId)
+    const insertIndex = parentIndex >= 0 ? parentIndex + 1 : target.length
+    target.splice(insertIndex, 0, intent.nodeId)
+    nextOrders[targetGroupId] = target
     localState = {
       ...localState,
       nodeGroupOverrides: { ...localState.nodeGroupOverrides, [intent.nodeId]: parentActor.movementGroupId },
+      groupNodeOrders: nextOrders,
+      nodePositions: Object.fromEntries(Object.entries(localState.nodePositions).filter(([id]) => id !== intent.nodeId)),
     }
     recompute()
     return
@@ -252,7 +276,11 @@ const applyIntent = (intent: WorkerIntent): void => {
         [intent.nodeId]: { ...actor, ownerActorId: undefined },
       },
     }
-    localState = { ...localState }
+    localState = {
+      ...localState,
+      nodeGroupOverrides: { ...localState.nodeGroupOverrides, [intent.nodeId]: null },
+      nodePositions: { ...localState.nodePositions, [intent.nodeId]: { x: intent.x, y: intent.y } },
+    }
     recompute()
     return
   }
@@ -314,6 +342,14 @@ const applyIntent = (intent: WorkerIntent): void => {
               ...entry,
               actorId: target.actorId,
               carryGroupId: target.carryGroupId,
+              zone: target.carryGroupId ? 'dropped' : 'stowed',
+              state: target.carryGroupId
+                ? { ...(entry.state ?? {}), dropped: true }
+                : (() => {
+                    const next = { ...(entry.state ?? {}) }
+                    delete next.dropped
+                    return Object.keys(next).length > 0 ? next : undefined
+                  })(),
             }
             worldState = {
               ...worldState,
@@ -337,6 +373,69 @@ const applyIntent = (intent: WorkerIntent): void => {
           }
         }
       }
+    } else if (localState.dropIntent && worldState && intent.x != null && intent.y != null) {
+      const { segmentIds, sourceNodeIds } = localState.dropIntent
+      const firstSourceNodeId = segmentIds[0] ? sourceNodeIds[segmentIds[0]] : null
+      const source = firstSourceNodeId ? parseNodeId(firstSourceNodeId) : null
+      if (source) {
+        const droppedGroupId = droppedGroupIdForActor(source.actorId)
+        if (!worldState.carryGroups[droppedGroupId]) {
+          worldState = {
+            ...worldState,
+            carryGroups: {
+              ...worldState.carryGroups,
+              [droppedGroupId]: {
+                id: droppedGroupId,
+                ownerActorId: source.actorId,
+                name: 'Ground',
+                dropped: true,
+              },
+            },
+          }
+        }
+
+        for (const segmentId of segmentIds) {
+          const sourceNodeId = sourceNodeIds[segmentId]
+          if (!sourceNodeId) continue
+          const parsedSource = parseNodeId(sourceNodeId)
+          const entryId = segmentIdToEntryId(segmentId)
+          const entry: InventoryEntry | undefined = worldState.inventoryEntries[entryId]
+          if (!entry) continue
+          const movedEntry: InventoryEntry = {
+            ...entry,
+            actorId: parsedSource.actorId,
+            carryGroupId: droppedGroupId,
+            zone: 'dropped',
+            state: { ...(entry.state ?? {}), dropped: true },
+          }
+          worldState = {
+            ...worldState,
+            inventoryEntries: {
+              ...worldState.inventoryEntries,
+              [entryId]: movedEntry,
+            },
+          }
+          const actor: Actor | undefined = worldState.actors[parsedSource.actorId]
+          if (actor && (actor.leftWieldingEntryId === entryId || actor.rightWieldingEntryId === entryId)) {
+            const nextActor: Actor = {
+              ...actor,
+              leftWieldingEntryId: actor.leftWieldingEntryId === entryId ? undefined : actor.leftWieldingEntryId,
+              rightWieldingEntryId: actor.rightWieldingEntryId === entryId ? undefined : actor.rightWieldingEntryId,
+            }
+            worldState = {
+              ...worldState,
+              actors: { ...worldState.actors, [actor.id]: nextActor },
+            }
+          }
+        }
+
+        const droppedNodeId = `${source.actorId}:dropped:${droppedGroupId}`
+        localState = {
+          ...localState,
+          nodeGroupOverrides: { ...localState.nodeGroupOverrides, [droppedNodeId]: null },
+          nodePositions: { ...localState.nodePositions, [droppedNodeId]: { x: intent.x, y: intent.y } },
+        }
+      }
     }
     localState = { ...localState, dropIntent: null }
     recompute()
@@ -352,19 +451,27 @@ const applyIntent = (intent: WorkerIntent): void => {
       const entryId = segmentIdToEntryId(segmentId)
       const entry = worldState.inventoryEntries[entryId]
       if (entry) {
-        const movedEntry = {
+        const movedEntry: InventoryEntry = {
           ...entry,
           actorId: target.actorId,
           carryGroupId: target.carryGroupId,
+          zone: target.carryGroupId ? 'dropped' : 'stowed',
+          state: target.carryGroupId
+            ? { ...(entry.state ?? {}), dropped: true }
+            : (() => {
+                const next = { ...(entry.state ?? {}) }
+                delete next.dropped
+                return Object.keys(next).length > 0 ? next : undefined
+              })(),
         }
         worldState = {
           ...worldState,
           inventoryEntries: {
-            ...worldState.inventoryEntries,
+            ...worldState!.inventoryEntries,
             [entryId]: movedEntry,
           },
         }
-        const actor = worldState.actors[source.actorId]
+        const actor = worldState!.actors[source.actorId]
         if (actor && (actor.leftWieldingEntryId === entryId || actor.rightWieldingEntryId === entryId)) {
           const nextActor: Actor = {
             ...actor,
@@ -373,7 +480,7 @@ const applyIntent = (intent: WorkerIntent): void => {
           }
           worldState = {
             ...worldState,
-            actors: { ...worldState.actors, [actor.id]: nextActor },
+            actors: { ...worldState!.actors, [actor.id]: nextActor },
           }
         }
       }
@@ -452,6 +559,81 @@ const applyIntent = (intent: WorkerIntent): void => {
         actors: { ...worldState.actors, [actor.id]: nextActor },
       }
     }
+    recompute()
+    return
+  }
+
+  if (intent.type === 'ADD_LABEL') {
+    const text = intent.text.trim()
+    if (text.length === 0) {
+      recompute()
+      return
+    }
+    const labelId = `label:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 7)}`
+    localState = {
+      ...localState,
+      labels: {
+        ...localState.labels,
+        [labelId]: { text, x: intent.x, y: intent.y },
+      },
+      selectedLabelId: labelId,
+    }
+    recompute()
+    return
+  }
+
+  if (intent.type === 'UPDATE_LABEL_TEXT') {
+    const existing = localState.labels[intent.labelId]
+    if (!existing) {
+      recompute()
+      return
+    }
+    localState = {
+      ...localState,
+      labels: {
+        ...localState.labels,
+        [intent.labelId]: {
+          ...existing,
+          text: intent.text.trim().length > 0 ? intent.text.trim() : existing.text,
+        },
+      },
+    }
+    recompute()
+    return
+  }
+
+  if (intent.type === 'MOVE_LABEL') {
+    const existing = localState.labels[intent.labelId]
+    if (!existing) return
+    localState = {
+      ...localState,
+      labels: {
+        ...localState.labels,
+        [intent.labelId]: { ...existing, x: intent.x, y: intent.y },
+      },
+    }
+    recompute()
+    return
+  }
+
+  if (intent.type === 'DELETE_LABEL') {
+    if (!localState.labels[intent.labelId]) {
+      recompute()
+      return
+    }
+    const labels = { ...localState.labels }
+    delete labels[intent.labelId]
+    localState = {
+      ...localState,
+      labels,
+      selectedLabelId: localState.selectedLabelId === intent.labelId ? null : localState.selectedLabelId,
+    }
+    recompute()
+    return
+  }
+
+  if (intent.type === 'SELECT_LABEL') {
+    localState = { ...localState, selectedLabelId: intent.labelId }
     recompute()
     return
   }

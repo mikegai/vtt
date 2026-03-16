@@ -44,6 +44,14 @@ export const applyDropIntentToState = (
       ...entry,
       actorId: target.actorId,
       carryGroupId: target.carryGroupId,
+      zone: target.carryGroupId ? 'dropped' : 'stowed',
+      state: target.carryGroupId
+        ? { ...(entry.state ?? {}), dropped: true }
+        : (() => {
+            const next = { ...(entry.state ?? {}) }
+            delete next.dropped
+            return Object.keys(next).length > 0 ? next : undefined
+          })(),
     }
 
     result = {

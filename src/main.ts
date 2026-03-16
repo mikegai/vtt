@@ -32,6 +32,20 @@ app.innerHTML = `
     <button type="button" class="category-btn" data-category="adventuring-equipment">Adventuring</button>
     <button type="button" class="category-btn category-btn-all" data-category="">All</button>
   </div>
+  <button id="left-drawer-toggle" class="left-drawer-toggle" aria-label="Open palette">Palette</button>
+  <div id="left-drawer" class="left-drawer">
+    <div class="left-drawer-header">
+      <h2>Palette</h2>
+      <button id="left-drawer-close" class="drawer-close" aria-label="Close palette">&times;</button>
+    </div>
+    <div class="left-drawer-body">
+      <section class="tool-panel">
+        <label class="tool-label">Drawing Tools</label>
+        <button id="tool-text" class="palette-tool-btn" type="button">Text</button>
+        <div class="palette-help">Choose Text, then click on the canvas to place a label.</div>
+      </section>
+    </div>
+  </div>
   <div id="canvas-host"></div>
 
   <button id="drawer-toggle" class="drawer-toggle" aria-label="Toggle tools panel">
@@ -62,6 +76,17 @@ app.innerHTML = `
         <label for="bulk-input" class="tool-label">Bulk Import</label>
         <textarea id="bulk-input" class="tool-textarea" rows="6" placeholder="Fighter: plate armor, shield, short sword&#10;&#10;Loot Pile - Crypt Chest: 2 sacks, 14 torches"></textarea>
         <div id="bulk-results" class="parsed-list"></div>
+      </section>
+
+      <section class="tool-panel">
+        <label for="label-edit-input" class="tool-label">Label Inspector</label>
+        <div id="label-editor" class="label-editor">
+          <input id="label-edit-input" class="tool-input" placeholder="Select a label to edit" />
+          <div class="label-editor-actions">
+            <button id="label-save-btn" class="tool-button" type="button">Save Text</button>
+            <button id="label-delete-btn" class="tool-button tool-button-danger" type="button">Delete Label</button>
+          </div>
+        </div>
       </section>
 
       <section class="tool-panel">
@@ -98,12 +123,18 @@ app.innerHTML = `
 `
 
 const canvasHost = document.querySelector<HTMLElement>('#canvas-host')!
+const leftDrawerEl = document.querySelector<HTMLElement>('#left-drawer')!
+const leftDrawerToggle = document.querySelector<HTMLElement>('#left-drawer-toggle')!
+const leftDrawerClose = document.querySelector<HTMLElement>('#left-drawer-close')!
+const toolTextBtnEl = document.querySelector<HTMLButtonElement>('#tool-text')!
 const drawerEl = document.querySelector<HTMLElement>('#drawer')!
 const drawerToggle = document.querySelector<HTMLElement>('#drawer-toggle')!
 const drawerClose = document.querySelector<HTMLElement>('#drawer-close')!
 
 drawerToggle.addEventListener('click', () => drawerEl.classList.toggle('open'))
 drawerClose.addEventListener('click', () => drawerEl.classList.remove('open'))
+leftDrawerToggle.addEventListener('click', () => leftDrawerEl.classList.toggle('open'))
+leftDrawerClose.addEventListener('click', () => leftDrawerEl.classList.remove('open'))
 
 const categoryBar = document.querySelector<HTMLElement>('#category-bar')!
 categoryBar.querySelectorAll<HTMLButtonElement>('.category-btn').forEach((btn) => {
@@ -126,6 +157,10 @@ const postToWorker = (message: MainToWorkerMessage): void => {
 }
 
 let currentScene: SceneVM | null = null
+const renderCanvasToolUI = (): void => {
+  toolTextBtnEl.classList.toggle('active', activeCanvasTool === 'text')
+  canvasHost.classList.toggle('tool-text-mode', activeCanvasTool === 'text')
+}
 
 const contextMenuEl = document.querySelector<HTMLElement>('#context-menu')!
 
@@ -283,8 +318,8 @@ const pixiAdapter = new PixiBoardAdapter(canvasHost, {
   onNestNodeUnder(nodeId, parentNodeId) {
     postToWorker({ type: 'INTENT', intent: { type: 'NEST_NODE_UNDER', nodeId, parentNodeId } })
   },
-  onMoveNodeToRoot(nodeId) {
-    postToWorker({ type: 'INTENT', intent: { type: 'MOVE_NODE_TO_ROOT', nodeId } })
+  onMoveNodeToRoot(nodeId, x, y) {
+    postToWorker({ type: 'INTENT', intent: { type: 'MOVE_NODE_TO_ROOT', nodeId, x, y } })
   },
   onZoomChange(_zoom) {},
   onDragSegmentStart(segmentIds) {
@@ -293,8 +328,24 @@ const pixiAdapter = new PixiBoardAdapter(canvasHost, {
   onDragSegmentUpdate(targetNodeId) {
     postToWorker({ type: 'INTENT', intent: { type: 'DRAG_SEGMENT_UPDATE', targetNodeId } })
   },
-  onDragSegmentEnd(targetNodeId) {
-    postToWorker({ type: 'INTENT', intent: { type: 'DRAG_SEGMENT_END', targetNodeId } })
+  onDragSegmentEnd(targetNodeId, x, y) {
+    postToWorker({ type: 'INTENT', intent: { type: 'DRAG_SEGMENT_END', targetNodeId, x, y } })
+  },
+  onMoveLabel(labelId, x, y) {
+    postToWorker({ type: 'INTENT', intent: { type: 'MOVE_LABEL', labelId, x, y } })
+  },
+  onSelectLabel(labelId) {
+    selectedLabelId = labelId
+    postToWorker({ type: 'INTENT', intent: { type: 'SELECT_LABEL', labelId } })
+    syncLabelEditor()
+  },
+  onCanvasWorldClick(x, y) {
+    if (activeCanvasTool !== 'text') return false
+    focusLabelEditorOnSelect = true
+    postToWorker({ type: 'INTENT', intent: { type: 'ADD_LABEL', text: 'Text', x, y } })
+    activeCanvasTool = 'select'
+    renderCanvasToolUI()
+    return true
   },
   onContextMenu(segmentId, nodeId, clientX, clientY) {
     const segment = currentScene
@@ -329,12 +380,16 @@ vmWorker.onmessage = (event: MessageEvent<WorkerToMainMessage>) => {
   const msg = event.data
   if (msg.type === 'SCENE_INIT') {
     currentScene = msg.scene
+    selectedLabelId = msg.scene.selectedLabelId ?? null
     pixiAdapter.applyInit(msg.scene)
+    syncLabelEditor()
     return
   }
   if (msg.type === 'SCENE_PATCHES') {
     currentScene = msg.scene
+    selectedLabelId = msg.scene.selectedLabelId ?? null
     pixiAdapter.applyPatches(msg.patches, msg.scene)
+    syncLabelEditor()
     return
   }
   if (msg.type === 'LOG') {
@@ -350,8 +405,14 @@ const parseInputEl = document.querySelector<HTMLTextAreaElement>('#parse-input')
 const parseResultsEl = document.querySelector<HTMLElement>('#parse-results')!
 const bulkInputEl = document.querySelector<HTMLTextAreaElement>('#bulk-input')!
 const bulkResultsEl = document.querySelector<HTMLElement>('#bulk-results')!
+const labelEditInputEl = document.querySelector<HTMLInputElement>('#label-edit-input')!
+const labelSaveBtnEl = document.querySelector<HTMLButtonElement>('#label-save-btn')!
+const labelDeleteBtnEl = document.querySelector<HTMLButtonElement>('#label-delete-btn')!
 const labelMinVisiblePxEl = document.querySelector<HTMLSelectElement>('#label-min-visible-px')!
 const stonesPerRowEl = document.querySelector<HTMLSelectElement>('#stones-per-row')!
+let selectedLabelId: string | null = null
+let activeCanvasTool: 'select' | 'text' = 'select'
+let focusLabelEditorOnSelect = false
 
 const initialStonesPerRow = Number(stonesPerRowEl.value ?? 25)
 pixiAdapter.setStonesPerRow(initialStonesPerRow)
@@ -494,3 +555,60 @@ stonesPerRowEl.addEventListener('change', () => {
   pixiAdapter.setStonesPerRow(v)
   postToWorker({ type: 'SET_STONES_PER_ROW', stonesPerRow: v })
 })
+
+const syncLabelEditor = (): void => {
+  const selected = selectedLabelId && currentScene ? currentScene.labels[selectedLabelId] : null
+  if (selected) {
+    labelEditInputEl.value = selected.text
+    labelEditInputEl.disabled = false
+    labelSaveBtnEl.disabled = false
+    labelDeleteBtnEl.disabled = false
+    if (focusLabelEditorOnSelect) {
+      focusLabelEditorOnSelect = false
+      labelEditInputEl.focus()
+      labelEditInputEl.select()
+    }
+  } else {
+    labelEditInputEl.value = ''
+    labelEditInputEl.disabled = true
+    labelSaveBtnEl.disabled = true
+    labelDeleteBtnEl.disabled = true
+    focusLabelEditorOnSelect = false
+  }
+}
+
+labelSaveBtnEl.addEventListener('click', () => {
+  if (!selectedLabelId) return
+  const text = labelEditInputEl.value.trim()
+  if (!text) return
+  postToWorker({ type: 'INTENT', intent: { type: 'UPDATE_LABEL_TEXT', labelId: selectedLabelId, text } })
+})
+
+labelDeleteBtnEl.addEventListener('click', () => {
+  if (!selectedLabelId) return
+  postToWorker({ type: 'INTENT', intent: { type: 'DELETE_LABEL', labelId: selectedLabelId } })
+  selectedLabelId = null
+  syncLabelEditor()
+})
+
+toolTextBtnEl.addEventListener('click', () => {
+  activeCanvasTool = activeCanvasTool === 'text' ? 'select' : 'text'
+  renderCanvasToolUI()
+})
+
+window.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && activeCanvasTool === 'text') {
+    activeCanvasTool = 'select'
+    renderCanvasToolUI()
+  }
+})
+
+labelEditInputEl.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') {
+    event.preventDefault()
+    labelSaveBtnEl.click()
+  }
+})
+
+renderCanvasToolUI()
+syncLabelEditor()

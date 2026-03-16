@@ -26,7 +26,7 @@ export type SceneNodeVM = {
   readonly id: string
   readonly rowId: string
   readonly actorId: string
-  readonly groupId: string
+  readonly groupId: string | null
   /** Parent node id when nested (one-level deep). */
   readonly parentNodeId?: string
   readonly actorKind: ActorKind
@@ -48,6 +48,13 @@ export type SceneNodeVM = {
   readonly segments: readonly SceneSegmentVM[]
 }
 
+export type SceneLabelVM = {
+  readonly id: string
+  readonly text: string
+  readonly x: number
+  readonly y: number
+}
+
 export type SceneGroupVM = {
   readonly id: string
   readonly title: string
@@ -65,13 +72,15 @@ export type SceneVM = {
   readonly selectedSegmentIds: readonly string[]
   readonly nodes: Record<string, SceneNodeVM>
   readonly groups: Record<string, SceneGroupVM>
+  readonly labels: Record<string, SceneLabelVM>
+  readonly selectedLabelId: string | null
 }
 
 export type ScenePatch =
   | { readonly type: 'ADD_NODE'; readonly node: SceneNodeVM }
   | { readonly type: 'REMOVE_NODE'; readonly nodeId: string }
   | { readonly type: 'UPDATE_NODE'; readonly node: SceneNodeVM }
-  | { readonly type: 'UPDATE_META'; readonly partyPaceText: string; readonly hoveredSegmentId: string | null; readonly filterCategory: ItemCategory | null; readonly selectedSegmentIds: readonly string[]; readonly groups: Record<string, SceneGroupVM> }
+  | { readonly type: 'UPDATE_META'; readonly partyPaceText: string; readonly hoveredSegmentId: string | null; readonly filterCategory: ItemCategory | null; readonly selectedSegmentIds: readonly string[]; readonly groups: Record<string, SceneGroupVM>; readonly labels: Record<string, SceneLabelVM>; readonly selectedLabelId: string | null }
 
 export type DropIntent = {
   readonly segmentIds: readonly string[]
@@ -89,13 +98,18 @@ export type WorkerIntent =
   | { readonly type: 'MOVE_GROUP'; readonly groupId: string; readonly x: number; readonly y: number }
   | { readonly type: 'MOVE_NODE_TO_GROUP_INDEX'; readonly nodeId: string; readonly groupId: string; readonly index: number }
   | { readonly type: 'NEST_NODE_UNDER'; readonly nodeId: string; readonly parentNodeId: string }
-  | { readonly type: 'MOVE_NODE_TO_ROOT'; readonly nodeId: string }
+  | { readonly type: 'MOVE_NODE_TO_ROOT'; readonly nodeId: string; readonly x: number; readonly y: number }
   | { readonly type: 'DRAG_SEGMENT_START'; readonly segmentIds: readonly string[] }
   | { readonly type: 'DRAG_SEGMENT_UPDATE'; readonly targetNodeId: string | null }
-  | { readonly type: 'DRAG_SEGMENT_END'; readonly targetNodeId: string | null }
+  | { readonly type: 'DRAG_SEGMENT_END'; readonly targetNodeId: string | null; readonly x?: number; readonly y?: number }
   | { readonly type: 'MOVE_ENTRY_TO'; readonly segmentId: string; readonly sourceNodeId: string; readonly targetNodeId: string }
   | { readonly type: 'SET_WIELD'; readonly segmentId: string; readonly wield: WieldGrip }
   | { readonly type: 'UNWIELD'; readonly segmentId: string }
+  | { readonly type: 'ADD_LABEL'; readonly text: string; readonly x: number; readonly y: number }
+  | { readonly type: 'UPDATE_LABEL_TEXT'; readonly labelId: string; readonly text: string }
+  | { readonly type: 'MOVE_LABEL'; readonly labelId: string; readonly x: number; readonly y: number }
+  | { readonly type: 'DELETE_LABEL'; readonly labelId: string }
+  | { readonly type: 'SELECT_LABEL'; readonly labelId: string | null }
   | { readonly type: 'SET_WORLD_STATE'; readonly worldState: CanonicalState }
 
 export type MainToWorkerMessage =
