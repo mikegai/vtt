@@ -156,6 +156,18 @@ const applyIntent = (intent: WorkerIntent): void => {
     return
   }
 
+  if (intent.type === 'MOVE_NODES') {
+    localState = {
+      ...localState,
+      nodePositions: {
+        ...localState.nodePositions,
+        ...intent.positions,
+      },
+    }
+    recompute()
+    return
+  }
+
   if (intent.type === 'DRAG_SEGMENT_START') {
     if (!worldState || intent.segmentIds.length === 0) {
       recompute()

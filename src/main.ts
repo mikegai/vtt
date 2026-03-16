@@ -277,6 +277,9 @@ const pixiAdapter = new PixiBoardAdapter(canvasHost, {
   onMoveNode(nodeId, x, y) {
     postToWorker({ type: 'INTENT', intent: { type: 'MOVE_NODE', nodeId, x, y } })
   },
+  onMoveNodes(positions) {
+    postToWorker({ type: 'INTENT', intent: { type: 'MOVE_NODES', positions } })
+  },
   onZoomChange(_zoom) {},
   onDragSegmentStart(segmentIds) {
     postToWorker({ type: 'INTENT', intent: { type: 'DRAG_SEGMENT_START', segmentIds } })

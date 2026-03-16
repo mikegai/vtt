@@ -4,7 +4,7 @@ import { applyDropIntentToState } from '../vm/drop-intent'
 import { buildBoardVM } from '../vm/vm'
 import type { CanonicalState } from '../domain/types'
 import type { DropIntent } from './protocol'
-import type { SceneNodeVM, SceneVM } from './protocol'
+import type { SceneGroupVM, SceneNodeVM, SceneVM } from './protocol'
 
 export type WorkerLocalState = {
   readonly hoveredSegmentId: string | null
@@ -38,6 +38,9 @@ const nodeWidthForSlots = (slotCount: number, stonesPerRow: number): number =>
 
 const INDENT_X = 40
 const NODE_ROW_GAP = 20
+const GROUP_PADDING_X = 22
+const GROUP_PADDING_TOP = 44
+const GROUP_PADDING_BOTTOM = 24
 
 export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocalState): SceneVM => {
   const effectiveState = localState.dropIntent
@@ -149,12 +152,51 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
     }
   }
 
+  const groupsById = new Map<string, { id: string; title: string; nodeIds: string[] }>()
+  for (const node of Object.values(nodes)) {
+    const actor = worldState.actors[node.actorId]
+    const groupId = actor?.movementGroupId ?? 'ungrouped'
+    const groupTitle = worldState.movementGroups[groupId]?.name ?? groupId
+    const existing = groupsById.get(groupId)
+    if (existing) {
+      existing.nodeIds.push(node.id)
+    } else {
+      groupsById.set(groupId, { id: groupId, title: groupTitle, nodeIds: [node.id] })
+    }
+  }
+  const groups: Record<string, SceneGroupVM> = {}
+  for (const group of groupsById.values()) {
+    let minX = Infinity
+    let minY = Infinity
+    let maxX = -Infinity
+    let maxY = -Infinity
+    for (const nodeId of group.nodeIds) {
+      const node = nodes[nodeId]
+      if (!node) continue
+      minX = Math.min(minX, node.x)
+      minY = Math.min(minY, node.y)
+      maxX = Math.max(maxX, node.x + node.width)
+      maxY = Math.max(maxY, node.y + node.height)
+    }
+    if (!Number.isFinite(minX) || !Number.isFinite(minY)) continue
+    groups[group.id] = {
+      id: group.id,
+      title: group.title,
+      nodeIds: group.nodeIds,
+      x: minX - GROUP_PADDING_X,
+      y: minY - GROUP_PADDING_TOP,
+      width: (maxX - minX) + GROUP_PADDING_X * 2,
+      height: (maxY - minY) + GROUP_PADDING_TOP + GROUP_PADDING_BOTTOM,
+    }
+  }
+
   return {
     partyPaceText: `${board.partyPace.explorationFeet}'/${board.partyPace.combatFeet}'/${board.partyPace.runningFeet}' • ${board.partyPace.milesPerDay} mi/day`,
     hoveredSegmentId: localState.hoveredSegmentId,
     filterCategory: localState.filterCategory,
     selectedSegmentIds: localState.selectedSegmentIds,
     nodes,
+    groups,
   }
 }
 

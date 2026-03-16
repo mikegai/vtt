@@ -12,6 +12,7 @@ export const diffSceneVM = (prev: SceneVM | null, next: SceneVM): ScenePatch[] =
         hoveredSegmentId: next.hoveredSegmentId,
         filterCategory: next.filterCategory ?? null,
         selectedSegmentIds: next.selectedSegmentIds ?? [],
+        groups: next.groups,
       },
     ]
   }
@@ -43,6 +44,7 @@ export const diffSceneVM = (prev: SceneVM | null, next: SceneVM): ScenePatch[] =
     prev.partyPaceText !== next.partyPaceText ||
     prev.hoveredSegmentId !== next.hoveredSegmentId ||
     prev.filterCategory !== next.filterCategory ||
+    JSON.stringify(prev.groups) !== JSON.stringify(next.groups) ||
     (prev.selectedSegmentIds?.length ?? 0) !== (next.selectedSegmentIds?.length ?? 0) ||
     (prev.selectedSegmentIds ?? []).some((id, i) => (next.selectedSegmentIds ?? [])[i] !== id)
   ) {
@@ -52,6 +54,7 @@ export const diffSceneVM = (prev: SceneVM | null, next: SceneVM): ScenePatch[] =
       hoveredSegmentId: next.hoveredSegmentId,
       filterCategory: next.filterCategory,
       selectedSegmentIds: next.selectedSegmentIds,
+      groups: next.groups,
     })
   }
 

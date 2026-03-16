@@ -45,19 +45,30 @@ export type SceneNodeVM = {
   readonly segments: readonly SceneSegmentVM[]
 }
 
+export type SceneGroupVM = {
+  readonly id: string
+  readonly title: string
+  readonly nodeIds: readonly string[]
+  readonly x: number
+  readonly y: number
+  readonly width: number
+  readonly height: number
+}
+
 export type SceneVM = {
   readonly partyPaceText: string
   readonly hoveredSegmentId: string | null
   readonly filterCategory: ItemCategory | null
   readonly selectedSegmentIds: readonly string[]
   readonly nodes: Record<string, SceneNodeVM>
+  readonly groups: Record<string, SceneGroupVM>
 }
 
 export type ScenePatch =
   | { readonly type: 'ADD_NODE'; readonly node: SceneNodeVM }
   | { readonly type: 'REMOVE_NODE'; readonly nodeId: string }
   | { readonly type: 'UPDATE_NODE'; readonly node: SceneNodeVM }
-  | { readonly type: 'UPDATE_META'; readonly partyPaceText: string; readonly hoveredSegmentId: string | null; readonly filterCategory: ItemCategory | null; readonly selectedSegmentIds: readonly string[] }
+  | { readonly type: 'UPDATE_META'; readonly partyPaceText: string; readonly hoveredSegmentId: string | null; readonly filterCategory: ItemCategory | null; readonly selectedSegmentIds: readonly string[]; readonly groups: Record<string, SceneGroupVM> }
 
 export type DropIntent = {
   readonly segmentIds: readonly string[]
@@ -73,6 +84,7 @@ export type WorkerIntent =
   | { readonly type: 'SELECT_SEGMENTS_REMOVE'; readonly segmentIds: readonly string[] }
   | { readonly type: 'SELECT_ALL_OF_TYPE'; readonly itemDefId: string; readonly nodeId?: string }
   | { readonly type: 'MOVE_NODE'; readonly nodeId: string; readonly x: number; readonly y: number }
+  | { readonly type: 'MOVE_NODES'; readonly positions: Record<string, { x: number; y: number }> }
   | { readonly type: 'DRAG_SEGMENT_START'; readonly segmentIds: readonly string[] }
   | { readonly type: 'DRAG_SEGMENT_UPDATE'; readonly targetNodeId: string | null }
   | { readonly type: 'DRAG_SEGMENT_END'; readonly targetNodeId: string | null }
