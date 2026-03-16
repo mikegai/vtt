@@ -1,8 +1,10 @@
 /// <reference lib="webworker" />
 
-import type { Actor, CanonicalState } from '../domain/types'
+import type { Actor, CanonicalState, InventoryEntry } from '../domain/types'
 import { getWieldOptions, isTwoHandedOnly } from '../domain/weapon-metadata'
 import { parseNodeId, segmentIdToEntryId } from '../vm/drop-intent'
+import type { ActorRowVM } from '../vm/vm-types'
+import { buildBoardVM } from '../vm/vm'
 import { diffSceneVM } from './scene-diff'
 import { buildSceneVM, type WorkerLocalState } from './scene-vm'
 import type { MainToWorkerMessage, SceneVM, WorkerIntent, WorkerToMainMessage } from './protocol'
@@ -20,6 +22,17 @@ let previousScene: SceneVM | null = null
 
 const post = (message: WorkerToMainMessage): void => {
   self.postMessage(message)
+}
+
+const buildSegmentIdToNodeId = (state: CanonicalState): Record<string, string> => {
+  const board = buildBoardVM(state)
+  const sourceNodeIds: Record<string, string> = {}
+  const visit = (row: ActorRowVM): void => {
+    for (const seg of row.segments) sourceNodeIds[seg.id] = row.id
+    for (const child of row.childRows) visit(child)
+  }
+  for (const row of board.rows) visit(row)
+  return sourceNodeIds
 }
 
 /** Migrate legacy entry.state.wield to actor.leftWieldingEntryId/rightWieldingEntryId. */
@@ -144,12 +157,23 @@ const applyIntent = (intent: WorkerIntent): void => {
   }
 
   if (intent.type === 'DRAG_SEGMENT_START') {
+    if (!worldState || intent.segmentIds.length === 0) {
+      recompute()
+      return
+    }
+    const segToNode = buildSegmentIdToNodeId(worldState)
+    const firstSource = segToNode[intent.segmentIds[0]]
+    const sourceNodeIds: Record<string, string> = {}
+    for (const id of intent.segmentIds) {
+      const nodeId = segToNode[id]
+      if (nodeId) sourceNodeIds[id] = nodeId
+    }
     localState = {
       ...localState,
       dropIntent: {
-        segmentId: intent.segmentId,
-        sourceNodeId: intent.sourceNodeId,
-        targetNodeId: intent.sourceNodeId,
+        segmentIds: intent.segmentIds,
+        sourceNodeIds,
+        targetNodeId: firstSource ?? intent.segmentIds[0],
       },
     }
     recompute()
@@ -158,11 +182,14 @@ const applyIntent = (intent: WorkerIntent): void => {
 
   if (intent.type === 'DRAG_SEGMENT_UPDATE') {
     if (!localState.dropIntent) return
+    const firstSource = localState.dropIntent.segmentIds[0]
+      ? localState.dropIntent.sourceNodeIds[localState.dropIntent.segmentIds[0]]
+      : null
     localState = {
       ...localState,
       dropIntent: {
         ...localState.dropIntent,
-        targetNodeId: intent.targetNodeId ?? localState.dropIntent.sourceNodeId,
+        targetNodeId: intent.targetNodeId ?? firstSource ?? localState.dropIntent.targetNodeId,
       },
     }
     recompute()
@@ -171,35 +198,40 @@ const applyIntent = (intent: WorkerIntent): void => {
 
   if (intent.type === 'DRAG_SEGMENT_END') {
     if (localState.dropIntent && intent.targetNodeId) {
-      const { segmentId, sourceNodeId, targetNodeId } = localState.dropIntent
-      const source = parseNodeId(sourceNodeId)
+      const { segmentIds, sourceNodeIds, targetNodeId } = localState.dropIntent
       const target = parseNodeId(targetNodeId)
-      if (worldState && (source.actorId !== target.actorId || source.carryGroupId !== target.carryGroupId)) {
-        const entryId = segmentIdToEntryId(segmentId)
-        const entry = worldState.inventoryEntries[entryId]
-        if (entry) {
-          const movedEntry = {
-            ...entry,
-            actorId: target.actorId,
-            carryGroupId: target.carryGroupId,
-          }
-          worldState = {
-            ...worldState,
-            inventoryEntries: {
-              ...worldState.inventoryEntries,
-              [entryId]: movedEntry,
-            },
-          }
-          const actor = worldState.actors[source.actorId]
-          if (actor && (actor.leftWieldingEntryId === entryId || actor.rightWieldingEntryId === entryId)) {
-            const nextActor: Actor = {
-              ...actor,
-              leftWieldingEntryId: actor.leftWieldingEntryId === entryId ? undefined : actor.leftWieldingEntryId,
-              rightWieldingEntryId: actor.rightWieldingEntryId === entryId ? undefined : actor.rightWieldingEntryId,
+      if (worldState) {
+        for (const segmentId of segmentIds) {
+          const sourceNodeId = sourceNodeIds[segmentId]
+          if (!sourceNodeId) continue
+          const source = parseNodeId(sourceNodeId)
+          if (source.actorId === target.actorId && source.carryGroupId === target.carryGroupId) continue
+          const entryId = segmentIdToEntryId(segmentId)
+          const entry: InventoryEntry | undefined = worldState.inventoryEntries[entryId]
+          if (entry) {
+            const movedEntry: InventoryEntry = {
+              ...entry,
+              actorId: target.actorId,
+              carryGroupId: target.carryGroupId,
             }
             worldState = {
               ...worldState,
-              actors: { ...worldState.actors, [actor.id]: nextActor },
+              inventoryEntries: {
+                ...worldState.inventoryEntries,
+                [entryId]: movedEntry,
+              },
+            }
+            const actor: Actor | undefined = worldState.actors[source.actorId]
+            if (actor && (actor.leftWieldingEntryId === entryId || actor.rightWieldingEntryId === entryId)) {
+              const nextActor: Actor = {
+                ...actor,
+                leftWieldingEntryId: actor.leftWieldingEntryId === entryId ? undefined : actor.leftWieldingEntryId,
+                rightWieldingEntryId: actor.rightWieldingEntryId === entryId ? undefined : actor.rightWieldingEntryId,
+              }
+              worldState = {
+                ...worldState,
+                actors: { ...worldState.actors, [actor.id]: nextActor },
+              }
             }
           }
         }

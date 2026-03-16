@@ -9,7 +9,7 @@ type AdapterHandlers = {
   onHoverSegment(segmentId: string | null): void
   onMoveNode(nodeId: string, x: number, y: number): void
   onZoomChange(zoom: number): void
-  onDragSegmentStart(segmentId: string, sourceNodeId: string): void
+  onDragSegmentStart(segmentIds: string[]): void
   onDragSegmentUpdate(targetNodeId: string | null): void
   onDragSegmentEnd(targetNodeId: string | null): void
   onContextMenu(segmentId: string, nodeId: string, clientX: number, clientY: number): void
@@ -30,8 +30,9 @@ type NodeView = {
 }
 
 type SegmentDragState = {
-  readonly segment: SceneSegmentVM
-  readonly sourceNodeId: string
+  readonly segments: readonly SceneSegmentVM[]
+  readonly segmentIds: readonly string[]
+  readonly sourceNodeIds: Readonly<Record<string, string>>
   readonly proxy: Container
   readonly lineLayer: Container
   snap: { nodeId: string; startSixth: number } | null
@@ -1157,66 +1158,105 @@ export class PixiBoardAdapter {
     return { nodeId: targetNodeId, startSixth }
   }
 
-  private buildDragProxy(segment: SceneSegmentVM): Container {
+  private buildDragProxy(segments: readonly SceneSegmentVM[]): Container {
     const proxy = new Container()
-    const color = segment.isOverflow ? 0xa83f62 : isMultiStone(segment) ? 0x61b5ff : 0x7bd7cf
-    const alpha = 0.75
+    const ITEM_GAP = 4
+    let offsetY = 0
 
-    if (isMultiStone(segment)) {
-      const w = (segment.sizeSixths / 6) * (STONE_W + STONE_GAP) - STONE_GAP
-      const rect = new Graphics()
-      rect.roundRect(0, 0, w, STONE_H, 6)
-      rect.fill({ color, alpha })
-      rect.stroke({ width: 1.5, color: 0xd3ebff, alpha: 0.9 })
-      proxy.addChild(rect)
-    } else {
-      drawGhostCells(proxy, 0, 0, 0, segment.sizeSixths, color, alpha)
-      const groups = groupSixthsByStone(0, segment.sizeSixths)
-      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
-      groups.forEach((g) => {
-        const gy = stoneToY(g.stone) + g.startRow * CELL_H
-        minX = Math.min(minX, stoneToX(g.stone))
-        minY = Math.min(minY, gy)
-        maxX = Math.max(maxX, stoneToX(g.stone) + STONE_W)
-        maxY = Math.max(maxY, gy + g.count * CELL_H)
-      })
-      const stroke = new Graphics()
-      stroke.roundRect(minX, minY, maxX - minX, maxY - minY, 4)
-      stroke.stroke({ width: 1.5, color: 0xd3ebff, alpha: 0.85 })
-      proxy.addChild(stroke)
+    for (const segment of segments) {
+      const color = segment.isOverflow ? 0xa83f62 : isMultiStone(segment) ? 0x61b5ff : 0x7bd7cf
+      const alpha = 0.75
+
+      if (isMultiStone(segment)) {
+        const w = (segment.sizeSixths / 6) * (STONE_W + STONE_GAP) - STONE_GAP
+        const rect = new Graphics()
+        rect.roundRect(0, offsetY, w, STONE_H, 6)
+        rect.fill({ color, alpha })
+        rect.stroke({ width: 1.5, color: 0xd3ebff, alpha: 0.9 })
+        proxy.addChild(rect)
+        offsetY += STONE_H + ITEM_GAP
+      } else {
+        drawGhostCells(proxy, 0, offsetY, 0, segment.sizeSixths, color, alpha)
+        const groups = groupSixthsByStone(0, segment.sizeSixths)
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+        groups.forEach((g) => {
+          const gy = offsetY + stoneToY(g.stone) + g.startRow * CELL_H
+          minX = Math.min(minX, stoneToX(g.stone))
+          minY = Math.min(minY, gy)
+          maxX = Math.max(maxX, stoneToX(g.stone) + STONE_W)
+          maxY = Math.max(maxY, gy + g.count * CELL_H)
+        })
+        const stroke = new Graphics()
+        stroke.roundRect(minX, minY, maxX - minX, maxY - minY, 4)
+        stroke.stroke({ width: 1.5, color: 0xd3ebff, alpha: 0.85 })
+        proxy.addChild(stroke)
+        offsetY += (maxY - minY) + ITEM_GAP
+      }
     }
 
+    const b = proxy.getBounds()
+    proxy.pivot.set(b.width / 2, b.height / 2)
     return proxy
   }
 
-  private getDropTargetCenter(): { x: number; y: number } | null {
-    if (!this.segmentDrag?.snap || !this.currentScene) return null
+  private getDropTargetCenters(): { x: number; y: number }[] {
+    const centers: { x: number; y: number }[] = []
+    if (!this.segmentDrag?.snap || !this.currentScene || this.segmentDrag.segments.length === 0) return centers
     const { nodeId, startSixth } = this.segmentDrag.snap
     const node = this.currentScene.nodes[nodeId]
-    if (!node) return null
-    const previewSeg = node.segments.find((s) => s.isDropPreview === true)
-    if (previewSeg) return segmentCenterInNode(previewSeg, node.x, node.y)
-    const seg = this.segmentDrag.segment
-    const isSameAsSource = nodeId === this.segmentDrag.sourceNodeId
-    if (isSameAsSource) {
-      const actualSeg = node.segments.find((s) => s.id === seg.id)
-      if (actualSeg) return segmentCenterInNode(actualSeg, node.x, node.y)
+    if (!node) return centers
+    const previewSegs = node.segments.filter((s) => s.isDropPreview === true)
+    if (previewSegs.length > 0) {
+      previewSegs.forEach((s) => centers.push(segmentCenterInNode(s, node.x, node.y)))
+      return centers
     }
-    return segmentCenterInNode(
-      { ...seg, startSixth, sizeSixths: seg.sizeSixths },
-      node.x,
-      node.y,
-    )
+    let cursorSixth = startSixth
+    for (const seg of this.segmentDrag.segments) {
+      const isSameAsSource = nodeId === this.segmentDrag.sourceNodeIds[seg.id]
+      if (isSameAsSource) {
+        const actualSeg = node.segments.find((s) => s.id === seg.id)
+        if (actualSeg) {
+          centers.push(segmentCenterInNode(actualSeg, node.x, node.y))
+          cursorSixth = actualSeg.startSixth + actualSeg.sizeSixths
+        } else {
+          centers.push(segmentCenterInNode({ ...seg, startSixth: cursorSixth, sizeSixths: seg.sizeSixths }, node.x, node.y))
+          cursorSixth += seg.sizeSixths
+        }
+      } else {
+        centers.push(segmentCenterInNode({ ...seg, startSixth: cursorSixth, sizeSixths: seg.sizeSixths }, node.x, node.y))
+        cursorSixth += seg.sizeSixths
+      }
+    }
+    return centers
   }
 
-  private beginSegmentDrag(segment: SceneSegmentVM, sourceNodeId: string, globalX: number, globalY: number): void {
+  private beginSegmentDrag(segment: SceneSegmentVM, _sourceNodeId: string, globalX: number, globalY: number): void {
     if (this.segmentDrag) this.endSegmentDrag()
-    const proxy = this.buildDragProxy(segment)
+    const selectedIds = this.currentScene?.selectedSegmentIds ?? []
+    const segmentIds = selectedIds.includes(segment.id) && selectedIds.length > 1
+      ? [...selectedIds]
+      : [segment.id]
+    const segmentById = new Map<string, SceneSegmentVM>()
+    const sourceNodeIds: Record<string, string> = {}
+    if (!this.currentScene) return
+    for (const node of Object.values(this.currentScene.nodes)) {
+      for (const seg of node.segments) {
+        if (segmentIds.includes(seg.id)) {
+          segmentById.set(seg.id, seg)
+          sourceNodeIds[seg.id] = node.id
+        }
+      }
+    }
+    const segments: SceneSegmentVM[] = segmentIds
+      .map((id) => segmentById.get(id))
+      .filter((seg): seg is SceneSegmentVM => seg != null)
+    if (segments.length === 0) return
+    const proxy = this.buildDragProxy(segments)
     const lineLayer = new Container()
     this.worldLayer.addChild(lineLayer)
     this.worldLayer.addChild(proxy)
-    this.segmentDrag = { segment, sourceNodeId, proxy, lineLayer, snap: null }
-    this.handlers.onDragSegmentStart(segment.id, sourceNodeId)
+    this.segmentDrag = { segments, segmentIds, sourceNodeIds, proxy, lineLayer, snap: null }
+    this.handlers.onDragSegmentStart(segmentIds)
     this.updateSegmentDrag(globalX, globalY)
   }
 
@@ -1226,18 +1266,18 @@ export class PixiBoardAdapter {
     const targetNodeId = this.findDropTarget(world.x, world.y)
     this.handlers.onDragSegmentUpdate(targetNodeId ?? null)
 
-    const snap = this.findSnapTarget(world.x, world.y, this.segmentDrag.segment)
+    const snap = this.findSnapTarget(world.x, world.y, this.segmentDrag.segments[0])
     this.segmentDrag.snap = snap
 
+    this.segmentDrag.proxy.position.set(world.x, world.y)
     const proxyCenterX = world.x
-    const proxyCenterY = world.y - STONE_H / 2
-    this.segmentDrag.proxy.position.set(proxyCenterX, proxyCenterY)
+    const proxyCenterY = world.y
 
     this.segmentDrag.lineLayer.removeChildren()
-    const targetCenter = this.getDropTargetCenter()
-    if (targetCenter) {
+    const targetCenters = this.getDropTargetCenters()
+    for (const target of targetCenters) {
       const lineG = new Graphics()
-      drawArrowLine(lineG, proxyCenterX, proxyCenterY, targetCenter.x, targetCenter.y)
+      drawArrowLine(lineG, proxyCenterX, proxyCenterY, target.x, target.y)
       this.segmentDrag.lineLayer.addChild(lineG)
     }
   }
@@ -1247,7 +1287,8 @@ export class PixiBoardAdapter {
     this.lastDragEndTime = Date.now()
     const world = event ? this.screenToWorld(event.clientX, event.clientY) : null
     const targetNodeId = world ? this.findDropTarget(world.x, world.y) : this.segmentDrag.snap?.nodeId ?? null
-    const effectiveTarget = targetNodeId && targetNodeId !== this.segmentDrag.sourceNodeId ? targetNodeId : null
+    const anyDifferentSource = this.segmentDrag.segmentIds.some((id) => this.segmentDrag!.sourceNodeIds[id] !== targetNodeId)
+    const effectiveTarget = targetNodeId && anyDifferentSource ? targetNodeId : null
     this.handlers.onDragSegmentEnd(effectiveTarget)
     this.worldLayer.removeChild(this.segmentDrag.lineLayer)
     this.worldLayer.removeChild(this.segmentDrag.proxy)

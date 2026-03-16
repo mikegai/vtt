@@ -19,33 +19,40 @@ export const parseNodeId = (nodeId: string): { actorId: string; carryGroupId?: s
   return { actorId: parts[0] ?? nodeId }
 }
 
-/** Create a pseudo CanonicalState with the dragged entry moved to the target. */
+/** Create a pseudo CanonicalState with the dragged entries moved to the target. */
 export const applyDropIntentToState = (
   state: CanonicalState,
   dropIntent: DropIntent,
 ): CanonicalState => {
-  const entryId = segmentIdToEntryId(dropIntent.segmentId)
-  const entry = state.inventoryEntries[entryId]
-  if (!entry) return state
+  let result = state
+  for (const segmentId of dropIntent.segmentIds) {
+    const entryId = segmentIdToEntryId(segmentId)
+    const entry = result.inventoryEntries[entryId]
+    if (!entry) continue
 
-  const target = parseNodeId(dropIntent.targetNodeId)
-  const source = parseNodeId(dropIntent.sourceNodeId)
+    const sourceNodeId = dropIntent.sourceNodeIds[segmentId]
+    if (!sourceNodeId) continue
 
-  if (target.actorId === source.actorId && target.carryGroupId === source.carryGroupId) {
-    return state
+    const target = parseNodeId(dropIntent.targetNodeId)
+    const source = parseNodeId(sourceNodeId)
+
+    if (target.actorId === source.actorId && target.carryGroupId === source.carryGroupId) {
+      continue
+    }
+
+    const movedEntry: InventoryEntry = {
+      ...entry,
+      actorId: target.actorId,
+      carryGroupId: target.carryGroupId,
+    }
+
+    result = {
+      ...result,
+      inventoryEntries: {
+        ...result.inventoryEntries,
+        [entryId]: movedEntry,
+      },
+    }
   }
-
-  const movedEntry: InventoryEntry = {
-    ...entry,
-    actorId: target.actorId,
-    carryGroupId: target.carryGroupId,
-  }
-
-  const inventoryEntries: Record<string, InventoryEntry> = { ...state.inventoryEntries }
-  inventoryEntries[entryId] = movedEntry
-
-  return {
-    ...state,
-    inventoryEntries,
-  }
+  return result
 }

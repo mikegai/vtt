@@ -60,8 +60,8 @@ export type ScenePatch =
   | { readonly type: 'UPDATE_META'; readonly partyPaceText: string; readonly hoveredSegmentId: string | null; readonly filterCategory: ItemCategory | null; readonly selectedSegmentIds: readonly string[] }
 
 export type DropIntent = {
-  readonly segmentId: string
-  readonly sourceNodeId: string
+  readonly segmentIds: readonly string[]
+  readonly sourceNodeIds: Readonly<Record<string, string>>
   readonly targetNodeId: string
 }
 
@@ -73,7 +73,7 @@ export type WorkerIntent =
   | { readonly type: 'SELECT_SEGMENTS_REMOVE'; readonly segmentIds: readonly string[] }
   | { readonly type: 'SELECT_ALL_OF_TYPE'; readonly itemDefId: string; readonly nodeId?: string }
   | { readonly type: 'MOVE_NODE'; readonly nodeId: string; readonly x: number; readonly y: number }
-  | { readonly type: 'DRAG_SEGMENT_START'; readonly segmentId: string; readonly sourceNodeId: string }
+  | { readonly type: 'DRAG_SEGMENT_START'; readonly segmentIds: readonly string[] }
   | { readonly type: 'DRAG_SEGMENT_UPDATE'; readonly targetNodeId: string | null }
   | { readonly type: 'DRAG_SEGMENT_END'; readonly targetNodeId: string | null }
   | { readonly type: 'MOVE_ENTRY_TO'; readonly segmentId: string; readonly sourceNodeId: string; readonly targetNodeId: string }

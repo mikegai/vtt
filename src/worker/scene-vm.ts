@@ -39,17 +39,13 @@ const nodeWidthForSlots = (slotCount: number, stonesPerRow: number): number =>
 const INDENT_X = 40
 const NODE_ROW_GAP = 20
 
-const segmentIdToEntryId = (segmentId: string): string => {
-  const colon = segmentId.indexOf(':')
-  return colon >= 0 ? segmentId.slice(0, colon) : segmentId
-}
-
 export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocalState): SceneVM => {
   const effectiveState = localState.dropIntent
     ? applyDropIntentToState(worldState, localState.dropIntent)
     : worldState
   const board = buildBoardVM(effectiveState)
-  const movedEntryId = localState.dropIntent ? segmentIdToEntryId(localState.dropIntent.segmentId) : null
+  const movedSegmentIds = localState.dropIntent ? new Set(localState.dropIntent.segmentIds) : new Set<string>()
+  const dropIntent = localState.dropIntent
   const nodes: Record<string, SceneNodeVM> = {}
 
   let accumY = 80
@@ -94,7 +90,7 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
         startSixth: segment.startSixth,
         sizeSixths: segment.sizeSixths,
         isOverflow: segment.isOverflow,
-        isDropPreview: movedEntryId != null && segmentIdToEntryId(segment.id) === movedEntryId && row.id === localState.dropIntent?.targetNodeId && localState.dropIntent.sourceNodeId !== localState.dropIntent.targetNodeId,
+        isDropPreview: dropIntent != null && movedSegmentIds.has(segment.id) && row.id === dropIntent.targetNodeId && dropIntent.sourceNodeIds[segment.id] !== dropIntent.targetNodeId,
         itemDefId: segment.itemDefId,
         category: segment.category,
         wield: segment.state?.wield,
@@ -143,7 +139,7 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
           startSixth: segment.startSixth,
           sizeSixths: segment.sizeSixths,
           isOverflow: segment.isOverflow,
-          isDropPreview: movedEntryId != null && segmentIdToEntryId(segment.id) === movedEntryId && child.id === localState.dropIntent?.targetNodeId && localState.dropIntent.sourceNodeId !== localState.dropIntent.targetNodeId,
+          isDropPreview: dropIntent != null && movedSegmentIds.has(segment.id) && child.id === dropIntent.targetNodeId && dropIntent.sourceNodeIds[segment.id] !== dropIntent.targetNodeId,
           itemDefId: segment.itemDefId,
           category: segment.category,
           wield: segment.state?.wield,
