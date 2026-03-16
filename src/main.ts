@@ -26,6 +26,12 @@ const formatEncumbrance = (enc: EncumbranceExpr): string => {
 }
 
 app.innerHTML = `
+  <div id="category-bar" class="category-bar">
+    <button type="button" class="category-btn" data-category="armor-and-barding">Armor</button>
+    <button type="button" class="category-btn" data-category="weapons">Weapons</button>
+    <button type="button" class="category-btn" data-category="adventuring-equipment">Adventuring</button>
+    <button type="button" class="category-btn category-btn-all" data-category="">All</button>
+  </div>
   <div id="canvas-host"></div>
 
   <button id="drawer-toggle" class="drawer-toggle" aria-label="Toggle tools panel">
@@ -98,6 +104,21 @@ const drawerClose = document.querySelector<HTMLElement>('#drawer-close')!
 
 drawerToggle.addEventListener('click', () => drawerEl.classList.toggle('open'))
 drawerClose.addEventListener('click', () => drawerEl.classList.remove('open'))
+
+const categoryBar = document.querySelector<HTMLElement>('#category-bar')!
+categoryBar.querySelectorAll<HTMLButtonElement>('.category-btn').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    const raw = btn.dataset.category ?? ''
+    const category = raw === '' ? null : (raw as 'armor-and-barding' | 'weapons' | 'adventuring-equipment')
+    postToWorker({
+      type: 'INTENT',
+      intent: { type: 'SET_FILTER_CATEGORY', category },
+    })
+    categoryBar.querySelectorAll('.category-btn').forEach((b) => b.classList.remove('active'))
+    if (category) btn.classList.add('active')
+    else categoryBar.querySelector('.category-btn-all')?.classList.add('active')
+  })
+})
 
 const vmWorker = new Worker(new URL('./worker/vm-worker.ts', import.meta.url), { type: 'module' })
 const postToWorker = (message: MainToWorkerMessage): void => {
@@ -275,6 +296,16 @@ const pixiAdapter = new PixiBoardAdapter(canvasHost, {
     if (segment) {
       showContextMenu(segmentId, nodeId, segment.itemDefId, clientX, clientY)
     }
+  },
+  onSegmentClick(segmentId, _nodeId, ctrlKey) {
+    if (ctrlKey) {
+      postToWorker({ type: 'INTENT', intent: { type: 'SELECT_SEGMENTS_ADD', segmentIds: [segmentId] } })
+    } else {
+      postToWorker({ type: 'INTENT', intent: { type: 'SET_SELECTED_SEGMENTS', segmentIds: [segmentId] } })
+    }
+  },
+  onSegmentDoubleClick(_segmentId, itemDefId) {
+    postToWorker({ type: 'INTENT', intent: { type: 'SELECT_ALL_OF_TYPE', itemDefId } })
   },
 })
 

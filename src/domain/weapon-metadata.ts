@@ -44,7 +44,7 @@ const WEAPON_MAP: { pattern: RegExp | string; handedness: WeaponHandedness }[] =
   { pattern: /^rock$/i, handedness: 'oneHanded' },
 ]
 
-const matchHandedness = (name: string): WeaponHandedness | null => {
+export const matchHandedness = (name: string): WeaponHandedness | null => {
   const normalized = name.trim().toLowerCase()
   for (const { pattern, handedness } of WEAPON_MAP) {
     const regex = typeof pattern === 'string' ? new RegExp(pattern, 'i') : pattern

@@ -13,6 +13,8 @@ type AdapterHandlers = {
   onDragSegmentUpdate(targetNodeId: string | null): void
   onDragSegmentEnd(targetNodeId: string | null): void
   onContextMenu(segmentId: string, nodeId: string, clientX: number, clientY: number): void
+  onSegmentClick?(segmentId: string, nodeId: string, ctrlKey: boolean): void
+  onSegmentDoubleClick?(segmentId: string, itemDefId: string): void
 }
 
 type SegmentView = {
@@ -596,12 +598,20 @@ const drawSegmentBlock = (
   nodeId?: string,
   onDragStart?: (segment: SceneSegmentVM, nodeId: string, x: number, y: number) => void,
   baseOffset?: { x: number; y: number },
+  filterCategory?: string | null,
+  selectedSegmentIds?: readonly string[],
+  onSegmentClick?: (segmentId: string, nodeId: string, ctrlKey: boolean) => void,
+  onSegmentDoubleClick?: (segmentId: string, itemDefId: string) => void,
+  getLastDragEndTime?: () => number,
 ): void => {
   const o = baseOffset ?? { x: 0, y: 0 }
   const { startStone, endStone } = segmentStoneSpan(segment.startSixth, segment.sizeSixths)
   const isDropPreview = segment.isDropPreview === true
-  const color = isDropPreview ? 0x5cadee : segment.isOverflow ? 0x932d4e : hovered ? 0x5cadee : 0x3d9ac9
-  const alpha = isDropPreview ? 0.25 : segment.isOverflow ? 0.58 : 0.82
+  const selected = selectedSegmentIds?.includes(segment.id) ?? false
+  const dimmed = filterCategory != null && segment.category !== filterCategory
+  let color = isDropPreview ? 0x5cadee : segment.isOverflow ? 0x932d4e : hovered ? 0x5cadee : selected ? 0x6dd96d : 0x3d9ac9
+  let alpha = isDropPreview ? 0.25 : segment.isOverflow ? 0.58 : dimmed ? 0.32 : 0.82
+  if (dimmed && selected) alpha = 0.5
 
   const block = new Graphics()
   block.eventMode = 'static'
@@ -623,6 +633,17 @@ const drawSegmentBlock = (
         event.stopPropagation()
         onTooltipLeave?.()
         onDragStart(segment, nodeId, event.global.x, event.global.y)
+      }
+    })
+  }
+  if (nodeId && (onSegmentClick || onSegmentDoubleClick)) {
+    block.on('pointertap', (event: any) => {
+      if (event.button !== 0) return
+      if (getLastDragEndTime && Date.now() - getLastDragEndTime() < 150) return
+      if (event.detail === 2) {
+        onSegmentDoubleClick?.(segment.id, segment.itemDefId)
+      } else {
+        onSegmentClick?.(segment.id, nodeId, event.ctrlKey || event.metaKey)
       }
     })
   }
@@ -746,6 +767,7 @@ export class PixiBoardAdapter {
   private readonly tooltipText: BitmapText
   private currentScene: SceneVM | null = null
   private segmentDrag: SegmentDragState | null = null
+  private lastDragEndTime = 0
   private minVisibleLabelPx = DEFAULT_MIN_VISIBLE_PX
   private readonly maxVisibleLabelPx = DEFAULT_MAX_VISIBLE_PX
   private fontsLoaded = false
@@ -1063,6 +1085,7 @@ export class PixiBoardAdapter {
 
   private endSegmentDrag(event?: PointerEvent): void {
     if (!this.segmentDrag) return
+    this.lastDragEndTime = Date.now()
     const world = event ? this.screenToWorld(event.clientX, event.clientY) : null
     const targetNodeId = world ? this.findDropTarget(world.x, world.y) : this.segmentDrag.snap?.nodeId ?? null
     const effectiveTarget = targetNodeId && targetNodeId !== this.segmentDrag.sourceNodeId ? targetNodeId : null
@@ -1074,7 +1097,12 @@ export class PixiBoardAdapter {
     this.segmentDrag = null
   }
 
-  private createNode(node: SceneNodeVM, hoveredSegmentId: string | null): NodeView {
+  private createNode(
+    node: SceneNodeVM,
+    hoveredSegmentId: string | null,
+    filterCategory: string | null,
+    selectedSegmentIds: readonly string[],
+  ): NodeView {
     const tier = getZoomTier(this.zoom)
     const textCompensationScale = getTextCompensationScale(this.zoom)
     const root = new Container()
@@ -1187,6 +1215,11 @@ export class PixiBoardAdapter {
         node.id,
         (seg, nodeId, x, y) => this.beginSegmentDrag(seg, nodeId, x, y),
         pos,
+        filterCategory,
+        selectedSegmentIds,
+        this.handlers.onSegmentClick,
+        this.handlers.onSegmentDoubleClick,
+        () => this.lastDragEndTime,
       )
       segmentContainer.addChild(segContainer)
     })
@@ -1198,7 +1231,13 @@ export class PixiBoardAdapter {
     return { root, segmentContainer, segmentViews }
   }
 
-  private updateNode(node: SceneNodeVM, view: NodeView, hoveredSegmentId: string | null): void {
+  private updateNode(
+    node: SceneNodeVM,
+    view: NodeView,
+    hoveredSegmentId: string | null,
+    filterCategory: string | null,
+    selectedSegmentIds: readonly string[],
+  ): void {
     const tier = getZoomTier(this.zoom)
     const textCompensationScale = getTextCompensationScale(this.zoom)
     const totalSixths = totalSixthsForSlots(node.slotCount)
@@ -1239,6 +1278,11 @@ export class PixiBoardAdapter {
           node.id,
           (seg, nodeId, x, y) => this.beginSegmentDrag(seg, nodeId, x, y),
           pos,
+          filterCategory,
+          selectedSegmentIds,
+          this.handlers.onSegmentClick,
+          this.handlers.onSegmentDoubleClick,
+          () => this.lastDragEndTime,
         )
         view.segmentContainer.addChild(segContainer)
       } else {
@@ -1262,6 +1306,11 @@ export class PixiBoardAdapter {
           node.id,
           (seg, nodeId, x, y) => this.beginSegmentDrag(seg, nodeId, x, y),
           pos,
+          filterCategory,
+          selectedSegmentIds,
+          this.handlers.onSegmentClick,
+          this.handlers.onSegmentDoubleClick,
+          () => this.lastDragEndTime,
         )
       }
     })
@@ -1304,8 +1353,10 @@ export class PixiBoardAdapter {
       view.root.destroy({ children: true })
     }
     this.nodeViews.clear()
+    const filterCategory = scene.filterCategory ?? null
+    const selectedSegmentIds = scene.selectedSegmentIds ?? []
     Object.values(scene.nodes).forEach((node) => {
-      this.nodeViews.set(node.id, this.createNode(node, scene.hoveredSegmentId))
+      this.nodeViews.set(node.id, this.createNode(node, scene.hoveredSegmentId ?? null, filterCategory, selectedSegmentIds))
     })
   }
 
@@ -1343,16 +1394,20 @@ export class PixiBoardAdapter {
     let needsFullRebuild = false
     patches.forEach((patch) => {
       if (patch.type === 'UPDATE_META') {
-        this.paceText.text = `Party ${patch.partyPaceText}${patch.hoveredSegmentId ? `  hover: ${patch.hoveredSegmentId}` : ''}`
-        if (patch.hoveredSegmentId !== null || (this.currentScene && this.currentScene.hoveredSegmentId !== null)) {
-          needsFullRebuild = true
-        }
+        this.paceText.text = `Party ${patch.partyPaceText}`
+        needsFullRebuild = true
         return
       }
       if (patch.type === 'UPDATE_NODE') {
         const view = this.nodeViews.get(patch.node.id)
         if (view) {
-          this.updateNode(patch.node, view, scene.hoveredSegmentId ?? null)
+          this.updateNode(
+            patch.node,
+            view,
+            scene.hoveredSegmentId ?? null,
+            scene.filterCategory ?? null,
+            scene.selectedSegmentIds ?? [],
+          )
           this.startSpringTicker()
         } else {
           needsFullRebuild = true
@@ -1371,3 +1426,4 @@ export class PixiBoardAdapter {
     }
   }
 }
+

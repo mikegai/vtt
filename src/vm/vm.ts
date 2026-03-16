@@ -1,3 +1,4 @@
+import { getItemCategory } from '../domain/item-category'
 import { buildLabelLadder } from '../domain/labels'
 import { packDeterministic, type PackInput } from '../domain/packing'
 import {
@@ -7,7 +8,7 @@ import {
   ironRationEffectiveSixths,
   speedProfileForSixths,
 } from '../domain/rules'
-import { BASE_CAPACITY_SIXTHS, SIXTHS_PER_STONE, type Actor, type CanonicalState, type InventoryEntry, type WieldGrip } from '../domain/types'
+import { BASE_CAPACITY_SIXTHS, SIXTHS_PER_STONE, type Actor, type CanonicalState, type InventoryEntry, type ItemDefinition, type WieldGrip } from '../domain/types'
 import type { ActorRowVM, BoardVM, PartyPaceVM, SegmentVM, StoneSlotVM } from './vm-types'
 
 const byName = <T extends { name: string }>(left: T, right: T): number => left.name.localeCompare(right.name)
@@ -80,9 +81,10 @@ const toSegmentVM = (
     readonly sizeSixths: number
     readonly isOverflow: boolean
   },
-  canonicalName: string,
+  definition: ItemDefinition,
 ): SegmentVM | SegmentVM[] => {
   const actorId = actor.id
+  const canonicalName = definition.canonicalName
   const zoneLabel = packedSegment.zone[0].toUpperCase() + packedSegment.zone.slice(1)
   const stoneText = formatSixthsAsStone(packedSegment.sizeSixths)
   const baseEntryId = packedSegment.inventoryEntryId.replace(':overflow', '')
@@ -94,6 +96,7 @@ const toSegmentVM = (
     id: packedSegment.inventoryEntryId,
     actorId,
     itemDefId: packedSegment.itemDefId,
+    category: getItemCategory(definition),
     quantity: packedSegment.quantity,
     zone: packedSegment.zone,
     state: baseState,
@@ -152,6 +155,7 @@ const expandRationSegment = (
       id: `${entry.id}:display:${slotIdx}`,
       actorId: actor.id,
       itemDefId: entry.itemDefId,
+      category: 'adventuring-equipment',
       quantity: displayQty,
       zone: entry.zone,
       state: entry.state ?? {},
@@ -224,7 +228,7 @@ const buildRow = (
     const definition = state.itemDefinitions[segment.itemDefId]
     const baseEntry = entryMap.get(baseId)
     if (!baseEntry || !definition) return []
-    const vm = toSegmentVM(actor, segment, definition.canonicalName)
+    const vm = toSegmentVM(actor, segment, definition)
     return Array.isArray(vm) ? vm : [vm]
   })
 

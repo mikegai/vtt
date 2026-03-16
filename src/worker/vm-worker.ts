@@ -13,6 +13,8 @@ let localState: WorkerLocalState = {
   nodePositions: {},
   dropIntent: null,
   stonesPerRow: 25,
+  filterCategory: null,
+  selectedSegmentIds: [],
 }
 let previousScene: SceneVM | null = null
 
@@ -77,6 +79,51 @@ const applyIntent = (intent: WorkerIntent): void => {
       ...localState,
       hoveredSegmentId: intent.segmentId,
     }
+    recompute()
+    return
+  }
+
+  if (intent.type === 'SET_FILTER_CATEGORY') {
+    localState = { ...localState, filterCategory: intent.category }
+    recompute()
+    return
+  }
+
+  if (intent.type === 'SET_SELECTED_SEGMENTS') {
+    localState = { ...localState, selectedSegmentIds: intent.segmentIds }
+    recompute()
+    return
+  }
+
+  if (intent.type === 'SELECT_SEGMENTS_ADD') {
+    const next = new Set(localState.selectedSegmentIds)
+    intent.segmentIds.forEach((id) => next.add(id))
+    localState = { ...localState, selectedSegmentIds: [...next] }
+    recompute()
+    return
+  }
+
+  if (intent.type === 'SELECT_SEGMENTS_REMOVE') {
+    const toRemove = new Set(intent.segmentIds)
+    const next = localState.selectedSegmentIds.filter((id) => !toRemove.has(id))
+    localState = { ...localState, selectedSegmentIds: next }
+    recompute()
+    return
+  }
+
+  if (intent.type === 'SELECT_ALL_OF_TYPE') {
+    if (!worldState) {
+      recompute()
+      return
+    }
+    const scene = buildSceneVM(worldState, localState)
+    const allOfType: string[] = []
+    for (const node of Object.values(scene.nodes)) {
+      for (const seg of node.segments) {
+        if (seg.itemDefId === intent.itemDefId) allOfType.push(seg.id)
+      }
+    }
+    localState = { ...localState, selectedSegmentIds: allOfType }
     recompute()
     return
   }

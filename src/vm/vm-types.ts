@@ -1,4 +1,5 @@
 import type { ActorKind, CarryZone, EquipmentState } from '../domain/types'
+import type { ItemCategory } from '../domain/item-category'
 import type { LabelLadder } from '../domain/labels'
 import type { SpeedBand, SpeedProfile } from '../domain/rules'
 
@@ -13,6 +14,7 @@ export type SegmentVM = {
   readonly id: string
   readonly actorId: string
   readonly itemDefId: string
+  readonly category: ItemCategory
   readonly quantity: number
   readonly zone: CarryZone
   readonly state: EquipmentState

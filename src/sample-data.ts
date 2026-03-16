@@ -207,9 +207,7 @@ export const sampleState: CanonicalState = {
       quantity: 1,
       zone: 'stowed',
     },
-    cutthroatTorchA: { id: 'cutthroatTorchA', actorId: 'cutthroat', itemDefId: 'torch', quantity: 1, zone: 'accessible' },
-    cutthroatTorchB: { id: 'cutthroatTorchB', actorId: 'cutthroat', itemDefId: 'torch', quantity: 1, zone: 'accessible' },
-    cutthroatTorchC: { id: 'cutthroatTorchC', actorId: 'cutthroat', itemDefId: 'torch', quantity: 1, zone: 'accessible' },
+    cutthroatTorches: { id: 'cutthroatTorches', actorId: 'cutthroat', itemDefId: 'torch', quantity: 3, zone: 'accessible' },
     cutthroatWaterskin: {
       id: 'cutthroatWaterskin',
       actorId: 'cutthroat',

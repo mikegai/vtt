@@ -1,3 +1,4 @@
+import type { ItemCategory } from '../domain/item-category'
 import { SIXTHS_PER_STONE } from '../domain/types'
 import { applyDropIntentToState } from '../vm/drop-intent'
 import { buildBoardVM } from '../vm/vm'
@@ -10,6 +11,8 @@ export type WorkerLocalState = {
   readonly nodePositions: Record<string, { x: number; y: number }>
   readonly dropIntent: DropIntent | null
   readonly stonesPerRow: number
+  readonly filterCategory: ItemCategory | null
+  readonly selectedSegmentIds: readonly string[]
 }
 
 const STONE_W = 36
@@ -90,6 +93,7 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
         isOverflow: segment.isOverflow,
         isDropPreview: movedEntryId != null && segmentIdToEntryId(segment.id) === movedEntryId && row.id === localState.dropIntent?.targetNodeId && localState.dropIntent.sourceNodeId !== localState.dropIntent.targetNodeId,
         itemDefId: segment.itemDefId,
+        category: segment.category,
         wield: segment.state?.wield,
         tooltip: segment.tooltip,
       })),
@@ -137,6 +141,7 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
           isOverflow: segment.isOverflow,
           isDropPreview: movedEntryId != null && segmentIdToEntryId(segment.id) === movedEntryId && child.id === localState.dropIntent?.targetNodeId && localState.dropIntent.sourceNodeId !== localState.dropIntent.targetNodeId,
           itemDefId: segment.itemDefId,
+          category: segment.category,
           wield: segment.state?.wield,
           tooltip: segment.tooltip,
         })),
@@ -148,6 +153,8 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
   return {
     partyPaceText: `${board.partyPace.explorationFeet}'/${board.partyPace.combatFeet}'/${board.partyPace.runningFeet}' • ${board.partyPace.milesPerDay} mi/day`,
     hoveredSegmentId: localState.hoveredSegmentId,
+    filterCategory: localState.filterCategory,
+    selectedSegmentIds: localState.selectedSegmentIds,
     nodes,
   }
 }

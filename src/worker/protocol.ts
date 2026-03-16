@@ -1,4 +1,5 @@
 import type { ActorKind, CanonicalState, WieldGrip } from '../domain/types'
+import type { ItemCategory } from '../domain/item-category'
 
 export type SceneSegmentVM = {
   readonly id: string
@@ -11,6 +12,7 @@ export type SceneSegmentVM = {
   /** True when this segment is the drop-preview placeholder (dashed outline). */
   readonly isDropPreview?: boolean
   readonly itemDefId: string
+  readonly category: ItemCategory
   readonly wield?: WieldGrip
   readonly tooltip: {
     readonly title: string
@@ -46,6 +48,8 @@ export type SceneNodeVM = {
 export type SceneVM = {
   readonly partyPaceText: string
   readonly hoveredSegmentId: string | null
+  readonly filterCategory: ItemCategory | null
+  readonly selectedSegmentIds: readonly string[]
   readonly nodes: Record<string, SceneNodeVM>
 }
 
@@ -53,7 +57,7 @@ export type ScenePatch =
   | { readonly type: 'ADD_NODE'; readonly node: SceneNodeVM }
   | { readonly type: 'REMOVE_NODE'; readonly nodeId: string }
   | { readonly type: 'UPDATE_NODE'; readonly node: SceneNodeVM }
-  | { readonly type: 'UPDATE_META'; readonly partyPaceText: string; readonly hoveredSegmentId: string | null }
+  | { readonly type: 'UPDATE_META'; readonly partyPaceText: string; readonly hoveredSegmentId: string | null; readonly filterCategory: ItemCategory | null; readonly selectedSegmentIds: readonly string[] }
 
 export type DropIntent = {
   readonly segmentId: string
@@ -63,6 +67,11 @@ export type DropIntent = {
 
 export type WorkerIntent =
   | { readonly type: 'HOVER_SEGMENT'; readonly segmentId: string | null }
+  | { readonly type: 'SET_FILTER_CATEGORY'; readonly category: ItemCategory | null }
+  | { readonly type: 'SET_SELECTED_SEGMENTS'; readonly segmentIds: readonly string[] }
+  | { readonly type: 'SELECT_SEGMENTS_ADD'; readonly segmentIds: readonly string[] }
+  | { readonly type: 'SELECT_SEGMENTS_REMOVE'; readonly segmentIds: readonly string[] }
+  | { readonly type: 'SELECT_ALL_OF_TYPE'; readonly itemDefId: string }
   | { readonly type: 'MOVE_NODE'; readonly nodeId: string; readonly x: number; readonly y: number }
   | { readonly type: 'DRAG_SEGMENT_START'; readonly segmentId: string; readonly sourceNodeId: string }
   | { readonly type: 'DRAG_SEGMENT_UPDATE'; readonly targetNodeId: string | null }

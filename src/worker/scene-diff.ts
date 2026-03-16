@@ -6,7 +6,13 @@ export const diffSceneVM = (prev: SceneVM | null, next: SceneVM): ScenePatch[] =
   if (!prev) {
     return [
       ...Object.values(next.nodes).map((node) => ({ type: 'ADD_NODE', node }) as const),
-      { type: 'UPDATE_META', partyPaceText: next.partyPaceText, hoveredSegmentId: next.hoveredSegmentId },
+      {
+        type: 'UPDATE_META',
+        partyPaceText: next.partyPaceText,
+        hoveredSegmentId: next.hoveredSegmentId,
+        filterCategory: next.filterCategory ?? null,
+        selectedSegmentIds: next.selectedSegmentIds ?? [],
+      },
     ]
   }
 
@@ -33,8 +39,20 @@ export const diffSceneVM = (prev: SceneVM | null, next: SceneVM): ScenePatch[] =
     }
   }
 
-  if (prev.partyPaceText !== next.partyPaceText || prev.hoveredSegmentId !== next.hoveredSegmentId) {
-    patches.push({ type: 'UPDATE_META', partyPaceText: next.partyPaceText, hoveredSegmentId: next.hoveredSegmentId })
+  if (
+    prev.partyPaceText !== next.partyPaceText ||
+    prev.hoveredSegmentId !== next.hoveredSegmentId ||
+    prev.filterCategory !== next.filterCategory ||
+    (prev.selectedSegmentIds?.length ?? 0) !== (next.selectedSegmentIds?.length ?? 0) ||
+    (prev.selectedSegmentIds ?? []).some((id, i) => (next.selectedSegmentIds ?? [])[i] !== id)
+  ) {
+    patches.push({
+      type: 'UPDATE_META',
+      partyPaceText: next.partyPaceText,
+      hoveredSegmentId: next.hoveredSegmentId,
+      filterCategory: next.filterCategory,
+      selectedSegmentIds: next.selectedSegmentIds,
+    })
   }
 
   return patches
