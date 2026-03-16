@@ -58,6 +58,8 @@ export type SceneLabelVM = {
 export type SceneFreeSegmentVM = {
   readonly id: string
   readonly nodeId: string
+  /** Group owner when segment is dropped into a group "space". */
+  readonly groupId?: string
   readonly x: number
   readonly y: number
   readonly segment: SceneSegmentVM
@@ -67,6 +69,7 @@ export type SceneGroupVM = {
   readonly id: string
   readonly title: string
   readonly nodeIds: readonly string[]
+  readonly freeSegmentIds: readonly string[]
   readonly x: number
   readonly y: number
   readonly width: number
@@ -114,6 +117,7 @@ export type WorkerIntent =
   | {
       readonly type: 'DRAG_SEGMENT_END'
       readonly targetNodeId: string | null
+      readonly targetGroupId?: string | null
       readonly x?: number
       readonly y?: number
       readonly freeSegmentPositions?: Readonly<Record<string, { x: number; y: number }>>

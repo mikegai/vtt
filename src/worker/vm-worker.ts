@@ -6,6 +6,7 @@ import { parseNodeId, segmentIdToEntryId } from '../vm/drop-intent'
 import type { ActorRowVM } from '../vm/vm-types'
 import { buildBoardVM } from '../vm/vm'
 import { diffSceneVM } from './scene-diff'
+import { deriveGroupMode } from './group-mode'
 import { buildSceneVM, type WorkerLocalState } from './scene-vm'
 import type { MainToWorkerMessage, SceneVM, WorkerIntent, WorkerToMainMessage } from './protocol'
 
@@ -16,6 +17,7 @@ let localState: WorkerLocalState = {
   nodeGroupOverrides: {},
   nodePositions: {},
   freeSegmentPositions: {},
+  groupFreeSegmentPositions: {},
   groupNodeOrders: {},
   customGroups: {},
   dropIntent: null,
@@ -153,6 +155,22 @@ const createInventoryEntryId = (state: CanonicalState, itemDefId: string, index?
   return `${base}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}_fallback`
 }
 
+const removeSegmentsFromGroupPositions = (
+  groupFreeSegmentPositions: WorkerLocalState['groupFreeSegmentPositions'],
+  segmentIds: readonly string[],
+): WorkerLocalState['groupFreeSegmentPositions'] => {
+  if (segmentIds.length === 0) return groupFreeSegmentPositions
+  const removeEntryIds = new Set(segmentIds.map((id) => segmentIdToEntryId(id)))
+  const next: WorkerLocalState['groupFreeSegmentPositions'] = {}
+  for (const [groupId, positions] of Object.entries(groupFreeSegmentPositions)) {
+    const kept = Object.fromEntries(
+      Object.entries(positions).filter(([segmentId]) => !removeEntryIds.has(segmentIdToEntryId(segmentId))),
+    )
+    if (Object.keys(kept).length > 0) next[groupId] = kept
+  }
+  return next
+}
+
 const STONE_W = 36
 const STONE_H = 54
 const STONE_GAP = 3
@@ -275,10 +293,13 @@ const computeDroppedFreeSegmentPositions = (
     const free = scene.freeSegments[segmentId]
     if (!free) continue
     const b = segmentBoundsInNodeLocal(free.segment, stonesPerRow)
+    const groupOffset = free.groupId && scene.groups[free.groupId]
+      ? { x: scene.groups[free.groupId]!.x, y: scene.groups[free.groupId]!.y }
+      : { x: 0, y: 0 }
     rects.push({
       id: segmentId,
-      x: free.x + b.x - SLOT_START_X,
-      y: free.y + b.y - TOP_BAND_H,
+      x: groupOffset.x + free.x + b.x - SLOT_START_X,
+      y: groupOffset.y + free.y + b.y - TOP_BAND_H,
       w: Math.max(8, b.w),
       h: Math.max(8, b.h),
     })
@@ -664,9 +685,14 @@ const applyIntent = (intent: WorkerIntent): void => {
     const hoverTargetNodeId = localState.dropIntent
       ? intent.targetNodeId
       : null
+    const hoverTargetGroupId = localState.dropIntent
+      ? intent.targetGroupId ?? null
+      : null
     debugDrag('DRAG_SEGMENT_END received', {
       targetNodeId: intent.targetNodeId,
+      targetGroupId: intent.targetGroupId,
       hoverTargetNodeId,
+      hoverTargetGroupId,
       x: intent.x,
       y: intent.y,
       hasFreeSegmentPositions: !!intent.freeSegmentPositions,
@@ -725,7 +751,11 @@ const applyIntent = (intent: WorkerIntent): void => {
       if (movedAny) {
         const freeSegmentPositions = { ...localState.freeSegmentPositions }
         for (const segmentId of segmentIds) delete freeSegmentPositions[segmentId]
-        localState = { ...localState, freeSegmentPositions }
+        localState = {
+          ...localState,
+          freeSegmentPositions,
+          groupFreeSegmentPositions: removeSegmentsFromGroupPositions(localState.groupFreeSegmentPositions, segmentIds),
+        }
       }
       debugDrag('handled as node drop', {
         hoverTargetNodeId,
@@ -736,6 +766,10 @@ const applyIntent = (intent: WorkerIntent): void => {
       const { segmentIds, sourceNodeIds } = localState.dropIntent
       const firstSourceNodeId = segmentIds[0] ? sourceNodeIds[segmentIds[0]] : null
       const source = firstSourceNodeId ? parseNodeId(firstSourceNodeId) : null
+      const sceneAtDrop = buildSceneVM(worldState, localState)
+      const targetGroup = hoverTargetGroupId ? sceneAtDrop.groups[hoverTargetGroupId] : null
+      const groupCanAcceptSegments =
+        !!targetGroup && deriveGroupMode(targetGroup) !== 'nodes'
       if (source) {
         const droppedGroupId = droppedGroupIdForActor(source.actorId)
         if (!worldState.carryGroups[droppedGroupId]) {
@@ -788,7 +822,6 @@ const applyIntent = (intent: WorkerIntent): void => {
           }
         }
 
-        const sceneAtDrop = buildSceneVM(worldState, localState)
         const droppedLayout =
           intent.freeSegmentPositions ??
           computeDroppedFreeSegmentPositions(
@@ -798,20 +831,47 @@ const applyIntent = (intent: WorkerIntent): void => {
             intent.y,
             localState.stonesPerRow,
           )
-        const freeSegmentPositions = { ...localState.freeSegmentPositions }
-        for (const segmentId of segmentIds) {
-          const nextPos = droppedLayout[segmentId] ?? { x: intent.x, y: intent.y }
-          freeSegmentPositions[segmentId] = nextPos
-        }
-        localState = {
-          ...localState,
-          freeSegmentPositions,
+        const cleanedGroups = removeSegmentsFromGroupPositions(localState.groupFreeSegmentPositions, segmentIds)
+
+        if (groupCanAcceptSegments && targetGroup && hoverTargetGroupId) {
+          const nextGroupPositions = {
+            ...cleanedGroups,
+            [hoverTargetGroupId]: {
+              ...(cleanedGroups[hoverTargetGroupId] ?? {}),
+            },
+          }
+          const freeSegmentPositions = { ...localState.freeSegmentPositions }
+          for (const segmentId of segmentIds) {
+            const nextPos = droppedLayout[segmentId] ?? { x: intent.x, y: intent.y }
+            nextGroupPositions[hoverTargetGroupId]![segmentId] = {
+              x: nextPos.x - targetGroup.x,
+              y: nextPos.y - targetGroup.y,
+            }
+            delete freeSegmentPositions[segmentId]
+          }
+          localState = {
+            ...localState,
+            freeSegmentPositions,
+            groupFreeSegmentPositions: nextGroupPositions,
+          }
+        } else {
+          const freeSegmentPositions = { ...localState.freeSegmentPositions }
+          for (const segmentId of segmentIds) {
+            const nextPos = droppedLayout[segmentId] ?? { x: intent.x, y: intent.y }
+            freeSegmentPositions[segmentId] = nextPos
+          }
+          localState = {
+            ...localState,
+            freeSegmentPositions,
+            groupFreeSegmentPositions: cleanedGroups,
+          }
         }
         debugDrag('handled as absolute drop with resolved source', {
           sourceActorId: source.actorId,
           sourceCarryGroupId: source.carryGroupId ?? null,
           persistedCount: segmentIds.length,
           segmentIds,
+          targetGroupId: groupCanAcceptSegments ? hoverTargetGroupId : null,
         })
       } else if (intent.freeSegmentPositions) {
         // If source resolution fails (e.g. free segment already in absolute space),
@@ -824,6 +884,7 @@ const applyIntent = (intent: WorkerIntent): void => {
         localState = {
           ...localState,
           freeSegmentPositions,
+          groupFreeSegmentPositions: removeSegmentsFromGroupPositions(localState.groupFreeSegmentPositions, segmentIds),
         }
         debugDrag('handled as absolute drop with source fallback', {
           persistedCount: Object.keys(intent.freeSegmentPositions).length,
@@ -1012,6 +1073,7 @@ const applyIntent = (intent: WorkerIntent): void => {
       freeSegmentPositions: Object.fromEntries(
         Object.entries(localState.freeSegmentPositions).filter(([id]) => segmentIdToEntryId(id) !== segmentIdToEntryId(segmentId)),
       ),
+      groupFreeSegmentPositions: removeSegmentsFromGroupPositions(localState.groupFreeSegmentPositions, [segmentId]),
     }
   }
 
@@ -1065,6 +1127,7 @@ const applyIntent = (intent: WorkerIntent): void => {
       freeSegmentPositions: Object.fromEntries(
         Object.entries(localState.freeSegmentPositions).filter(([id]) => !entryIdsToRemove.has(segmentIdToEntryId(id))),
       ),
+      groupFreeSegmentPositions: removeSegmentsFromGroupPositions(localState.groupFreeSegmentPositions, [...entryIdsToRemove]),
     }
     recompute()
     return

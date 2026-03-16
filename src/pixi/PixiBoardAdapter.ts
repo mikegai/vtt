@@ -1,6 +1,7 @@
 import { Application, Assets, BitmapText, Color, Container, Graphics, Point, Rectangle } from 'pixi.js'
 import { createSpring1D, createSpring2D, setSpring1DTarget, setSpringTarget, updateSpring1D, updateSpring2D } from './spring'
 import type { SceneFreeSegmentVM, SceneGroupVM, SceneLabelVM, SceneNodeVM, ScenePatch, SceneVM, SceneSegmentVM } from '../worker/protocol'
+import { deriveGroupMode } from '../worker/group-mode'
 
 /** Stored on segment blocks for context-menu hit testing. */
 type SegmentContext = { segmentId: string; nodeId: string }
@@ -51,6 +52,7 @@ type AdapterHandlers = {
   onDragSegmentUpdate(targetNodeId: string | null): void
   onDragSegmentEnd(
     targetNodeId: string | null,
+    targetGroupId?: string | null,
     x?: number,
     y?: number,
     freeSegmentPositions?: Readonly<Record<string, { x: number; y: number }>>,
@@ -94,12 +96,18 @@ type NodeView = {
 
 type GroupView = {
   readonly root: Container
+  readonly hoverOutline: Graphics
   contentContainer?: Container
   clipWidthSpring?: ReturnType<typeof createSpring1D>
   clipHeightSpring?: ReturnType<typeof createSpring1D>
   contentClip?: Graphics
   onClipAnimationComplete?: () => void
 }
+
+type SegmentDropTarget =
+  | { type: 'node'; nodeId: string }
+  | { type: 'group'; groupId: string }
+  | null
 
 type LabelView = {
   readonly root: Container
@@ -970,6 +978,7 @@ export class PixiBoardAdapter {
   private activeDrag: ActiveDrag = { type: 'idle' }
   private groupDropIndicator: Graphics
   private lastDragEndTime = 0
+  private segmentDragHoveredGroupId: string | null = null
   private pendingRebuild = false
   private marqueeGraphics: Graphics | null = null
   private minVisibleLabelPx = DEFAULT_MIN_VISIBLE_PX
@@ -1324,8 +1333,9 @@ export class PixiBoardAdapter {
     for (const free of Object.values(this.currentScene.freeSegments ?? {})) {
       if (!selectedIds.has(free.segment.id)) continue
       const b = segmentBoundsInNodeLocal(free.segment)
-      const segX = free.x + b.x - SLOT_START_X
-      const segY = free.y + b.y - TOP_BAND_H
+      const anchor = this.freeSegmentAnchorWorld(free)
+      const segX = anchor.x + b.x - SLOT_START_X
+      const segY = anchor.y + b.y - TOP_BAND_H
       const left = segX - PAD
       const top = segY - PAD
       const right = segX + b.w + PAD
@@ -1394,8 +1404,9 @@ export class PixiBoardAdapter {
     for (const free of Object.values(this.currentScene.freeSegments ?? {})) {
       if (free.segment.isDropPreview) continue
       const b = segmentBoundsInNodeLocal(free.segment)
-      const segX1 = free.x + b.x - SLOT_START_X
-      const segY1 = free.y + b.y - TOP_BAND_H
+      const anchor = this.freeSegmentAnchorWorld(free)
+      const segX1 = anchor.x + b.x - SLOT_START_X
+      const segY1 = anchor.y + b.y - TOP_BAND_H
       const segX2 = segX1 + b.w
       const segY2 = segY1 + b.h
       if (segX1 < maxW && segX2 > minW && segY1 < maxH && segY2 > minH) {
@@ -1563,6 +1574,12 @@ export class PixiBoardAdapter {
     }
   }
 
+  private freeSegmentAnchorWorld(free: SceneFreeSegmentVM): { x: number; y: number } {
+    if (!free.groupId || !this.currentScene?.groups?.[free.groupId]) return { x: free.x, y: free.y }
+    const group = this.currentScene.groups[free.groupId]
+    return { x: group.x + free.x, y: group.y + free.y }
+  }
+
   getWorldCenter(): { x: number; y: number } {
     const x = (this.app.screen.width / 2 - this.pan.x) / this.zoom
     const y = (this.app.screen.height / 2 - this.pan.y) / this.zoom
@@ -1575,7 +1592,7 @@ export class PixiBoardAdapter {
 
   getDropTargetAtClient(clientX: number, clientY: number): string | null {
     const world = this.screenToWorld(clientX, clientY)
-    return this.findDropTarget(world.x, world.y)
+    return this.findSegmentNodeDropTarget(world.x, world.y)
   }
 
   isPointInsideGroup(worldX: number, worldY: number): boolean {
@@ -1668,7 +1685,7 @@ export class PixiBoardAdapter {
   }
 
   /** Drop target = whole character node. Returns nodeId if world point is inside any node's bounds. */
-  private findDropTarget(worldX: number, worldY: number): string | null {
+  private findSegmentNodeDropTarget(worldX: number, worldY: number): string | null {
     if (!this.currentScene) return null
     for (const node of Object.values(this.currentScene.nodes)) {
       const pos = this.getNodeDisplayPosition(node)
@@ -1681,8 +1698,31 @@ export class PixiBoardAdapter {
     return null
   }
 
+  private findDropTarget(worldX: number, worldY: number): SegmentDropTarget {
+    const nodeId = this.findSegmentNodeDropTarget(worldX, worldY)
+    if (nodeId) return { type: 'node', nodeId }
+    if (!this.currentScene?.groups) return null
+    const groups = Object.values(this.currentScene.groups)
+    for (let i = groups.length - 1; i >= 0; i -= 1) {
+      const group = groups[i]
+      if (!group) continue
+      const mode = deriveGroupMode(group)
+      if (mode === 'nodes') continue
+      const dims = this.getGroupDisplayDimensions(group)
+      if (
+        worldX >= group.x &&
+        worldX <= group.x + dims.width &&
+        worldY >= group.y &&
+        worldY <= group.y + dims.height
+      ) {
+        return { type: 'group', groupId: group.id }
+      }
+    }
+    return null
+  }
+
   private findSnapTarget(worldX: number, worldY: number, segment: SceneSegmentVM): { nodeId: string; startSixth: number } | null {
-    const targetNodeId = this.findDropTarget(worldX, worldY)
+    const targetNodeId = this.findSegmentNodeDropTarget(worldX, worldY)
     if (!targetNodeId || !this.currentScene) return null
 
     const node = this.currentScene.nodes[targetNodeId]
@@ -1889,9 +1929,10 @@ export class PixiBoardAdapter {
     const free = Object.values(this.currentScene.freeSegments ?? {}).find((fs) => fs.segment.id === segmentId)
     if (free) {
       const b = segmentBoundsInNodeLocal(free.segment)
+      const anchor = this.freeSegmentAnchorWorld(free)
       return {
-        x: free.x + b.x - SLOT_START_X,
-        y: free.y + b.y - TOP_BAND_H,
+        x: anchor.x + b.x - SLOT_START_X,
+        y: anchor.y + b.y - TOP_BAND_H,
         w: b.w,
         h: b.h,
       }
@@ -2000,15 +2041,18 @@ export class PixiBoardAdapter {
     if (this.activeDrag.type !== 'segment') return
     const drag = this.activeDrag.state
     const world = this.screenToWorld(clientX, clientY)
-    const targetNodeId = this.findDropTarget(world.x, world.y)
+    const dropTarget = this.findDropTarget(world.x, world.y)
+    const targetNodeId = dropTarget?.type === 'node' ? dropTarget.nodeId : null
+    const targetGroupId = dropTarget?.type === 'group' ? dropTarget.groupId : null
     if (!drag.isExternal) {
       this.handlers.onDragSegmentUpdate(targetNodeId ?? null)
     }
+    this.setSegmentDragHoveredGroup(targetGroupId)
 
     const snap = this.findSnapTarget(world.x, world.y, drag.segments[0])
     drag.snap = snap
 
-    const useAbsolute = !targetNodeId && !drag.isExternal
+    const useAbsolute = (!!targetGroupId || !targetNodeId) && !drag.isExternal
     if (useAbsolute && drag.proxyMode !== 'absolute') {
       drag.proxyMode = 'absolute'
       const compact = drag.proxy.getChildAt(0) as Container
@@ -2042,11 +2086,15 @@ export class PixiBoardAdapter {
     const drag = this.activeDrag.state
     this.lastDragEndTime = Date.now()
     const world = event ? this.screenToWorld(event.clientX, event.clientY) : null
-    const targetNodeId = world ? this.findDropTarget(world.x, world.y) : drag.snap?.nodeId ?? null
+    const dropTarget = world ? this.findDropTarget(world.x, world.y) : drag.snap?.nodeId ? { type: 'node', nodeId: drag.snap.nodeId } : null
+    const targetNodeId = dropTarget?.type === 'node' ? dropTarget.nodeId : null
+    const targetGroupId = dropTarget?.type === 'group' ? dropTarget.groupId : null
+    this.setSegmentDragHoveredGroup(null)
     console.info('[pixi drag] endSegmentDrag start', {
       isExternal: !!drag.isExternal,
       hasEvent: !!event,
       targetNodeId,
+      targetGroupId,
       worldX: world?.x ?? null,
       worldY: world?.y ?? null,
       segmentIds: drag.segmentIds,
@@ -2128,7 +2176,7 @@ export class PixiBoardAdapter {
       freeSegmentPositionsCount: freeSegmentPositions ? Object.keys(freeSegmentPositions).length : 0,
       segmentIds: drag.segmentIds,
     })
-    this.handlers.onDragSegmentEnd(effectiveTarget, dropX, dropY, freeSegmentPositions)
+    this.handlers.onDragSegmentEnd(effectiveTarget, targetGroupId, dropX, dropY, freeSegmentPositions)
     this.worldLayer.removeChild(drag.lineLayer)
     this.worldLayer.removeChild(drag.proxy)
     drag.lineLayer.destroy({ children: true })
@@ -2610,6 +2658,11 @@ export class PixiBoardAdapter {
     bg.fill({ color: 0x101b33, alpha: 0.36 })
     bg.stroke({ width: 2, color: 0x6f8fc5, alpha: 0.75 })
     root.addChild(bg)
+    const hoverOutline = new Graphics()
+    hoverOutline.roundRect(0, 0, displayWidth, displayHeight, 14)
+    hoverOutline.stroke({ width: 3, color: 0xb5deff, alpha: 0.95 })
+    hoverOutline.visible = this.segmentDragHoveredGroupId === group.id
+    root.addChild(hoverOutline)
 
     const handle = new Graphics()
     handle.eventMode = 'static'
@@ -2666,7 +2719,7 @@ export class PixiBoardAdapter {
     root.addChild(title)
 
     this.groupLayer.addChild(root)
-    return { root }
+    return { root, hoverOutline }
   }
 
   private createFreeSegment(
@@ -2704,7 +2757,10 @@ export class PixiBoardAdapter {
       () => this.lastDragEndTime,
       () => this.activeDrag.type === 'idle' || this.activeDrag.type === 'pendingSegment',
     )
-    this.worldLayer.addChild(root)
+    const parent = free.groupId
+      ? this.groupViews.get(free.groupId)?.root ?? this.worldLayer
+      : this.worldLayer
+    parent.addChild(root)
     return { root }
   }
 
@@ -2821,6 +2877,7 @@ export class PixiBoardAdapter {
     for (let i = groups.length - 1; i >= 0; i -= 1) {
       const g = groups[i]
       if (!g) continue
+      if (deriveGroupMode(g) === 'segments') continue
       const dims = this.getGroupDisplayDimensions(g)
       if (worldX >= g.x && worldX <= g.x + dims.width && worldY >= g.y && worldY <= g.y + dims.height) {
         target = g
@@ -3028,6 +3085,7 @@ export class PixiBoardAdapter {
 
   private endDrag(): void {
     this.stopAutoPanLoop()
+    this.setSegmentDragHoveredGroup(null)
     if (this.activeDrag.type === 'group') {
       this.setGroupNodeContentVisibility(this.activeDrag.state.groupId, true)
     } else if (this.activeDrag.type === 'nodeReorder') {
@@ -3126,14 +3184,14 @@ export class PixiBoardAdapter {
     if (this.hiddenNodeContentIds.size > 0) {
       this.setNodeContentVisibility([...this.hiddenNodeContentIds], false)
     }
+    Object.values(scene.groups ?? {}).forEach((group) => {
+      this.groupViews.set(group.id, this.createGroup(group))
+    })
     Object.values(scene.freeSegments ?? {}).forEach((free) => {
       this.freeSegmentViews.set(
         free.id,
         this.createFreeSegment(free, scene.hoveredSegmentId ?? null, filterCategory, selectedSegmentIds),
       )
-    })
-    Object.values(scene.groups ?? {}).forEach((group) => {
-      this.groupViews.set(group.id, this.createGroup(group))
     })
     Object.values(scene.labels ?? {}).forEach((label) => {
       this.labelViews.set(label.id, this.createLabel(label, scene.selectedLabelId === label.id))
@@ -3150,11 +3208,12 @@ export class PixiBoardAdapter {
     Object.values(scene.groups ?? {}).forEach((group) => {
       this.groupViews.set(group.id, this.createGroup(group))
     })
+    this.rebuildFreeSegments(scene)
   }
 
   private rebuildFreeSegments(scene: SceneVM): void {
     for (const [, view] of this.freeSegmentViews) {
-      this.worldLayer.removeChild(view.root)
+      view.root.parent?.removeChild(view.root)
       view.root.destroy({ children: true })
     }
     this.freeSegmentViews.clear()
@@ -3457,6 +3516,9 @@ export class PixiBoardAdapter {
 
     const hasNodes = orderedRoots.length > 0
     if (!hasNodes) {
+      if (group.freeSegmentIds.length > 0) {
+        return { width: group.width, height: group.height }
+      }
       return { width: EMPTY_GROUP_MIN_WIDTH, height: EMPTY_GROUP_MIN_HEIGHT }
     }
     const width = maxNodeRight - group.x + GROUP_PADDING_X
@@ -3514,7 +3576,6 @@ export class PixiBoardAdapter {
     })
     if (!needsFullRebuild && metaChanged) {
       this.rebuildGroups(scene)
-      this.rebuildFreeSegments(scene)
       for (const node of Object.values(scene.nodes)) {
         const view = this.nodeViews.get(node.id)
         if (!view) {
@@ -3539,6 +3600,14 @@ export class PixiBoardAdapter {
         this.rebuildAllNodes(scene)
         this.startSpringTicker()
       }
+    }
+  }
+
+  private setSegmentDragHoveredGroup(groupId: string | null): void {
+    if (this.segmentDragHoveredGroupId === groupId) return
+    this.segmentDragHoveredGroupId = groupId
+    for (const [id, view] of this.groupViews.entries()) {
+      view.hoverOutline.visible = groupId === id
     }
   }
 }

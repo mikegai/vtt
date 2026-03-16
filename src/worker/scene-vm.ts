@@ -4,6 +4,7 @@ import { applyDropIntentToState } from '../vm/drop-intent'
 import { buildBoardVM } from '../vm/vm'
 import type { ActorRowVM } from '../vm/vm-types'
 import type { CanonicalState } from '../domain/types'
+import { deriveGroupMode } from './group-mode'
 import type { DropIntent } from './protocol'
 import type { SceneFreeSegmentVM, SceneGroupVM, SceneNodeVM, SceneVM } from './protocol'
 
@@ -13,6 +14,7 @@ export type WorkerLocalState = {
   readonly nodeGroupOverrides: Record<string, string | null>
   readonly nodePositions: Record<string, { x: number; y: number }>
   readonly freeSegmentPositions: Record<string, { x: number; y: number }>
+  readonly groupFreeSegmentPositions: Record<string, Record<string, { x: number; y: number }>>
   readonly groupNodeOrders: Record<string, readonly string[]>
   readonly customGroups: Record<string, { title: string }>
   readonly dropIntent: DropIntent | null
@@ -60,6 +62,89 @@ const ROOT_NODE_COL_GAP = 16
 const ROOT_NODE_ROW_GAP = 16
 const ROOT_NODE_MAX_W = 1800
 const FREE_SEGMENT_STACK_GAP = 8
+const CELL_H = STONE_H / 6
+
+const stoneToX = (stoneIndex: number, stonesPerRow: number): number =>
+  (stoneIndex % stonesPerRow) * (STONE_W + STONE_GAP)
+const stoneToY = (stoneIndex: number, stonesPerRow: number): number =>
+  Math.floor(stoneIndex / stonesPerRow) * (STONE_H + STONE_ROW_GAP)
+const segmentStoneSpan = (startSixth: number, sizeSixths: number): { startStone: number; endStone: number } => {
+  const startStone = Math.floor(startSixth / 6)
+  const endStone = Math.max(startStone + 1, Math.ceil((startSixth + sizeSixths) / 6))
+  return { startStone, endStone }
+}
+const isMultiStone = (sizeSixths: number): boolean => sizeSixths >= 6 && sizeSixths % 6 === 0
+const groupSixthsByStone = (
+  startSixth: number,
+  sizeSixths: number,
+): { stone: number; startRow: number; count: number }[] => {
+  const groups: { stone: number; startRow: number; count: number }[] = []
+  for (let i = 0; i < sizeSixths; i += 1) {
+    const sixth = startSixth + i
+    const stone = Math.floor(sixth / 6)
+    const row = sixth % 6
+    const last = groups[groups.length - 1]
+    if (last && last.stone === stone) {
+      last.count += 1
+    } else {
+      groups.push({ stone, startRow: row, count: 1 })
+    }
+  }
+  return groups
+}
+const splitStonesAtWrap = (
+  startStone: number,
+  endStone: number,
+  stonesPerRow: number,
+): { start: number; end: number }[] => {
+  const chunks: { start: number; end: number }[] = []
+  let s = startStone
+  while (s < endStone) {
+    const rowStart = Math.floor(s / stonesPerRow) * stonesPerRow
+    const rowEnd = rowStart + stonesPerRow
+    const chunkEnd = Math.min(endStone, rowEnd)
+    chunks.push({ start: s, end: chunkEnd })
+    s = chunkEnd
+  }
+  return chunks
+}
+
+const segmentBoundsInNodeLocal = (
+  segment: { startSixth: number; sizeSixths: number },
+  stonesPerRow: number,
+): { x: number; y: number; w: number; h: number } => {
+  const { startStone, endStone } = segmentStoneSpan(segment.startSixth, segment.sizeSixths)
+  if (isMultiStone(segment.sizeSixths)) {
+    const chunks = splitStonesAtWrap(startStone, endStone, stonesPerRow)
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+    chunks.forEach((chunk) => {
+      const cx = SLOT_START_X + stoneToX(chunk.start, stonesPerRow)
+      const cy = TOP_BAND_H + stoneToY(chunk.start, stonesPerRow)
+      const cw = (chunk.end - chunk.start) * (STONE_W + STONE_GAP) - STONE_GAP
+      minX = Math.min(minX, cx)
+      minY = Math.min(minY, cy)
+      maxX = Math.max(maxX, cx + cw)
+      maxY = Math.max(maxY, cy + STONE_H)
+    })
+    return { x: minX, y: minY, w: maxX - minX, h: maxY - minY }
+  }
+  const groups = groupSixthsByStone(segment.startSixth, segment.sizeSixths)
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+  groups.forEach((g) => {
+    const x = stoneToX(g.stone, stonesPerRow)
+    const y = stoneToY(g.stone, stonesPerRow) + g.startRow * CELL_H
+    minX = Math.min(minX, x)
+    minY = Math.min(minY, y)
+    maxX = Math.max(maxX, x + STONE_W)
+    maxY = Math.max(maxY, y + g.count * CELL_H)
+  })
+  return {
+    x: SLOT_START_X + minX,
+    y: TOP_BAND_H + minY,
+    w: maxX - minX,
+    h: maxY - minY,
+  }
+}
 
 const subtreeSizeForUngrouped = (
   nodes: Record<string, SceneNodeVM>,
@@ -135,10 +220,17 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
   const rows = flattenRows(board.rows)
   const nodes: Record<string, SceneNodeVM> = {}
   const freeSegments: Record<string, SceneFreeSegmentVM> = {}
-  const groupsById = new Map<string, { id: string; title: string; nodeIds: string[] }>()
+  const groupsById = new Map<string, { id: string; title: string; nodeIds: string[]; freeSegmentIds: string[] }>()
+  const segmentGroupOwner = new Map<string, string>()
+
+  for (const [groupId, positions] of Object.entries(localState.groupFreeSegmentPositions)) {
+    for (const segmentId of Object.keys(positions)) {
+      segmentGroupOwner.set(segmentId, groupId)
+    }
+  }
 
   for (const [groupId, group] of Object.entries(localState.customGroups)) {
-    groupsById.set(groupId, { id: groupId, title: group.title, nodeIds: [] })
+    groupsById.set(groupId, { id: groupId, title: group.title, nodeIds: [], freeSegmentIds: [] })
   }
 
   for (const row of rows) {
@@ -146,10 +238,13 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
       // Dropped inventory lives directly on the canvas as free segments (no wrapper node).
       let yCursor = 0
       for (const segment of row.segments) {
-        const pos = localState.freeSegmentPositions[segment.id] ?? { x: 120, y: 120 + yCursor }
+        const ownerGroupId = segmentGroupOwner.get(segment.id)
+        const groupRelativePos = ownerGroupId ? localState.groupFreeSegmentPositions[ownerGroupId]?.[segment.id] : undefined
+        const pos = groupRelativePos ?? localState.freeSegmentPositions[segment.id] ?? { x: 120, y: 120 + yCursor }
         freeSegments[segment.id] = {
           id: segment.id,
           nodeId: row.id,
+          groupId: ownerGroupId,
           x: pos.x,
           y: pos.y,
           segment: {
@@ -166,6 +261,11 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
             wield: segment.state?.wield,
             tooltip: segment.tooltip,
           },
+        }
+        if (ownerGroupId) {
+          const existing = groupsById.get(ownerGroupId)
+          if (existing) existing.freeSegmentIds.push(segment.id)
+          else groupsById.set(ownerGroupId, { id: ownerGroupId, title: ownerGroupId, nodeIds: [], freeSegmentIds: [segment.id] })
         }
         yCursor += STONE_H + FREE_SEGMENT_STACK_GAP
       }
@@ -228,7 +328,7 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
     if (groupId && groupTitle) {
       const existing = groupsById.get(groupId)
       if (existing) existing.nodeIds.push(row.id)
-      else groupsById.set(groupId, { id: groupId, title: groupTitle, nodeIds: [row.id] })
+      else groupsById.set(groupId, { id: groupId, title: groupTitle, nodeIds: [row.id], freeSegmentIds: [] })
     }
   }
 
@@ -278,19 +378,44 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
     }
     orderedRoots.forEach((rootId) => layoutGroupSubtree(rootId, 0))
 
+    const segmentIds = meta.freeSegmentIds.filter((id) => !!freeSegments[id])
     const hasNodes = orderedRoots.length > 0
-    const groupHeight = hasNodes
+    const hasSegments = segmentIds.length > 0
+    let segmentWidth = 0
+    let segmentHeight = 0
+    if (hasSegments) {
+      let maxX = 0
+      let maxY = 0
+      for (const segmentId of segmentIds) {
+        const free = freeSegments[segmentId]
+        if (!free) continue
+        const bounds = segmentBoundsInNodeLocal(free.segment, localState.stonesPerRow)
+        const right = free.x + bounds.x - SLOT_START_X + bounds.w
+        const bottom = free.y + bounds.y - TOP_BAND_H + bounds.h
+        maxX = Math.max(maxX, right)
+        maxY = Math.max(maxY, bottom)
+      }
+      segmentWidth = maxX + GROUP_PADDING_X
+      segmentHeight = maxY + GROUP_PADDING_BOTTOM
+    }
+    const mode = deriveGroupMode({ nodeIds: orderedNodeIds, freeSegmentIds: segmentIds })
+    const groupHeight = mode === 'nodes'
       ? cursorY - NODE_ROW_GAP - pos.y + GROUP_PADDING_BOTTOM
-      : EMPTY_GROUP_MIN_HEIGHT
+      : mode === 'segments'
+        ? Math.max(EMPTY_GROUP_MIN_HEIGHT, segmentHeight)
+        : EMPTY_GROUP_MIN_HEIGHT
     groups[groupId] = {
       id: groupId,
       title: meta.title,
       nodeIds: orderedNodeIds,
+      freeSegmentIds: segmentIds,
       x: pos.x,
       y: pos.y,
-      width: hasNodes
+      width: mode === 'nodes'
         ? maxNodeW + GROUP_PADDING_X * 2
-        : EMPTY_GROUP_MIN_WIDTH,
+        : mode === 'segments'
+          ? Math.max(EMPTY_GROUP_MIN_WIDTH, segmentWidth)
+          : EMPTY_GROUP_MIN_WIDTH,
       height: groupHeight,
     }
     if (!localState.groupPositions[groupId]) flowY = pos.y + groupHeight + GROUP_STACK_GAP
