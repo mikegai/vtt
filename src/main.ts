@@ -371,14 +371,14 @@ const deriveItemKind = (source: SourceItem): { kind: string; sixthsPerUnit: numb
   const perUnit = encumbranceToSixths(source.encumbrance)
   const name = source.name.toLowerCase()
   if (source.group === 'armor-and-barding') {
-    if (name.includes('shield') || name.includes('helmet')) {
+    if (name.includes('shield') && perUnit === SIXTHS_PER_STONE) {
       return { kind: 'bulky', sixthsPerUnit: perUnit }
     }
-    if (perUnit >= SIXTHS_PER_STONE) {
+    if (!name.includes('shield') && !name.includes('helmet') && perUnit >= SIXTHS_PER_STONE) {
       return { kind: 'armor', sixthsPerUnit: perUnit, armorClass: perUnit / SIXTHS_PER_STONE }
     }
   }
-  if (source.group === 'weapons' && perUnit >= SIXTHS_PER_STONE) {
+  if (source.group === 'weapons' && perUnit === SIXTHS_PER_STONE) {
     return { kind: 'bulky', sixthsPerUnit: perUnit }
   }
   return { kind: 'standard', sixthsPerUnit: perUnit }
