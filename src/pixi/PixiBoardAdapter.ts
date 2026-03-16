@@ -892,9 +892,12 @@ export class PixiBoardAdapter {
   }
 
   private screenToWorld(clientX: number, clientY: number): { x: number; y: number } {
+    const rect = this.app.canvas.getBoundingClientRect()
+    const canvasX = clientX - rect.left
+    const canvasY = clientY - rect.top
     return {
-      x: (clientX - this.pan.x) / this.zoom,
-      y: (clientY - this.pan.y) / this.zoom,
+      x: (canvasX - this.pan.x) / this.zoom,
+      y: (canvasY - this.pan.y) / this.zoom,
     }
   }
 
