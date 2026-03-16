@@ -14,6 +14,27 @@ import type { ItemCategory } from './domain/item-category'
 const app = document.querySelector<HTMLDivElement>('#app')
 if (!app) throw new Error('App root missing')
 
+// Temporary visual marker to confirm this exact VTT bundle is loaded.
+const debugBuildMarker = 'VTT DEBUG BUILD LOADED (marker: 2026-03-16-01)'
+const debugBadge = document.createElement('div')
+debugBadge.textContent = debugBuildMarker
+Object.assign(debugBadge.style, {
+  position: 'fixed',
+  right: '12px',
+  bottom: '12px',
+  zIndex: '2147483647',
+  background: '#10161fcc',
+  color: '#8ff7bf',
+  border: '1px solid #8ff7bf66',
+  borderRadius: '6px',
+  padding: '6px 10px',
+  fontFamily: 'monospace',
+  fontSize: '11px',
+  letterSpacing: '0.02em',
+  pointerEvents: 'none',
+} as Partial<CSSStyleDeclaration>)
+document.body.appendChild(debugBadge)
+
 const sourceItemSearch = createSourceItemSearchIndex()
 
 const formatEncumbrance = (enc: EncumbranceExpr): string => {
@@ -461,6 +482,7 @@ const pixiAdapter = new PixiBoardAdapter(canvasHost, {
     postToWorker({ type: 'INTENT', intent: { type: 'NEST_NODE_UNDER', nodeId, parentNodeId } })
   },
   onMoveNodeToRoot(nodeId, x, y) {
+    console.info('[main node] post MOVE_NODE_TO_ROOT', { nodeId, x, y })
     postToWorker({ type: 'INTENT', intent: { type: 'MOVE_NODE_TO_ROOT', nodeId, x, y } })
   },
   onZoomChange(_zoom) {},

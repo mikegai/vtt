@@ -31,6 +31,21 @@ const post = (message: WorkerToMainMessage): void => {
   self.postMessage(message)
 }
 
+const debugDrag = (...args: unknown[]): void => {
+  const serialized = args
+    .map((arg) => {
+      if (typeof arg === 'string') return arg
+      try {
+        return JSON.stringify(arg)
+      } catch {
+        return String(arg)
+      }
+    })
+    .join(' ')
+  console.info('[vm-worker drag]', ...args)
+  post({ type: 'LOG', message: `[vm-worker drag] ${serialized}` })
+}
+
 const buildSegmentIdToNodeId = (state: CanonicalState): Record<string, string> => {
   const board = buildBoardVM(state)
   const sourceNodeIds: Record<string, string> = {}
@@ -560,11 +575,21 @@ const applyIntent = (intent: WorkerIntent): void => {
   }
 
   if (intent.type === 'MOVE_NODE_TO_ROOT') {
+    debugDrag('MOVE_NODE_TO_ROOT received', {
+      nodeId: intent.nodeId,
+      x: intent.x,
+      y: intent.y,
+      hasWorldState: !!worldState,
+    })
     if (!worldState) {
       recompute()
       return
     }
     const actor = worldState.actors[intent.nodeId]
+    debugDrag('MOVE_NODE_TO_ROOT actor lookup', {
+      nodeId: intent.nodeId,
+      actorFound: !!actor,
+    })
     if (!actor) {
       recompute()
       return
@@ -589,6 +614,11 @@ const applyIntent = (intent: WorkerIntent): void => {
       nodeGroupOverrides: nextNodeGroupOverrides,
       nodePositions: nextNodePositions,
     }
+    debugDrag('MOVE_NODE_TO_ROOT applied', {
+      nodeId: intent.nodeId,
+      persistedPosition: nextNodePositions[intent.nodeId],
+      subtreeNodeIds,
+    })
     recompute()
     return
   }
@@ -632,8 +662,17 @@ const applyIntent = (intent: WorkerIntent): void => {
 
   if (intent.type === 'DRAG_SEGMENT_END') {
     const hoverTargetNodeId = localState.dropIntent
-      ? (intent.targetNodeId ?? localState.dropIntent.targetNodeId)
+      ? intent.targetNodeId
       : null
+    debugDrag('DRAG_SEGMENT_END received', {
+      targetNodeId: intent.targetNodeId,
+      hoverTargetNodeId,
+      x: intent.x,
+      y: intent.y,
+      hasFreeSegmentPositions: !!intent.freeSegmentPositions,
+      freeSegmentPositionCount: intent.freeSegmentPositions ? Object.keys(intent.freeSegmentPositions).length : 0,
+      segmentIds: localState.dropIntent?.segmentIds ?? [],
+    })
     if (localState.dropIntent && hoverTargetNodeId) {
       const { segmentIds, sourceNodeIds } = localState.dropIntent
       const target = parseNodeId(hoverTargetNodeId)
@@ -688,6 +727,11 @@ const applyIntent = (intent: WorkerIntent): void => {
         for (const segmentId of segmentIds) delete freeSegmentPositions[segmentId]
         localState = { ...localState, freeSegmentPositions }
       }
+      debugDrag('handled as node drop', {
+        hoverTargetNodeId,
+        movedAny,
+        clearedFreeSegmentPositionsFor: movedAny ? segmentIds : [],
+      })
     } else if (localState.dropIntent && worldState && intent.x != null && intent.y != null) {
       const { segmentIds, sourceNodeIds } = localState.dropIntent
       const firstSourceNodeId = segmentIds[0] ? sourceNodeIds[segmentIds[0]] : null
@@ -763,9 +807,37 @@ const applyIntent = (intent: WorkerIntent): void => {
           ...localState,
           freeSegmentPositions,
         }
+        debugDrag('handled as absolute drop with resolved source', {
+          sourceActorId: source.actorId,
+          sourceCarryGroupId: source.carryGroupId ?? null,
+          persistedCount: segmentIds.length,
+          segmentIds,
+        })
+      } else if (intent.freeSegmentPositions) {
+        // If source resolution fails (e.g. free segment already in absolute space),
+        // still persist explicit absolute drop coordinates from the renderer.
+        const freeSegmentPositions = { ...localState.freeSegmentPositions }
+        for (const segmentId of segmentIds) {
+          const nextPos = intent.freeSegmentPositions[segmentId]
+          if (nextPos) freeSegmentPositions[segmentId] = nextPos
+        }
+        localState = {
+          ...localState,
+          freeSegmentPositions,
+        }
+        debugDrag('handled as absolute drop with source fallback', {
+          persistedCount: Object.keys(intent.freeSegmentPositions).length,
+          segmentIds,
+        })
+      } else {
+        debugDrag('absolute drop path reached but nothing persisted', {
+          reason: 'source unresolved and freeSegmentPositions missing',
+          segmentIds,
+        })
       }
     }
     localState = { ...localState, dropIntent: null }
+    debugDrag('dropIntent cleared after drag end')
     recompute()
     return
   }

@@ -2043,6 +2043,14 @@ export class PixiBoardAdapter {
     this.lastDragEndTime = Date.now()
     const world = event ? this.screenToWorld(event.clientX, event.clientY) : null
     const targetNodeId = world ? this.findDropTarget(world.x, world.y) : drag.snap?.nodeId ?? null
+    console.info('[pixi drag] endSegmentDrag start', {
+      isExternal: !!drag.isExternal,
+      hasEvent: !!event,
+      targetNodeId,
+      worldX: world?.x ?? null,
+      worldY: world?.y ?? null,
+      segmentIds: drag.segmentIds,
+    })
 
     if (drag.isExternal) {
       let cancelled = !event
@@ -2071,6 +2079,13 @@ export class PixiBoardAdapter {
           }
         }
       }
+      console.info('[pixi drag] external drag end payload', {
+        targetNodeId,
+        cancelled,
+        dropX,
+        dropY,
+        freeSegmentPositionsCount: freeSegmentPositions ? Object.keys(freeSegmentPositions).length : 0,
+      })
       this.worldLayer.removeChild(drag.lineLayer)
       this.worldLayer.removeChild(drag.proxy)
       drag.lineLayer.destroy({ children: true })
@@ -2105,6 +2120,14 @@ export class PixiBoardAdapter {
         dropY = world.y - drag.dropAnchorOffset.y
       }
     }
+    console.info('[pixi drag] internal drag end payload', {
+      targetNodeId,
+      effectiveTarget,
+      dropX,
+      dropY,
+      freeSegmentPositionsCount: freeSegmentPositions ? Object.keys(freeSegmentPositions).length : 0,
+      segmentIds: drag.segmentIds,
+    })
     this.handlers.onDragSegmentEnd(effectiveTarget, dropX, dropY, freeSegmentPositions)
     this.worldLayer.removeChild(drag.lineLayer)
     this.worldLayer.removeChild(drag.proxy)
@@ -2558,6 +2581,13 @@ export class PixiBoardAdapter {
       this.lastPointerPosition = { clientX, clientY }
       this.startAutoPanLoop()
       handleView.cursor = 'grabbing'
+      console.info('[pixi node] drag start', {
+        nodeId,
+        nodeIds,
+        originalGroupId,
+        originalIndex,
+        originalNestParentId,
+      })
       event.stopPropagation()
     })
     handleView.on('pointerup', () => {
@@ -2927,7 +2957,20 @@ export class PixiBoardAdapter {
     this.skipNodeAnimationOnce.clear()
     const isNoOp = drag.targetNestParentNodeId
       ? drag.targetNestParentNodeId === drag.originalNestParentId
-      : drag.targetGroupId === drag.originalGroupId && drag.targetIndex === drag.originalIndex
+      : drag.targetGroupId != null
+        ? drag.targetGroupId === drag.originalGroupId && drag.targetIndex === drag.originalIndex
+        : false
+    console.info('[pixi node] drag finish decision', {
+      nodeId: drag.nodeIds[0],
+      targetNestParentNodeId: drag.targetNestParentNodeId,
+      targetGroupId: drag.targetGroupId,
+      targetIndex: drag.targetIndex,
+      originalNestParentId: drag.originalNestParentId,
+      originalGroupId: drag.originalGroupId,
+      originalIndex: drag.originalIndex,
+      isNoOp,
+      hasFinalPointer: finalClientX != null && finalClientY != null,
+    })
     if (isNoOp && this.currentScene) {
       this.recomputeDisplayFlow(this.currentScene)
       for (const nodeId of drag.nodeIds) {
@@ -2940,13 +2983,27 @@ export class PixiBoardAdapter {
       }
     } else if (drag.targetNestParentNodeId && this.handlers.onNestNodeUnder) {
       drag.nodeIds.forEach((nodeId) => this.skipNodeAnimationOnce.add(nodeId))
+      console.info('[pixi node] dispatch onNestNodeUnder', {
+        nodeId: drag.nodeIds[0],
+        parentNodeId: drag.targetNestParentNodeId,
+      })
       this.handlers.onNestNodeUnder(drag.nodeIds[0], drag.targetNestParentNodeId)
     } else if (drag.targetGroupId && this.handlers.onMoveNodeToGroupIndex) {
       drag.nodeIds.forEach((nodeId) => this.skipNodeAnimationOnce.add(nodeId))
+      console.info('[pixi node] dispatch onMoveNodeToGroupIndex', {
+        nodeId: drag.nodeIds[0],
+        groupId: drag.targetGroupId,
+        index: drag.targetIndex,
+      })
       this.handlers.onMoveNodeToGroupIndex(drag.nodeIds[0], drag.targetGroupId, drag.targetIndex)
     } else if (finalClientX != null && finalClientY != null && this.handlers.onMoveNodeToRoot) {
       const world = this.screenToWorld(finalClientX, finalClientY)
       drag.nodeIds.forEach((nodeId) => this.skipNodeAnimationOnce.add(nodeId))
+      console.info('[pixi node] dispatch onMoveNodeToRoot', {
+        nodeId: drag.nodeIds[0],
+        x: world.x - drag.anchorOffset.x,
+        y: world.y - drag.anchorOffset.y,
+      })
       this.handlers.onMoveNodeToRoot(drag.nodeIds[0], world.x - drag.anchorOffset.x, world.y - drag.anchorOffset.y)
     }
     this.endDrag()
