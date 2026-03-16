@@ -458,16 +458,7 @@ const pixiAdapter = new PixiBoardAdapter(canvasHost, {
     }
   },
   onCanvasContextMenu(worldX, worldY, clientX, clientY) {
-    if (currentScene) {
-      const insideAnyGroup = Object.values(currentScene.groups).some(
-        (group) =>
-          worldX >= group.x &&
-          worldX <= group.x + group.width &&
-          worldY >= group.y &&
-          worldY <= group.y + group.height,
-      )
-      if (insideAnyGroup) return
-    }
+    if (pixiAdapter.isPointInsideGroup(worldX, worldY)) return
     showCanvasContextMenu(worldX, worldY, clientX, clientY)
   },
   onSegmentClick(segmentId, _nodeId, addToSelection) {

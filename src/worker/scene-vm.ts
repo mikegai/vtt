@@ -29,6 +29,7 @@ const STONE_H = 54
 const STONE_ROW_GAP = 3
 const SLOT_START_X = 10
 const TOP_BAND_H = 34
+const NODE_BOTTOM_PADDING = 6
 
 const slotAreaHeightForSlots = (slotCount: number, stonesPerRow: number): number => {
   const numRows = Math.ceil(slotCount / stonesPerRow)
@@ -39,7 +40,7 @@ const meterWidthForSlots = (slotCount: number, stonesPerRow: number): number =>
   Math.min(slotCount, stonesPerRow) * (STONE_W + STONE_GAP) - STONE_GAP
 
 const nodeHeightForSlots = (slotCount: number, stonesPerRow: number): number =>
-  TOP_BAND_H + slotAreaHeightForSlots(slotCount, stonesPerRow)
+  TOP_BAND_H + slotAreaHeightForSlots(slotCount, stonesPerRow) + NODE_BOTTOM_PADDING
 
 const nodeWidthForSlots = (slotCount: number, stonesPerRow: number): number =>
   SLOT_START_X + meterWidthForSlots(slotCount, stonesPerRow) + 20

@@ -87,6 +87,11 @@ type NodeView = {
 
 type GroupView = {
   readonly root: Container
+  contentContainer?: Container
+  clipWidthSpring?: ReturnType<typeof createSpring1D>
+  clipHeightSpring?: ReturnType<typeof createSpring1D>
+  contentClip?: Graphics
+  onClipAnimationComplete?: () => void
 }
 
 type LabelView = {
@@ -130,10 +135,20 @@ const STONE_H = 54
 const SIXTH_ROWS = 6
 const CELL_H = STONE_H / SIXTH_ROWS
 const TOP_BAND_H = 22
+const NODE_BOTTOM_PADDING = 6
 const SLOT_START_X = 10
 const DEFAULT_STONES_PER_ROW = 25
 const STONE_ROW_GAP = 3
 const NODE_CLIP_LEFT_OVERFLOW = 24
+
+/** Group layout constants - must match scene-vm for collapsed dimension computation. */
+const GROUP_PADDING_X = 20
+const GROUP_PADDING_TOP = 40
+const GROUP_PADDING_BOTTOM = 18
+const NODE_ROW_GAP = 8
+const NODE_INDENT = 24
+const EMPTY_GROUP_MIN_WIDTH = 300
+const EMPTY_GROUP_MIN_HEIGHT = 140
 
 let stonesPerRow = DEFAULT_STONES_PER_ROW
 
@@ -946,6 +961,7 @@ export class PixiBoardAdapter {
   private readonly maxVisibleLabelPx = DEFAULT_MAX_VISIBLE_PX
   private fontsLoaded = false
   private readonly nodeExpandedState = new Map<string, boolean>()
+  private readonly groupExpandedState = new Map<string, boolean>()
   private readonly nodeDisplayOffsetY = new Map<string, number>()
   private readonly groupDisplayHeights = new Map<string, number>()
   private readonly skipNodeAnimationOnce = new Set<string>()
@@ -1445,6 +1461,19 @@ export class PixiBoardAdapter {
     return this.findDropTarget(world.x, world.y)
   }
 
+  isPointInsideGroup(worldX: number, worldY: number): boolean {
+    if (!this.currentScene?.groups) return false
+    return Object.values(this.currentScene.groups).some((group) => {
+      const dims = this.getGroupDisplayDimensions(group)
+      return (
+        worldX >= group.x &&
+        worldX <= group.x + dims.width &&
+        worldY >= group.y &&
+        worldY <= group.y + dims.height
+      )
+    })
+  }
+
   beginExternalDrag(segments: readonly SceneSegmentVM[], clientX: number, clientY: number): void {
     if (this.activeDrag.type !== 'idle') return
     if (segments.length === 0) return
@@ -1929,7 +1958,7 @@ export class PixiBoardAdapter {
     const visibleSlotCount = isExpanded ? slotCount : collapsedVisibleSlotCount(node.segments, slotCount)
     const totalMeterWidth = meterWidthForSlots(visibleSlotCount)
     const totalWidth = SLOT_START_X + totalMeterWidth + 20
-    const totalHeight = TOP_BAND_H + slotAreaHeightForSlots(visibleSlotCount)
+    const totalHeight = TOP_BAND_H + slotAreaHeightForSlots(visibleSlotCount) + NODE_BOTTOM_PADDING
     const totalSixths = totalSixthsForSlots(slotCount)
 
     let moveToRootBtn: Graphics | undefined
@@ -2019,6 +2048,7 @@ export class PixiBoardAdapter {
       contentContainer.addChild(caret)
     }
 
+    const nodeTitleMidY = TOP_BAND_H / 2
     if (tier !== 'far') {
       const title = new BitmapText({
         text: node.title,
@@ -2027,9 +2057,8 @@ export class PixiBoardAdapter {
       title.eventMode = 'none'
       title.anchor.set(0, 0.5)
       title.scale.set(textCompensationScale)
-      const midY = TOP_BAND_H / 2
-      addExpandCaret(midY)
-      title.position.set(30, midY)
+      addExpandCaret(nodeTitleMidY)
+      title.position.set(30, nodeTitleMidY)
       contentContainer.addChild(title)
     } else {
       const compact = new BitmapText({
@@ -2039,9 +2068,8 @@ export class PixiBoardAdapter {
       compact.eventMode = 'none'
       compact.anchor.set(0, 0.5)
       compact.scale.set(textCompensationScale)
-      const midY = TOP_BAND_H / 2
-      addExpandCaret(midY)
-      compact.position.set(30, midY)
+      addExpandCaret(nodeTitleMidY)
+      compact.position.set(30, nodeTitleMidY)
       contentContainer.addChild(compact)
     }
 
@@ -2363,10 +2391,12 @@ export class PixiBoardAdapter {
   private createGroup(group: SceneGroupVM): GroupView {
     const root = new Container()
     root.position.set(group.x, group.y)
-    const displayHeight = this.getGroupDisplayHeight(group)
+    const dims = this.getGroupDisplayDimensions(group)
+    const displayWidth = dims.width
+    const displayHeight = dims.height
 
     const bg = new Graphics()
-    bg.roundRect(0, 0, group.width, displayHeight, 14)
+    bg.roundRect(0, 0, displayWidth, displayHeight, 14)
     bg.fill({ color: 0x101b33, alpha: 0.36 })
     bg.stroke({ width: 2, color: 0x6f8fc5, alpha: 0.75 })
     root.addChild(bg)
@@ -2387,13 +2417,42 @@ export class PixiBoardAdapter {
     }
     root.addChild(handle)
 
+    const isExpanded = this.isGroupExpanded(group.id)
+    const groupTitleMidY = TOP_BAND_H / 2
+    const addExpandCaret = (midY: number): void => {
+      const caret = new Graphics()
+      caret.eventMode = 'static'
+      caret.cursor = 'pointer'
+      ;(caret as Container & { __dragHandle?: boolean }).__dragHandle = true
+      caret.roundRect(14, midY - 9, 18, 18, 5)
+      caret.fill({ color: 0xffffff, alpha: 0.001 })
+      if (isExpanded) {
+        caret.moveTo(18, midY - 2.5)
+        caret.lineTo(26, midY - 2.5)
+        caret.lineTo(22, midY + 2.5)
+      } else {
+        caret.moveTo(19, midY - 4)
+        caret.lineTo(19, midY + 4)
+        caret.lineTo(24, midY)
+      }
+      caret.fill({ color: 0xc5d8ff, alpha: 0.95 })
+      caret.on('pointertap', (event: any) => {
+        event.stopPropagation()
+        this.setGroupExpanded(group.id, !isExpanded)
+      })
+      root.addChild(caret)
+    }
+
+    addExpandCaret(groupTitleMidY)
+
     const title = new BitmapText({
       text: group.title,
-      style: { fill: '#dfeaff', fontSize: 12, fontFamily: FONT_SEMIBOLD },
+      style: { fill: '#dfeaff', fontSize: 14, fontFamily: FONT_SEMIBOLD },
     })
     title.eventMode = 'none'
+    title.anchor.set(0, 0.5)
     title.scale.set(getTextCompensationScale(this.zoom))
-    title.position.set(24, 14)
+    title.position.set(34, groupTitleMidY)
     root.addChild(title)
 
     this.groupLayer.addChild(root)
@@ -2550,8 +2609,8 @@ export class PixiBoardAdapter {
     for (let i = groups.length - 1; i >= 0; i -= 1) {
       const g = groups[i]
       if (!g) continue
-      const displayH = this.getGroupDisplayHeight(g)
-      if (worldX >= g.x && worldX <= g.x + g.width && worldY >= g.y && worldY <= g.y + displayH) {
+      const dims = this.getGroupDisplayDimensions(g)
+      if (worldX >= g.x && worldX <= g.x + dims.width && worldY >= g.y && worldY <= g.y + dims.height) {
         target = g
         break
       }
@@ -2602,8 +2661,9 @@ export class PixiBoardAdapter {
     if (drop.type === 'reorder') {
       const group = this.currentScene.groups[drop.groupId]
       if (!group) return
+      const dims = this.getGroupDisplayDimensions(group)
       const x1 = group.x + 20
-      const x2 = group.x + group.width - 20
+      const x2 = group.x + dims.width - 20
       indicator.moveTo(x1, drop.lineY)
       indicator.lineTo(x2, drop.lineY)
       indicator.stroke({ width: 3, color: 0xffffff, alpha: 0.95 })
@@ -2774,6 +2834,10 @@ export class PixiBoardAdapter {
     for (const nodeId of this.nodeExpandedState.keys()) {
       if (!liveNodeIds.has(nodeId)) this.nodeExpandedState.delete(nodeId)
     }
+    const liveGroupIds = new Set(Object.keys(scene.groups ?? {}))
+    for (const groupId of this.groupExpandedState.keys()) {
+      if (!liveGroupIds.has(groupId)) this.groupExpandedState.delete(groupId)
+    }
     const filterCategory = scene.filterCategory ?? null
     const selectedSegmentIds = scene.selectedSegmentIds ?? []
     Object.values(scene.nodes).forEach((node) => {
@@ -2917,6 +2981,30 @@ export class PixiBoardAdapter {
         segView.container.position.set(segView.spring.x, segView.spring.y)
       }
     }
+    for (const [, view] of this.groupViews) {
+      if (view.clipWidthSpring && view.clipHeightSpring && view.contentClip) {
+        const widthActive = updateSpring1D(view.clipWidthSpring, dt)
+        const heightActive = updateSpring1D(view.clipHeightSpring, dt)
+        if (widthActive || heightActive) anyActive = true
+        drawNodeClipMask(view.contentClip, view.clipWidthSpring.value, view.clipHeightSpring.value)
+        if (!view.clipWidthSpring.active && !view.clipHeightSpring.active) {
+          const onComplete = view.onClipAnimationComplete
+          if (onComplete) {
+            ;(view as GroupView).onClipAnimationComplete = undefined
+            ;(view as GroupView).clipWidthSpring = undefined
+            ;(view as GroupView).clipHeightSpring = undefined
+            completedTransitions.push(onComplete)
+          } else {
+            view.root.mask = null
+            view.root.removeChild(view.contentClip)
+            view.contentClip.destroy()
+            ;(view as GroupView).clipWidthSpring = undefined
+            ;(view as GroupView).clipHeightSpring = undefined
+            ;(view as GroupView).contentClip = undefined
+          }
+        }
+      }
+    }
     this.updateSelectionOverlay()
     if (completedTransitions.length > 0) anyActive = true
     for (const done of completedTransitions) done()
@@ -3003,7 +3091,7 @@ export class PixiBoardAdapter {
     const totalMeterWidth = meterWidthForSlots(visibleSlotCount)
     return {
       width: SLOT_START_X + totalMeterWidth + 20,
-      height: TOP_BAND_H + slotAreaHeightForSlots(visibleSlotCount),
+      height: TOP_BAND_H + slotAreaHeightForSlots(visibleSlotCount) + NODE_BOTTOM_PADDING,
     }
   }
 
@@ -3023,7 +3111,12 @@ export class PixiBoardAdapter {
         const dims = this.getNodeDisplayDimensions(node)
         yOffset += dims.height - node.height
       }
-      this.groupDisplayHeights.set(group.id, Math.max(40, group.height + yOffset))
+      if (this.isGroupExpanded(group.id)) {
+        this.groupDisplayHeights.set(group.id, Math.max(40, group.height + yOffset))
+      } else {
+        const collapsed = this.getGroupCollapsedDimensions(group)
+        this.groupDisplayHeights.set(group.id, collapsed.height)
+      }
     }
   }
 
@@ -3031,8 +3124,114 @@ export class PixiBoardAdapter {
     return { x: node.x, y: node.y + (this.nodeDisplayOffsetY.get(node.id) ?? 0) }
   }
 
-  private getGroupDisplayHeight(group: SceneGroupVM): number {
-    return this.groupDisplayHeights.get(group.id) ?? group.height
+  private isGroupExpanded(groupId: string): boolean {
+    return this.groupExpandedState.get(groupId) !== false
+  }
+
+  private setGroupExpanded(groupId: string, expanded: boolean): void {
+    if (!this.currentScene) return
+    const group = this.currentScene.groups?.[groupId]
+    const view = this.groupViews.get(groupId)
+    if (!group || !view) {
+      this.groupExpandedState.set(groupId, expanded)
+      this.rebuildGroups(this.currentScene)
+      this.startSpringTicker()
+      return
+    }
+
+    if (expanded) {
+      this.groupExpandedState.set(groupId, true)
+      this.recomputeDisplayFlow(this.currentScene)
+      this.rebuildGroups(this.currentScene)
+      this.startSpringTicker()
+      return
+    }
+
+    const targetDims = this.getGroupCollapsedDimensions(group)
+    const currentWidth = view.clipWidthSpring?.value ?? this.getGroupDisplayDimensions(group).width
+    const currentHeight = view.clipHeightSpring?.value ?? this.getGroupDisplayDimensions(group).height
+    if (Math.abs(currentWidth - targetDims.width) <= 0.5 && Math.abs(currentHeight - targetDims.height) <= 0.5) {
+      this.groupExpandedState.set(groupId, false)
+      this.recomputeDisplayFlow(this.currentScene)
+      this.rebuildGroups(this.currentScene)
+      this.startSpringTicker()
+      return
+    }
+
+    this.groupExpandedState.set(groupId, false)
+    this.recomputeDisplayFlow(this.currentScene)
+    let clip = view.contentClip
+    if (!clip) {
+      clip = new Graphics()
+      clip.eventMode = 'none'
+      drawNodeClipMask(clip, currentWidth, currentHeight)
+      view.root.addChildAt(clip, 0)
+      view.root.mask = clip
+      ;(view as GroupView).contentClip = clip
+    }
+    const widthSpring = createSpring1D(currentWidth)
+    const heightSpring = createSpring1D(currentHeight)
+    setSpring1DTarget(widthSpring, targetDims.width)
+    setSpring1DTarget(heightSpring, targetDims.height)
+    ;(view as GroupView).clipWidthSpring = widthSpring
+    ;(view as GroupView).clipHeightSpring = heightSpring
+    ;(view as GroupView).onClipAnimationComplete = () => {
+      if (!this.currentScene) return
+      this.rebuildGroups(this.currentScene)
+      this.startSpringTicker()
+    }
+    this.startSpringTicker()
+  }
+
+  private getGroupCollapsedDimensions(group: SceneGroupVM): { width: number; height: number } {
+    if (!this.currentScene) return { width: group.width, height: group.height }
+    const nodeIdsInGroup = new Set(group.nodeIds)
+    const childrenByParent = new Map<string, string[]>()
+    for (const nodeId of group.nodeIds) {
+      const node = this.currentScene.nodes[nodeId]
+      const parentId = node?.parentNodeId
+      if (!parentId || !nodeIdsInGroup.has(parentId)) continue
+      const siblings = childrenByParent.get(parentId) ?? []
+      siblings.push(nodeId)
+      childrenByParent.set(parentId, siblings)
+    }
+    const orderedRoots = group.nodeIds.filter((nodeId) => {
+      const parentId = this.currentScene!.nodes[nodeId]?.parentNodeId
+      return !parentId || !nodeIdsInGroup.has(parentId)
+    })
+
+    let maxNodeRight = 0
+    let cursorY = group.y + GROUP_PADDING_TOP
+    const layoutSubtree = (nodeId: string, depth: number): void => {
+      const node = this.currentScene!.nodes[nodeId]
+      if (!node) return
+      const dims = this.getNodeDisplayDimensions(node)
+      const indentPx = depth * NODE_INDENT
+      const nodeRight = group.x + GROUP_PADDING_X + indentPx + dims.width
+      maxNodeRight = Math.max(maxNodeRight, nodeRight)
+      cursorY += dims.height + NODE_ROW_GAP
+      const children = childrenByParent.get(nodeId) ?? []
+      children.forEach((childId) => layoutSubtree(childId, depth + 1))
+    }
+    for (const rootId of orderedRoots) layoutSubtree(rootId, 0)
+
+    const hasNodes = orderedRoots.length > 0
+    if (!hasNodes) {
+      return { width: EMPTY_GROUP_MIN_WIDTH, height: EMPTY_GROUP_MIN_HEIGHT }
+    }
+    const width = maxNodeRight - group.x + GROUP_PADDING_X
+    const height = cursorY - NODE_ROW_GAP - group.y + GROUP_PADDING_BOTTOM
+    return { width: Math.max(40, width), height: Math.max(40, height) }
+  }
+
+  private getGroupDisplayDimensions(group: SceneGroupVM): { width: number; height: number } {
+    if (this.isGroupExpanded(group.id)) {
+      return {
+        width: group.width,
+        height: this.groupDisplayHeights.get(group.id) ?? group.height,
+      }
+    }
+    return this.getGroupCollapsedDimensions(group)
   }
 
   applyPatches(patches: readonly ScenePatch[], scene: SceneVM): void {
