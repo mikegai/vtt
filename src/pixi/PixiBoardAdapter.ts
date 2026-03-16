@@ -1,4 +1,5 @@
 import { Application, Assets, BitmapText, Color, Container, Graphics } from 'pixi.js'
+import { createSpring2D, setSpringTarget, updateSpring2D } from './spring'
 import type { SceneNodeVM, ScenePatch, SceneVM, SceneSegmentVM } from '../worker/protocol'
 
 type AdapterHandlers = {
@@ -10,14 +11,22 @@ type AdapterHandlers = {
   onDragSegmentEnd(targetNodeId: string | null): void
 }
 
+type SegmentView = {
+  container: Container
+  spring: ReturnType<typeof createSpring2D>
+}
+
 type NodeView = {
   readonly root: Container
+  readonly segmentContainer: Container
+  segmentViews: Map<string, SegmentView>
 }
 
 type SegmentDragState = {
   readonly segment: SceneSegmentVM
   readonly sourceNodeId: string
-  readonly ghost: Container
+  readonly proxy: Container
+  readonly lineLayer: Container
   snap: { nodeId: string; startSixth: number } | null
 }
 
@@ -286,22 +295,86 @@ const groupSixthsByStone = (
   return groups
 }
 
-const sixthToCellLocal = (sixthIndex: number, totalSixths: number): { x: number; y: number } => {
-  const clamped = Math.max(0, Math.min(totalSixths, sixthIndex))
-  const stone = Math.floor(clamped / 6)
-  const row = clamped % 6
-  return {
-    x: stoneToX(stone),
-    y: row * CELL_H,
-  }
-}
-
 const segmentStoneSpan = (startSixth: number, sizeSixths: number): { startStone: number; endStone: number } => {
   const startStone = Math.floor(startSixth / 6)
   const endStone = Math.max(startStone + 1, Math.ceil((startSixth + sizeSixths) / 6))
   return { startStone, endStone }
 }
 
+/** Position (top-left) of segment in node's local space (relative to node root). */
+const segmentPositionInNode = (segment: SceneSegmentVM): { x: number; y: number } => {
+  const { startStone } = segmentStoneSpan(segment.startSixth, segment.sizeSixths)
+  const isMulti = segment.sizeSixths >= 6 && segment.sizeSixths % 6 === 0
+  if (isMulti) {
+    return {
+      x: METER_X + stoneToX(startStone),
+      y: METER_Y,
+    }
+  }
+  const groups = groupSixthsByStone(segment.startSixth, segment.sizeSixths)
+  let minX = Infinity, minY = Infinity
+  groups.forEach((g) => {
+    minX = Math.min(minX, stoneToX(g.stone))
+    minY = Math.min(minY, g.startRow * CELL_H)
+  })
+  return {
+    x: METER_X + minX,
+    y: METER_Y + minY,
+  }
+}
+
+/** World-space center of a segment within a node. */
+const segmentCenterInNode = (
+  segment: SceneSegmentVM,
+  nodeX: number,
+  nodeY: number,
+): { x: number; y: number } => {
+  const { startStone, endStone } = segmentStoneSpan(segment.startSixth, segment.sizeSixths)
+  const isMulti = segment.sizeSixths >= 6 && segment.sizeSixths % 6 === 0
+  if (isMulti) {
+    const w = (endStone - startStone) * (STONE_W + STONE_GAP) - STONE_GAP
+    return {
+      x: nodeX + METER_X + stoneToX(startStone) + w / 2,
+      y: nodeY + METER_Y + STONE_H / 2,
+    }
+  }
+  const groups = groupSixthsByStone(segment.startSixth, segment.sizeSixths)
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+  groups.forEach((g) => {
+    const x = stoneToX(g.stone)
+    const y = g.startRow * CELL_H
+    minX = Math.min(minX, x)
+    minY = Math.min(minY, y)
+    maxX = Math.max(maxX, x + STONE_W)
+    maxY = Math.max(maxY, y + g.count * CELL_H)
+  })
+  return {
+    x: nodeX + METER_X + (minX + maxX) / 2,
+    y: nodeY + METER_Y + (minY + maxY) / 2,
+  }
+}
+
+/** Draw arrow line from (x1,y1) to (x2,y2) with arrowhead at end. */
+const drawArrowLine = (g: Graphics, x1: number, y1: number, x2: number, y2: number): void => {
+  const dx = x2 - x1
+  const dy = y2 - y1
+  const len = Math.sqrt(dx * dx + dy * dy)
+  if (len < 2) return
+  const ux = dx / len
+  const uy = dy / len
+  const arrowLen = 10
+  const arrowAngle = Math.PI / 6
+  const ax1 = x2 - ux * arrowLen + uy * arrowLen * Math.tan(arrowAngle)
+  const ay1 = y2 - uy * arrowLen - ux * arrowLen * Math.tan(arrowAngle)
+  const ax2 = x2 - ux * arrowLen - uy * arrowLen * Math.tan(arrowAngle)
+  const ay2 = y2 - uy * arrowLen + ux * arrowLen * Math.tan(arrowAngle)
+  g.moveTo(x1, y1)
+  g.lineTo(x2, y2)
+  g.moveTo(ax1, ay1)
+  g.lineTo(x2, y2)
+  g.lineTo(ax2, ay2)
+  g.stroke({ width: 2, color: 0x5cadee, alpha: 0.85 })
+}
 
 const occupiedSixthsFromSegments = (
   segments: readonly SceneSegmentVM[],
@@ -467,9 +540,12 @@ const drawSegmentBlock = (
   onTooltipLeave?: () => void,
   nodeId?: string,
   onDragStart?: (segment: SceneSegmentVM, nodeId: string, x: number, y: number) => void,
+  baseOffset?: { x: number; y: number },
 ): void => {
+  const o = baseOffset ?? { x: 0, y: 0 }
   const { startStone, endStone } = segmentStoneSpan(segment.startSixth, segment.sizeSixths)
-  const startX = METER_X + stoneToX(startStone)
+  const startX = METER_X + stoneToX(startStone) - o.x
+  const startY = METER_Y - o.y
   const width = (endStone - startStone) * (STONE_W + STONE_GAP) - STONE_GAP
   const isDropPreview = segment.isDropPreview === true
   const color = isDropPreview ? 0x5cadee : segment.isOverflow ? 0x932d4e : hovered ? 0x5cadee : 0x3d9ac9
@@ -498,7 +574,7 @@ const drawSegmentBlock = (
   }
 
   if (isMultiStone(segment)) {
-    block.roundRect(startX + 0.5, METER_Y + 2.5, width - 1, STONE_H - 5, 5)
+    block.roundRect(startX + 0.5, startY + 2.5, width - 1, STONE_H - 5, 5)
     if (isDropPreview) {
       block.fill({ color, alpha })
       block.stroke({ width: 2, color: 0x5cadee, alpha: 0.7 })
@@ -511,7 +587,7 @@ const drawSegmentBlock = (
       const availableWorldWidth = Math.max(8, width - 6)
       const availableWorldHeight = Math.max(8, STONE_H - 8)
       const centerX = startX + width / 2
-      const centerY = METER_Y + STONE_H / 2
+      const centerY = startY + STONE_H / 2
       const zoomReadableScale = zoom < 0.45 ? 1.14 : 1
       const visualScale = textCompensationScale * zoomReadableScale
       const fit = selectLabelFit(
@@ -543,8 +619,8 @@ const drawSegmentBlock = (
     const { hitBounds } = drawBlendedSegmentRects(
       container,
       segment,
-      METER_X,
-      METER_Y,
+      METER_X - o.x,
+      METER_Y - o.y,
       color,
       alpha,
       totalSixths,
@@ -761,49 +837,59 @@ export class PixiBoardAdapter {
     return { nodeId: targetNodeId, startSixth }
   }
 
-  private buildDragGhost(segment: SceneSegmentVM): Container {
-    const ghost = new Container()
+  private buildDragProxy(segment: SceneSegmentVM): Container {
+    const proxy = new Container()
     const color = segment.isOverflow ? 0xa83f62 : isMultiStone(segment) ? 0x61b5ff : 0x7bd7cf
-    const alpha = 0.56
+    const alpha = 0.75
 
     if (isMultiStone(segment)) {
       const w = (segment.sizeSixths / 6) * (STONE_W + STONE_GAP) - STONE_GAP
       const rect = new Graphics()
       rect.roundRect(0, 0, w, STONE_H, 6)
       rect.fill({ color, alpha })
-      rect.stroke({ width: 1, color: 0xd3ebff, alpha: 0.7 })
-      ghost.addChild(rect)
+      rect.stroke({ width: 1.5, color: 0xd3ebff, alpha: 0.9 })
+      proxy.addChild(rect)
     } else {
-      drawGhostCells(ghost, 0, 0, 0, segment.sizeSixths, color, alpha)
+      drawGhostCells(proxy, 0, 0, 0, segment.sizeSixths, color, alpha)
       const groups = groupSixthsByStone(0, segment.sizeSixths)
-      let minX = Infinity
-      let minY = Infinity
-      let maxX = -Infinity
-      let maxY = -Infinity
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
       groups.forEach((g) => {
-        const x = stoneToX(g.stone)
-        const y = g.startRow * CELL_H
-        const w = STONE_W
-        const h = g.count * CELL_H
-        minX = Math.min(minX, x)
-        minY = Math.min(minY, y)
-        maxX = Math.max(maxX, x + w)
-        maxY = Math.max(maxY, y + h)
+        minX = Math.min(minX, stoneToX(g.stone))
+        minY = Math.min(minY, g.startRow * CELL_H)
+        maxX = Math.max(maxX, stoneToX(g.stone) + STONE_W)
+        maxY = Math.max(maxY, g.startRow * CELL_H + g.count * CELL_H)
       })
       const stroke = new Graphics()
       stroke.roundRect(minX, minY, maxX - minX, maxY - minY, 4)
-      stroke.stroke({ width: 1, color: 0xd3ebff, alpha: 0.65 })
-      ghost.addChild(stroke)
+      stroke.stroke({ width: 1.5, color: 0xd3ebff, alpha: 0.85 })
+      proxy.addChild(stroke)
     }
 
-    return ghost
+    return proxy
+  }
+
+  private getDropTargetCenter(): { x: number; y: number } | null {
+    if (!this.segmentDrag?.snap || !this.currentScene) return null
+    const { nodeId, startSixth } = this.segmentDrag.snap
+    const node = this.currentScene.nodes[nodeId]
+    if (!node) return null
+    const previewSeg = node.segments.find((s) => s.isDropPreview === true)
+    if (previewSeg) return segmentCenterInNode(previewSeg, node.x, node.y)
+    const seg = this.segmentDrag.segment
+    return segmentCenterInNode(
+      { ...seg, startSixth, sizeSixths: seg.sizeSixths },
+      node.x,
+      node.y,
+    )
   }
 
   private beginSegmentDrag(segment: SceneSegmentVM, sourceNodeId: string, globalX: number, globalY: number): void {
     if (this.segmentDrag) this.endSegmentDrag()
-    const ghost = this.buildDragGhost(segment)
-    this.worldLayer.addChild(ghost)
-    this.segmentDrag = { segment, sourceNodeId, ghost, snap: null }
+    const proxy = this.buildDragProxy(segment)
+    const lineLayer = new Container()
+    this.worldLayer.addChild(lineLayer)
+    this.worldLayer.addChild(proxy)
+    this.segmentDrag = { segment, sourceNodeId, proxy, lineLayer, snap: null }
     this.handlers.onDragSegmentStart(segment.id, sourceNodeId)
     this.updateSegmentDrag(globalX, globalY)
   }
@@ -817,18 +903,17 @@ export class PixiBoardAdapter {
     const snap = this.findSnapTarget(world.x, world.y, this.segmentDrag.segment)
     this.segmentDrag.snap = snap
 
-    if (snap && this.currentScene) {
-      const node = this.currentScene.nodes[snap.nodeId]
-      if (node) {
-        const totalSixths = totalSixthsForSlots(node.slotCount)
-        const slot = sixthToCellLocal(snap.startSixth, totalSixths)
-        const x = node.x + METER_X + slot.x
-        const y = node.y + METER_Y + (isMultiStone(this.segmentDrag.segment) ? 0 : slot.y)
-        this.segmentDrag.ghost.position.set(x, y)
-        return
-      }
+    const proxyCenterX = world.x
+    const proxyCenterY = world.y - STONE_H / 2
+    this.segmentDrag.proxy.position.set(proxyCenterX, proxyCenterY)
+
+    this.segmentDrag.lineLayer.removeChildren()
+    const targetCenter = this.getDropTargetCenter()
+    if (targetCenter) {
+      const lineG = new Graphics()
+      drawArrowLine(lineG, proxyCenterX, proxyCenterY, targetCenter.x, targetCenter.y)
+      this.segmentDrag.lineLayer.addChild(lineG)
     }
-    this.segmentDrag.ghost.position.set(world.x, world.y - STONE_H / 2)
   }
 
   private endSegmentDrag(event?: PointerEvent): void {
@@ -836,8 +921,10 @@ export class PixiBoardAdapter {
     const world = event ? this.screenToWorld(event.clientX, event.clientY) : null
     const targetNodeId = world ? this.findDropTarget(world.x, world.y) : this.segmentDrag.snap?.nodeId ?? null
     this.handlers.onDragSegmentEnd(targetNodeId)
-    this.worldLayer.removeChild(this.segmentDrag.ghost)
-    this.segmentDrag.ghost.destroy({ children: true })
+    this.worldLayer.removeChild(this.segmentDrag.lineLayer)
+    this.worldLayer.removeChild(this.segmentDrag.proxy)
+    this.segmentDrag.lineLayer.destroy({ children: true })
+    this.segmentDrag.proxy.destroy({ children: true })
     this.segmentDrag = null
   }
 
@@ -915,10 +1002,18 @@ export class PixiBoardAdapter {
     root.addChild(slotFillLayer)
 
     const segmentContainer = new Container()
+    const segmentViews = new Map<string, SegmentView>()
     node.segments.forEach((segment) => {
+      const pos = segmentPositionInNode(segment)
+      const segContainer = new Container()
+      segContainer.position.set(pos.x, pos.y)
+      const spring = createSpring2D(pos.x, pos.y)
+      spring.targetX = pos.x
+      spring.targetY = pos.y
+      segmentViews.set(segment.id, { container: segContainer, spring })
       const hovered = segment.id === hoveredSegmentId
       drawSegmentBlock(
-        segmentContainer,
+        segContainer,
         segment,
         tier,
         this.zoom,
@@ -933,14 +1028,85 @@ export class PixiBoardAdapter {
         () => this.hideTooltip(),
         node.id,
         (seg, nodeId, x, y) => this.beginSegmentDrag(seg, nodeId, x, y),
+        pos,
       )
+      segmentContainer.addChild(segContainer)
     })
     root.addChild(segmentContainer)
 
     root.position.set(node.x, node.y)
     this.enableDrag(root, node.id)
     this.worldLayer.addChild(root)
-    return { root }
+    return { root, segmentContainer, segmentViews }
+  }
+
+  private updateNode(node: SceneNodeVM, view: NodeView, hoveredSegmentId: string | null): void {
+    const tier = getZoomTier(this.zoom)
+    const textCompensationScale = getTextCompensationScale(this.zoom)
+    const totalSixths = totalSixthsForSlots(node.slotCount)
+    const nextIds = new Set(node.segments.map((s) => s.id))
+    for (const [id, segView] of view.segmentViews) {
+      if (!nextIds.has(id)) {
+        view.segmentContainer.removeChild(segView.container)
+        segView.container.destroy({ children: true })
+        view.segmentViews.delete(id)
+      }
+    }
+    node.segments.forEach((segment) => {
+      const pos = segmentPositionInNode(segment)
+      let segView = view.segmentViews.get(segment.id)
+      if (!segView) {
+        const segContainer = new Container()
+        segContainer.position.set(pos.x, pos.y)
+        const spring = createSpring2D(pos.x, pos.y)
+        spring.targetX = pos.x
+        spring.targetY = pos.y
+        segView = { container: segContainer, spring }
+        view.segmentViews.set(segment.id, segView)
+        const hovered = segment.id === hoveredSegmentId
+        drawSegmentBlock(
+          segContainer,
+          segment,
+          tier,
+          this.zoom,
+          hovered,
+          this.handlers,
+          textCompensationScale,
+          this.minVisibleLabelPx,
+          this.maxVisibleLabelPx,
+          totalSixths,
+          (seg, x, y) => this.showTooltip(seg, x, y),
+          (x, y) => this.moveTooltip(x, y),
+          () => this.hideTooltip(),
+          node.id,
+          (seg, nodeId, x, y) => this.beginSegmentDrag(seg, nodeId, x, y),
+          pos,
+        )
+        view.segmentContainer.addChild(segContainer)
+      } else {
+        setSpringTarget(segView.spring, pos.x, pos.y)
+        const hovered = segment.id === hoveredSegmentId
+        segView.container.removeChildren()
+        drawSegmentBlock(
+          segView.container,
+          segment,
+          tier,
+          this.zoom,
+          hovered,
+          this.handlers,
+          textCompensationScale,
+          this.minVisibleLabelPx,
+          this.maxVisibleLabelPx,
+          totalSixths,
+          (seg, x, y) => this.showTooltip(seg, x, y),
+          (x, y) => this.moveTooltip(x, y),
+          () => this.hideTooltip(),
+          node.id,
+          (seg, nodeId, x, y) => this.beginSegmentDrag(seg, nodeId, x, y),
+          pos,
+        )
+      }
+    })
   }
 
   private enableDrag(view: Container, nodeId: string): void {
@@ -991,6 +1157,29 @@ export class PixiBoardAdapter {
     this.rebuildAllNodes(scene)
   }
 
+  private springTickerBound = (): void => {
+    this.updateSprings()
+  }
+
+  private startSpringTicker(): void {
+    this.app.ticker.remove(this.springTickerBound)
+    this.app.ticker.add(this.springTickerBound)
+  }
+
+  private updateSprings(): void {
+    const dt = 1 / 60
+    let anyActive = false
+    for (const [, view] of this.nodeViews) {
+      for (const [, segView] of view.segmentViews) {
+        if (updateSpring2D(segView.spring, dt)) anyActive = true
+        segView.container.position.set(segView.spring.x, segView.spring.y)
+      }
+    }
+    if (!anyActive) {
+      this.app.ticker.remove(this.springTickerBound)
+    }
+  }
+
   applyPatches(patches: readonly ScenePatch[], scene: SceneVM): void {
     this.currentScene = scene
     let needsFullRebuild = false
@@ -1002,10 +1191,25 @@ export class PixiBoardAdapter {
         }
         return
       }
+      if (patch.type === 'UPDATE_NODE') {
+        const view = this.nodeViews.get(patch.node.id)
+        if (view) {
+          this.updateNode(patch.node, view, scene.hoveredSegmentId ?? null)
+          this.startSpringTicker()
+        } else {
+          needsFullRebuild = true
+        }
+        return
+      }
+      if (patch.type === 'ADD_NODE' || patch.type === 'REMOVE_NODE') {
+        needsFullRebuild = true
+        return
+      }
       needsFullRebuild = true
     })
     if (needsFullRebuild) {
       this.rebuildAllNodes(scene)
+      this.startSpringTicker()
     }
   }
 }
