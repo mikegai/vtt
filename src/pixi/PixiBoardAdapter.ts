@@ -417,11 +417,10 @@ const localToSixth = (localX: number, localY: number, slotCount: number): number
   return totalSixths
 }
 
-/** Lucide-style grip-vertical icon (3 dots) - MIT license. Inline SVG for easy Pixi loading. */
+/** Hand/fist marker to indicate wielded sides. */
 const GRIP_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
-  <circle cx="12" cy="5" r="1.5" fill="#f0f8ff"/>
-  <circle cx="12" cy="12" r="1.5" fill="#f0f8ff"/>
-  <circle cx="12" cy="19" r="1.5" fill="#f0f8ff"/>
+  <path d="M6.6 13.8v-2.2a1.5 1.5 0 1 1 3 0V7.1a1.5 1.5 0 1 1 3 0v4.5V6.3a1.5 1.5 0 1 1 3 0v5.3V7.9a1.5 1.5 0 1 1 3 0v8.2c0 2.5-2 4.5-4.5 4.5h-4.2c-2.5 0-4.5-2-4.5-4.5V14l-1.1-1.1a1.6 1.6 0 1 1 2.3-2.3l1 1Z"
+    fill="#f0f8ff" stroke="#d6e7ff" stroke-width="0.6" stroke-linejoin="round"/>
 </svg>`
 
 const GRIP_ICON_SIZE = 10
@@ -972,6 +971,11 @@ export class PixiBoardAdapter {
     const previewSeg = node.segments.find((s) => s.isDropPreview === true)
     if (previewSeg) return segmentCenterInNode(previewSeg, node.x, node.y)
     const seg = this.segmentDrag.segment
+    const isSameAsSource = nodeId === this.segmentDrag.sourceNodeId
+    if (isSameAsSource) {
+      const actualSeg = node.segments.find((s) => s.id === seg.id)
+      if (actualSeg) return segmentCenterInNode(actualSeg, node.x, node.y)
+    }
     return segmentCenterInNode(
       { ...seg, startSixth, sizeSixths: seg.sizeSixths },
       node.x,
@@ -1074,7 +1078,7 @@ export class PixiBoardAdapter {
       })
       meta.eventMode = 'none'
       meta.scale.set(textCompensationScale)
-      meta.position.set(8, 24)
+      meta.position.set(8 + title.width * textCompensationScale + 12, 8)
       root.addChild(meta)
     } else {
       const compact = new BitmapText({

@@ -165,6 +165,30 @@ const applyIntent = (intent: WorkerIntent): void => {
     return
   }
 
+  if (intent.type === 'UNWIELD') {
+    if (!worldState) return
+    const entryId = segmentIdToEntryId(intent.segmentId)
+    const entry = worldState.inventoryEntries[entryId]
+    if (entry) {
+      const nextState = { ...(entry.state ?? {}) }
+      delete nextState.wield
+      nextState.heldHands = 0
+      const updatedEntry = {
+        ...entry,
+        state: nextState,
+      }
+      worldState = {
+        ...worldState,
+        inventoryEntries: {
+          ...worldState.inventoryEntries,
+          [entryId]: updatedEntry,
+        },
+      }
+    }
+    recompute()
+    return
+  }
+
   if (intent.type === 'SET_WORLD_STATE') {
     worldState = intent.worldState
     recompute()

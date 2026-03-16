@@ -137,11 +137,18 @@ const showContextMenu = (
 
   const wieldItems =
     wieldOptions && wieldOptions.length > 0
-      ? wieldOptions.map((w) => {
+      ? [
+          ...(segment.wield
+            ? [
+                `<button class="context-menu-item" data-action="unwield" type="button">Unwield</button>`,
+              ]
+            : []),
+          ...wieldOptions.map((w) => {
           const label =
             w === 'left' ? 'Wield left' : w === 'right' ? 'Wield right' : 'Wield 2-handed'
           return `<button class="context-menu-item" data-action="wield" data-wield="${w}" type="button">${escapeHtml(label)}</button>`
-        })
+          }),
+        ]
       : []
 
   let html = ''
@@ -168,12 +175,17 @@ const showContextMenu = (
   const close = (): void => {
     contextMenuEl.hidden = true
     contextMenuEl.innerHTML = ''
-    document.removeEventListener('click', close)
-    document.removeEventListener('contextmenu', close)
+    document.removeEventListener('click', closeIfOutside)
+    document.removeEventListener('contextmenu', closeIfOutside)
   }
 
   const scheduleClose = (): void => {
     setTimeout(close, 0)
+  }
+  const closeIfOutside = (event: Event): void => {
+    const target = event.target
+    if (target instanceof Node && contextMenuEl.contains(target)) return
+    close()
   }
 
   contextMenuEl.querySelectorAll('.context-menu-submenu-trigger').forEach((el) => {
@@ -205,13 +217,20 @@ const showContextMenu = (
             intent: { type: 'SET_WIELD', segmentId, wield },
           })
         }
+      } else if (action === 'unwield') {
+        postToWorker({
+          type: 'INTENT',
+          intent: { type: 'UNWIELD', segmentId },
+        })
       }
       scheduleClose()
     })
   })
 
-  document.addEventListener('click', close, { once: true })
-  document.addEventListener('contextmenu', close, { once: true })
+  setTimeout(() => {
+    document.addEventListener('click', closeIfOutside)
+    document.addEventListener('contextmenu', closeIfOutside)
+  }, 0)
 }
 
 const escapeAttr = (s: string): string =>

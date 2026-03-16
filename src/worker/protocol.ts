@@ -69,6 +69,7 @@ export type WorkerIntent =
   | { readonly type: 'DRAG_SEGMENT_END'; readonly targetNodeId: string | null }
   | { readonly type: 'MOVE_ENTRY_TO'; readonly segmentId: string; readonly sourceNodeId: string; readonly targetNodeId: string }
   | { readonly type: 'SET_WIELD'; readonly segmentId: string; readonly wield: WieldGrip }
+  | { readonly type: 'UNWIELD'; readonly segmentId: string }
   | { readonly type: 'SET_WORLD_STATE'; readonly worldState: CanonicalState }
 
 export type MainToWorkerMessage =
