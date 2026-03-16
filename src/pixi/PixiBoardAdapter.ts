@@ -1,4 +1,4 @@
-import { Application, Assets, BitmapText, Color, Container, Graphics, Point } from 'pixi.js'
+import { Application, Assets, BitmapText, Color, Container, Graphics, Point, Rectangle } from 'pixi.js'
 import { createSpring2D, setSpringTarget, updateSpring2D } from './spring'
 import type { SceneNodeVM, ScenePatch, SceneVM, SceneSegmentVM } from '../worker/protocol'
 
@@ -41,8 +41,9 @@ const STONE_W = 36
 const STONE_H = 54
 const SIXTH_ROWS = 6
 const CELL_H = STONE_H / SIXTH_ROWS
-const METER_X = 148
-const METER_Y = 34
+const TOP_BAND_H = 34
+const SLOT_START_X = 10
+const SLOT_PADDING = 4
 const ROW_H = 100
 
 const meterWidthForSlots = (slotCount: number): number =>
@@ -311,8 +312,8 @@ const segmentPositionInNode = (segment: SceneSegmentVM): { x: number; y: number 
   const isMulti = segment.sizeSixths >= 6 && segment.sizeSixths % 6 === 0
   if (isMulti) {
     return {
-      x: METER_X + stoneToX(startStone),
-      y: METER_Y,
+      x: SLOT_START_X + stoneToX(startStone),
+      y: TOP_BAND_H,
     }
   }
   const groups = groupSixthsByStone(segment.startSixth, segment.sizeSixths)
@@ -322,8 +323,8 @@ const segmentPositionInNode = (segment: SceneSegmentVM): { x: number; y: number 
     minY = Math.min(minY, g.startRow * CELL_H)
   })
   return {
-    x: METER_X + minX,
-    y: METER_Y + minY,
+    x: SLOT_START_X + minX,
+    y: TOP_BAND_H + minY,
   }
 }
 
@@ -338,8 +339,8 @@ const segmentCenterInNode = (
   if (isMulti) {
     const w = (endStone - startStone) * (STONE_W + STONE_GAP) - STONE_GAP
     return {
-      x: nodeX + METER_X + stoneToX(startStone) + w / 2,
-      y: nodeY + METER_Y + STONE_H / 2,
+      x: nodeX + SLOT_START_X + stoneToX(startStone) + w / 2,
+      y: nodeY + TOP_BAND_H + STONE_H / 2,
     }
   }
   const groups = groupSixthsByStone(segment.startSixth, segment.sizeSixths)
@@ -353,8 +354,8 @@ const segmentCenterInNode = (
     maxY = Math.max(maxY, y + g.count * CELL_H)
   })
   return {
-    x: nodeX + METER_X + (minX + maxX) / 2,
-    y: nodeY + METER_Y + (minY + maxY) / 2,
+    x: nodeX + SLOT_START_X + (minX + maxX) / 2,
+    y: nodeY + TOP_BAND_H + (minY + maxY) / 2,
   }
 }
 
@@ -437,6 +438,7 @@ const drawGripIndicators = (
 
   const drawOneGrip = (x: number, flip = false): void => {
     const g = new Graphics()
+    g.eventMode = 'none'
     g.translateTransform(x - GRIP_ICON_SIZE / 2, cy - GRIP_ICON_SIZE / 2)
     g.scaleTransform(flip ? -scale : scale, scale)
     g.svg(GRIP_ICON_SVG)
@@ -507,6 +509,7 @@ const drawBlendedSegmentRects = (
     const h = group.count * CELL_H
 
     const rect = new Graphics()
+    rect.eventMode = 'none'
     rect.roundRect(x + PAD, y + PAD, w - PAD * 2, h - PAD * 2, 4)
     rect.fill({ color, alpha })
     if (isDropPreview) {
@@ -541,11 +544,13 @@ const drawBlendedSegmentRects = (
       text: fit.text,
       style: { fill: '#f0f8ff', fontSize: fit.fontSize, fontFamily: FONT_SEMIBOLD, align: 'center' },
     })
+    txt.eventMode = 'none'
     txt.scale.set(visualScale)
     txt.anchor.set(0.5, 0.5)
     txt.position.set(centerX, centerY)
 
     const clip = new Graphics()
+    clip.eventMode = 'none'
     clip.rect(centerX - availableWorldWidth / 2, centerY - availableWorldHeight / 2, availableWorldWidth, availableWorldHeight)
     clip.fill({ color: 0xffffff, alpha: 0.001 })
     container.addChild(clip)
@@ -583,8 +588,8 @@ const drawSegmentBlock = (
 ): void => {
   const o = baseOffset ?? { x: 0, y: 0 }
   const { startStone, endStone } = segmentStoneSpan(segment.startSixth, segment.sizeSixths)
-  const startX = METER_X + stoneToX(startStone) - o.x
-  const startY = METER_Y - o.y
+  const startX = SLOT_START_X + stoneToX(startStone) - o.x
+  const startY = TOP_BAND_H - o.y
   const width = (endStone - startStone) * (STONE_W + STONE_GAP) - STONE_GAP
   const isDropPreview = segment.isDropPreview === true
   const color = isDropPreview ? 0x5cadee : segment.isOverflow ? 0x932d4e : hovered ? 0x5cadee : 0x3d9ac9
@@ -621,13 +626,15 @@ const drawSegmentBlock = (
   }
 
   if (isMultiStone(segment)) {
-    block.roundRect(startX + 0.5, startY + 2.5, width - 1, STONE_H - 5, 5)
+    const blockBounds = { x: startX + 0.5, y: startY + 2.5, w: width - 1, h: STONE_H - 5 }
+    block.roundRect(blockBounds.x, blockBounds.y, blockBounds.w, blockBounds.h, 5)
     if (isDropPreview) {
       block.fill({ color, alpha })
       block.stroke({ width: 2, color: 0x5cadee, alpha: 0.7 })
     } else {
       block.fill({ color, alpha })
     }
+    block.hitArea = new Rectangle(blockBounds.x, blockBounds.y, blockBounds.w, blockBounds.h)
     container.addChild(block)
 
     if (segment.sizeSixths >= 1) {
@@ -651,11 +658,13 @@ const drawSegmentBlock = (
         text: fit.text,
         style: { fill: '#f0f8ff', fontSize: fit.fontSize, fontFamily: FONT_SEMIBOLD, align: 'center' },
       })
+      txt.eventMode = 'none'
       txt.scale.set(visualScale)
       txt.anchor.set(0.5, 0.5)
       txt.position.set(centerX, centerY)
 
       const clip = new Graphics()
+      clip.eventMode = 'none'
       clip.rect(centerX - availableWorldWidth / 2, centerY - availableWorldHeight / 2, availableWorldWidth, availableWorldHeight)
       clip.fill({ color: 0xffffff, alpha: 0.001 })
       container.addChild(clip)
@@ -672,8 +681,8 @@ const drawSegmentBlock = (
     const { hitBounds } = drawBlendedSegmentRects(
       container,
       segment,
-      METER_X - o.x,
-      METER_Y - o.y,
+      SLOT_START_X - o.x,
+      TOP_BAND_H - o.y,
       color,
       alpha,
       totalSixths,
@@ -685,6 +694,7 @@ const drawSegmentBlock = (
     )
     block.rect(hitBounds.x, hitBounds.y, hitBounds.w, hitBounds.h)
     block.fill({ color: 0xffffff, alpha: 0.001 })
+    block.hitArea = new Rectangle(hitBounds.x, hitBounds.y, hitBounds.w, hitBounds.h)
     container.addChild(block)
     drawGripIndicators(container, segment.wield, hitBounds)
   }
@@ -907,10 +917,10 @@ export class PixiBoardAdapter {
     if (!node) return null
 
     const nodeMeterWidth = meterWidthForSlots(node.slotCount)
-    const inY = worldY >= node.y + METER_Y && worldY <= node.y + METER_Y + STONE_H
+    const inY = worldY >= node.y + TOP_BAND_H && worldY <= node.y + TOP_BAND_H + STONE_H
     if (!inY) return { nodeId: targetNodeId, startSixth: 0 }
-    const localX = worldX - node.x - METER_X
-    const localY = worldY - node.y - METER_Y
+    const localX = worldX - node.x - SLOT_START_X
+    const localY = worldY - node.y - TOP_BAND_H
     if (localX < -STONE_W || localX > nodeMeterWidth + STONE_W) return { nodeId: targetNodeId, startSixth: 0 }
 
     let startSixth = localToSixth(localX, localY, node.slotCount)
@@ -1006,7 +1016,8 @@ export class PixiBoardAdapter {
     if (!this.segmentDrag) return
     const world = event ? this.screenToWorld(event.clientX, event.clientY) : null
     const targetNodeId = world ? this.findDropTarget(world.x, world.y) : this.segmentDrag.snap?.nodeId ?? null
-    this.handlers.onDragSegmentEnd(targetNodeId)
+    const effectiveTarget = targetNodeId && targetNodeId !== this.segmentDrag.sourceNodeId ? targetNodeId : null
+    this.handlers.onDragSegmentEnd(effectiveTarget)
     this.worldLayer.removeChild(this.segmentDrag.lineLayer)
     this.worldLayer.removeChild(this.segmentDrag.proxy)
     this.segmentDrag.lineLayer.destroy({ children: true })
@@ -1019,11 +1030,10 @@ export class PixiBoardAdapter {
     const textCompensationScale = getTextCompensationScale(this.zoom)
     const root = new Container()
     root.eventMode = 'static'
-    root.cursor = 'grab'
 
     const slotCount = node.slotCount
     const totalMeterWidth = meterWidthForSlots(slotCount)
-    const totalWidth = METER_X + totalMeterWidth + 20
+    const totalWidth = SLOT_START_X + totalMeterWidth + 20
     const totalHeight = ROW_H
     const totalSixths = totalSixthsForSlots(slotCount)
 
@@ -1039,29 +1049,41 @@ export class PixiBoardAdapter {
     speedBar.fill({ color: speedColor, alpha: 0.92 })
     root.addChild(speedBar)
 
+    const dragHandle = new Graphics()
+    dragHandle.eventMode = 'static'
+    dragHandle.cursor = 'grab'
+    dragHandle.rect(0, 0, totalWidth, TOP_BAND_H)
+    dragHandle.fill({ color: 0xffffff, alpha: 0.001 })
+    dragHandle.rect(0, TOP_BAND_H, SLOT_START_X + SLOT_PADDING, ROW_H - TOP_BAND_H)
+    dragHandle.fill({ color: 0xffffff, alpha: 0.001 })
+    root.addChild(dragHandle)
+
     if (tier !== 'far') {
       const title = new BitmapText({
         text: node.title,
         style: { fill: '#e8f0ff', fontSize: 13, fontFamily: FONT_SEMIBOLD },
       })
+      title.eventMode = 'none'
       title.scale.set(textCompensationScale)
-      title.position.set(16, 8)
+      title.position.set(8, 8)
       root.addChild(title)
 
       const meta = new BitmapText({
         text: `${node.speedFeet}' • ${node.usedStoneText} / ${node.capacityStoneText}`,
         style: { fill: '#8ba0ca', fontSize: 11, fontFamily: FONT_REGULAR },
       })
+      meta.eventMode = 'none'
       meta.scale.set(textCompensationScale)
-      meta.position.set(16, 24)
+      meta.position.set(8, 24)
       root.addChild(meta)
     } else {
       const compact = new BitmapText({
         text: `${compactToken(node.title, 4)} ${node.speedFeet}'`,
         style: { fill: '#b0c2e8', fontSize: 11, fontFamily: FONT_REGULAR },
       })
+      compact.eventMode = 'none'
       compact.scale.set(textCompensationScale)
-      compact.position.set(16, 8)
+      compact.position.set(8, 8)
       root.addChild(compact)
     }
 
@@ -1072,12 +1094,12 @@ export class PixiBoardAdapter {
     const brightAlpha = tier === 'far' ? 0.36 : 0.48
     const slotColorFn = node.twoBandSlots ? twoBandSlotColor : fixedSlotBandColor
     for (let stone = 0; stone < slotCount; stone += 1) {
-      const sx = METER_X + stoneToX(stone)
+      const sx = SLOT_START_X + stoneToX(stone)
       const slotBandColor = slotColorFn(stone, node.fixedGreenStoneSlots)
       for (let row = 0; row < SIXTH_ROWS; row += 1) {
         const sixth = stone * 6 + row
         const filled = occupiedSixths.has(sixth)
-        const cy = METER_Y + row * CELL_H
+        const cy = TOP_BAND_H + row * CELL_H
         slotFillLayer.roundRect(sx + 1.6, cy + 0.8, STONE_W - 3.2, CELL_H - 1.6, 1.6)
         slotFillLayer.fill({
           color: slotBandColor,
@@ -1121,7 +1143,7 @@ export class PixiBoardAdapter {
     root.addChild(segmentContainer)
 
     root.position.set(node.x, node.y)
-    this.enableDrag(root, node.id)
+    this.enableDrag(dragHandle, root, node.id)
     this.worldLayer.addChild(root)
     return { root, segmentContainer, segmentViews }
   }
@@ -1195,32 +1217,32 @@ export class PixiBoardAdapter {
     })
   }
 
-  private enableDrag(view: Container, nodeId: string): void {
+  private enableDrag(handleView: Container, nodeContainer: Container, nodeId: string): void {
     let dragging = false
     let offset = { x: 0, y: 0 }
-    view.on('pointerdown', (event) => {
+    handleView.on('pointerdown', (event) => {
       if (event.button !== 0) return
       dragging = true
       const point = event.global
       offset = {
-        x: (point.x - this.pan.x) / this.zoom - view.position.x,
-        y: (point.y - this.pan.y) / this.zoom - view.position.y,
+        x: (point.x - this.pan.x) / this.zoom - nodeContainer.position.x,
+        y: (point.y - this.pan.y) / this.zoom - nodeContainer.position.y,
       }
-      view.cursor = 'grabbing'
+      handleView.cursor = 'grabbing'
       event.stopPropagation()
     })
     const stop = (): void => {
       dragging = false
-      view.cursor = 'grab'
+      handleView.cursor = 'grab'
     }
-    view.on('pointerup', stop)
-    view.on('pointerupoutside', stop)
-    view.on('globalpointermove', (event) => {
+    handleView.on('pointerup', stop)
+    handleView.on('pointerupoutside', stop)
+    handleView.on('globalpointermove', (event) => {
       if (!dragging) return
       const point = event.global
       const x = (point.x - this.pan.x) / this.zoom - offset.x
       const y = (point.y - this.pan.y) / this.zoom - offset.y
-      view.position.set(x, y)
+      nodeContainer.position.set(x, y)
       this.handlers.onMoveNode(nodeId, x, y)
     })
   }

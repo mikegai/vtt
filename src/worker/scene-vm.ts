@@ -13,7 +13,7 @@ export type WorkerLocalState = {
 
 const STONE_W = 36
 const STONE_GAP = 3
-const METER_X = 148
+const SLOT_START_X = 10
 const baseNodeHeight = 84
 
 const INDENT_X = 40
@@ -45,7 +45,7 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
     const fallback = { x: 80, y: 80 + index * 104 }
     const position = localState.nodePositions[row.id] ?? fallback
     const slotCount = totalStoneSlots
-    const nodeWidth = METER_X + slotCount * (STONE_W + STONE_GAP) - STONE_GAP + 20
+    const nodeWidth = SLOT_START_X + slotCount * (STONE_W + STONE_GAP) - STONE_GAP + 20
     nodes[row.id] = {
       id: row.id,
       rowId: row.id,
@@ -93,7 +93,7 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
       const childFallback = { x: 80 + INDENT_X, y: 80 + index * 104 }
       const childPosition = localState.nodePositions[child.id] ?? childFallback
       const childSlotCount = childTotalStoneSlots
-      const childNodeWidth = METER_X + childSlotCount * (STONE_W + STONE_GAP) - STONE_GAP + 20
+      const childNodeWidth = SLOT_START_X + childSlotCount * (STONE_W + STONE_GAP) - STONE_GAP + 20
       nodes[child.id] = {
         id: child.id,
         rowId: child.id,
