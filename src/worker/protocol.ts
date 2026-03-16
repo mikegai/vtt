@@ -1,4 +1,4 @@
-import type { CanonicalState } from '../domain/types'
+import type { ActorKind, CanonicalState, WieldGrip } from '../domain/types'
 
 export type SceneSegmentVM = {
   readonly id: string
@@ -10,6 +10,8 @@ export type SceneSegmentVM = {
   readonly isOverflow: boolean
   /** True when this segment is the drop-preview placeholder (dashed outline). */
   readonly isDropPreview?: boolean
+  readonly itemDefId: string
+  readonly wield?: WieldGrip
   readonly tooltip: {
     readonly title: string
     readonly encumbranceText: string
@@ -22,6 +24,7 @@ export type SceneNodeVM = {
   readonly id: string
   readonly rowId: string
   readonly actorId: string
+  readonly actorKind: ActorKind
   readonly title: string
   readonly x: number
   readonly y: number
@@ -64,6 +67,8 @@ export type WorkerIntent =
   | { readonly type: 'DRAG_SEGMENT_START'; readonly segmentId: string; readonly sourceNodeId: string }
   | { readonly type: 'DRAG_SEGMENT_UPDATE'; readonly targetNodeId: string | null }
   | { readonly type: 'DRAG_SEGMENT_END'; readonly targetNodeId: string | null }
+  | { readonly type: 'MOVE_ENTRY_TO'; readonly segmentId: string; readonly sourceNodeId: string; readonly targetNodeId: string }
+  | { readonly type: 'SET_WIELD'; readonly segmentId: string; readonly wield: WieldGrip }
   | { readonly type: 'SET_WORLD_STATE'; readonly worldState: CanonicalState }
 
 export type MainToWorkerMessage =

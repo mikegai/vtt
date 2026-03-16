@@ -112,6 +112,59 @@ const applyIntent = (intent: WorkerIntent): void => {
     return
   }
 
+  if (intent.type === 'MOVE_ENTRY_TO') {
+    if (!worldState) return
+    const { segmentId, sourceNodeId, targetNodeId } = intent
+    const source = parseNodeId(sourceNodeId)
+    const target = parseNodeId(targetNodeId)
+    if (source.actorId !== target.actorId || source.carryGroupId !== target.carryGroupId) {
+      const entryId = segmentIdToEntryId(segmentId)
+      const entry = worldState.inventoryEntries[entryId]
+      if (entry) {
+        const movedEntry = {
+          ...entry,
+          actorId: target.actorId,
+          carryGroupId: target.carryGroupId,
+        }
+        worldState = {
+          ...worldState,
+          inventoryEntries: {
+            ...worldState.inventoryEntries,
+            [entryId]: movedEntry,
+          },
+        }
+      }
+    }
+    recompute()
+    return
+  }
+
+  if (intent.type === 'SET_WIELD') {
+    if (!worldState) return
+    const entryId = segmentIdToEntryId(intent.segmentId)
+    const entry = worldState.inventoryEntries[entryId]
+    if (entry) {
+      const heldHands: 0 | 1 | 2 = intent.wield === 'both' ? 2 : 1
+      const updatedEntry = {
+        ...entry,
+        state: {
+          ...entry.state,
+          wield: intent.wield,
+          heldHands,
+        },
+      }
+      worldState = {
+        ...worldState,
+        inventoryEntries: {
+          ...worldState.inventoryEntries,
+          [entryId]: updatedEntry,
+        },
+      }
+    }
+    recompute()
+    return
+  }
+
   if (intent.type === 'SET_WORLD_STATE') {
     worldState = intent.worldState
     recompute()

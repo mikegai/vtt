@@ -1,6 +1,9 @@
-import { Application, Assets, BitmapText, Color, Container, Graphics } from 'pixi.js'
+import { Application, Assets, BitmapText, Color, Container, Graphics, Point } from 'pixi.js'
 import { createSpring2D, setSpringTarget, updateSpring2D } from './spring'
 import type { SceneNodeVM, ScenePatch, SceneVM, SceneSegmentVM } from '../worker/protocol'
+
+/** Stored on segment blocks for context-menu hit testing. */
+type SegmentContext = { segmentId: string; nodeId: string }
 
 type AdapterHandlers = {
   onHoverSegment(segmentId: string | null): void
@@ -9,6 +12,7 @@ type AdapterHandlers = {
   onDragSegmentStart(segmentId: string, sourceNodeId: string): void
   onDragSegmentUpdate(targetNodeId: string | null): void
   onDragSegmentEnd(targetNodeId: string | null): void
+  onContextMenu(segmentId: string, nodeId: string, clientX: number, clientY: number): void
 }
 
 type SegmentView = {
@@ -412,6 +416,41 @@ const localToSixth = (localX: number, localY: number, slotCount: number): number
   return totalSixths
 }
 
+/** Lucide-style grip-vertical icon (3 dots) - MIT license. Inline SVG for easy Pixi loading. */
+const GRIP_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <circle cx="12" cy="5" r="1.5" fill="#f0f8ff"/>
+  <circle cx="12" cy="12" r="1.5" fill="#f0f8ff"/>
+  <circle cx="12" cy="19" r="1.5" fill="#f0f8ff"/>
+</svg>`
+
+const GRIP_ICON_SIZE = 10
+
+/** Draw grip indicators on left and/or right edge of segment bounds based on wield state. */
+const drawGripIndicators = (
+  container: Container,
+  wield: 'left' | 'right' | 'both' | undefined,
+  bounds: { x: number; y: number; w: number; h: number },
+): void => {
+  if (!wield) return
+  const cy = bounds.y + bounds.h / 2
+  const scale = GRIP_ICON_SIZE / 24
+
+  const drawOneGrip = (x: number, flip = false): void => {
+    const g = new Graphics()
+    g.translateTransform(x - GRIP_ICON_SIZE / 2, cy - GRIP_ICON_SIZE / 2)
+    g.scaleTransform(flip ? -scale : scale, scale)
+    g.svg(GRIP_ICON_SVG)
+    container.addChild(g)
+  }
+
+  if (wield === 'left' || wield === 'both') {
+    drawOneGrip(bounds.x + GRIP_ICON_SIZE / 2 + 2, true)
+  }
+  if (wield === 'right' || wield === 'both') {
+    drawOneGrip(bounds.x + bounds.w - GRIP_ICON_SIZE / 2 - 2, false)
+  }
+}
+
 /** Draw individual cells for drag ghost (no labels). */
 const drawGhostCells = (
   container: Container,
@@ -567,10 +606,18 @@ const drawSegmentBlock = (
   })
   if (onDragStart && nodeId) {
     block.on('pointerdown', (event: any) => {
-      event.stopPropagation()
-      onTooltipLeave?.()
-      onDragStart(segment, nodeId, event.global.x, event.global.y)
+      if (event.button === 0) {
+        event.stopPropagation()
+        onTooltipLeave?.()
+        onDragStart(segment, nodeId, event.global.x, event.global.y)
+      }
     })
+  }
+  if (nodeId) {
+    ;(block as Graphics & { __segmentContext?: SegmentContext }).__segmentContext = {
+      segmentId: segment.id,
+      nodeId,
+    }
   }
 
   if (isMultiStone(segment)) {
@@ -615,6 +662,12 @@ const drawSegmentBlock = (
       txt.mask = clip
       container.addChild(txt)
     }
+    drawGripIndicators(container, segment.wield, {
+      x: startX + 0.5,
+      y: startY + 2.5,
+      w: width - 1,
+      h: STONE_H - 5,
+    })
   } else {
     const { hitBounds } = drawBlendedSegmentRects(
       container,
@@ -633,6 +686,7 @@ const drawSegmentBlock = (
     block.rect(hitBounds.x, hitBounds.y, hitBounds.w, hitBounds.h)
     block.fill({ color: 0xffffff, alpha: 0.001 })
     container.addChild(block)
+    drawGripIndicators(container, segment.wield, hitBounds)
   }
 }
 
@@ -689,7 +743,11 @@ export class PixiBoardAdapter {
     this.fontsLoaded = true
 
     host.replaceChildren(this.app.canvas)
-    this.app.canvas.addEventListener('contextmenu', (event) => event.preventDefault())
+    this.app.canvas.addEventListener('contextmenu', (event: MouseEvent) => {
+      event.preventDefault()
+      const ctx = this.hitTestSegmentContext(event.clientX, event.clientY)
+      if (ctx) this.handlers.onContextMenu(ctx.segmentId, ctx.nodeId, event.clientX, event.clientY)
+    })
 
     this.sceneRoot.addChild(this.worldLayer)
     this.app.stage.addChild(this.sceneRoot)
@@ -710,6 +768,17 @@ export class PixiBoardAdapter {
   private setupPanZoom(): void {
     let panning = false
     let last = { x: 0, y: 0 }
+
+    this.app.canvas.addEventListener(
+      'pointerdown',
+      (event: PointerEvent) => {
+        if (event.button === 2) {
+          const ctx = this.hitTestSegmentContext(event.clientX, event.clientY)
+          if (ctx) event.stopImmediatePropagation()
+        }
+      },
+      { capture: true },
+    )
 
     const onDown = (event: PointerEvent): void => {
       if (event.button === 1 || event.button === 2) {
@@ -792,6 +861,23 @@ export class PixiBoardAdapter {
     this.minVisibleLabelPx = Math.max(4, Math.min(12, Math.round(value)))
     textFitCache.clear()
     if (this.currentScene) this.rebuildAllNodes(this.currentScene)
+  }
+
+  /** Hit-test at client coords; returns segment context if over a segment block. */
+  private hitTestSegmentContext(clientX: number, clientY: number): SegmentContext | null {
+    const events = (this.app.renderer as { events?: { mapPositionToPoint: (p: Point, x: number, y: number) => void; rootBoundary?: { hitTest: (x: number, y: number) => Container } } }).events
+    if (!events?.rootBoundary) return null
+    const pt = new Point()
+    events.mapPositionToPoint(pt, clientX, clientY)
+    const hit = events.rootBoundary.hitTest(pt.x, pt.y)
+    if (!hit) return null
+    let cur: Container | null = hit
+    while (cur) {
+      const ctx = (cur as Container & { __segmentContext?: SegmentContext }).__segmentContext
+      if (ctx) return ctx
+      cur = cur.parent
+    }
+    return null
   }
 
   private screenToWorld(clientX: number, clientY: number): { x: number; y: number } {

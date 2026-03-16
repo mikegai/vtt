@@ -4,9 +4,11 @@ import { parseInventoryText } from './domain/inventory-text-parser'
 import { allSourceItems, itemSourceCatalog, type EncumbranceExpr } from './domain/item-source-catalog'
 import { formatSixthsAsStone } from './domain/rules'
 import { createSourceItemSearchIndex } from './domain/item-source-search'
+import { getWieldOptions } from './domain/weapon-metadata'
 import { PixiBoardAdapter } from './pixi/PixiBoardAdapter'
 import { sampleState } from './sample-data'
-import type { MainToWorkerMessage, WorkerToMainMessage } from './worker/protocol'
+import type { ActorKind } from './domain/types'
+import type { MainToWorkerMessage, SceneVM, WorkerToMainMessage } from './worker/protocol'
 
 const app = document.querySelector<HTMLDivElement>('#app')
 if (!app) throw new Error('App root missing')
@@ -76,6 +78,8 @@ app.innerHTML = `
   </div>
 
   <div id="hud-bar" class="hud-bar"></div>
+
+  <div id="context-menu" class="context-menu" hidden></div>
 `
 
 const canvasHost = document.querySelector<HTMLElement>('#canvas-host')!
@@ -90,6 +94,128 @@ const vmWorker = new Worker(new URL('./worker/vm-worker.ts', import.meta.url), {
 const postToWorker = (message: MainToWorkerMessage): void => {
   vmWorker.postMessage(message)
 }
+
+let currentScene: SceneVM | null = null
+
+const contextMenuEl = document.querySelector<HTMLElement>('#context-menu')!
+
+const showContextMenu = (
+  segmentId: string,
+  nodeId: string,
+  itemDefId: string,
+  clientX: number,
+  clientY: number,
+): void => {
+  if (!currentScene) return
+
+  const segment = Object.values(currentScene.nodes)
+    .flatMap((n) => n.segments)
+    .find((s) => s.id === segmentId)
+  if (!segment) return
+
+  const sourceNode = currentScene.nodes[nodeId]
+  if (!sourceNode) return
+
+  const itemDef = sampleState.itemDefinitions[itemDefId]
+  const wieldOptions = itemDef ? getWieldOptions(itemDef) : null
+
+  const groupOrder: ActorKind[] = ['pc', 'retainer', 'hireling', 'animal', 'vehicle', 'loot-pile']
+
+  const targetNodes = Object.values(currentScene.nodes)
+    .filter((n) => n.id !== nodeId)
+    .sort((a, b) => {
+      const ai = groupOrder.indexOf(a.actorKind)
+      const bi = groupOrder.indexOf(b.actorKind)
+      if (ai !== bi) return ai - bi
+      return a.title.localeCompare(b.title)
+    })
+
+  const moveItems = targetNodes.map(
+    (n) =>
+      `<button class="context-menu-item" data-action="move" data-target="${escapeAttr(n.id)}" type="button">${escapeHtml(n.title)}</button>`,
+  )
+
+  const wieldItems =
+    wieldOptions && wieldOptions.length > 0
+      ? wieldOptions.map((w) => {
+          const label =
+            w === 'left' ? 'Wield left' : w === 'right' ? 'Wield right' : 'Wield 2-handed'
+          return `<button class="context-menu-item" data-action="wield" data-wield="${w}" type="button">${escapeHtml(label)}</button>`
+        })
+      : []
+
+  let html = ''
+  if (moveItems.length > 0) {
+    const submenuId = 'ctx-move-sub'
+    html += `<div class="context-menu-submenu-wrap"><div class="context-menu-submenu-trigger" data-submenu="${submenuId}">Move to</div><div id="${submenuId}" class="context-menu-submenu">${moveItems.join('')}</div></div>`
+  }
+  if (wieldItems.length > 0) {
+    const submenuId = 'ctx-wield-sub'
+    html += `<div class="context-menu-submenu-wrap"><div class="context-menu-submenu-trigger" data-submenu="${submenuId}">Wield</div><div id="${submenuId}" class="context-menu-submenu">${wieldItems.join('')}</div></div>`
+  }
+
+  if (!html) return
+
+  contextMenuEl.innerHTML = html
+  contextMenuEl.hidden = false
+
+  const padding = 8
+  const maxX = window.innerWidth - contextMenuEl.offsetWidth - padding
+  const maxY = window.innerHeight - contextMenuEl.offsetHeight - padding
+  contextMenuEl.style.left = `${Math.min(clientX, maxX)}px`
+  contextMenuEl.style.top = `${Math.min(clientY, maxY)}px`
+
+  const close = (): void => {
+    contextMenuEl.hidden = true
+    contextMenuEl.innerHTML = ''
+    document.removeEventListener('click', close)
+    document.removeEventListener('contextmenu', close)
+  }
+
+  const scheduleClose = (): void => {
+    setTimeout(close, 0)
+  }
+
+  contextMenuEl.querySelectorAll('.context-menu-submenu-trigger').forEach((el) => {
+    el.addEventListener('mouseenter', () => {
+      contextMenuEl.querySelectorAll('.context-menu-submenu').forEach((s) => s.classList.remove('open'))
+      const subId = (el as HTMLElement).dataset.submenu
+      if (subId) document.getElementById(subId)?.classList.add('open')
+    })
+  })
+
+  contextMenuEl.querySelectorAll('.context-menu-item').forEach((btn) => {
+    const b = btn as HTMLButtonElement
+    b.addEventListener('click', (e) => {
+      e.stopPropagation()
+      const action = b.dataset.action
+      if (action === 'move') {
+        const target = b.dataset.target
+        if (target) {
+          postToWorker({
+            type: 'INTENT',
+            intent: { type: 'MOVE_ENTRY_TO', segmentId, sourceNodeId: nodeId, targetNodeId: target },
+          })
+        }
+      } else if (action === 'wield') {
+        const wield = b.dataset.wield as 'left' | 'right' | 'both'
+        if (wield) {
+          postToWorker({
+            type: 'INTENT',
+            intent: { type: 'SET_WIELD', segmentId, wield },
+          })
+        }
+      }
+      scheduleClose()
+    })
+  })
+
+  document.addEventListener('click', close, { once: true })
+  document.addEventListener('contextmenu', close, { once: true })
+}
+
+const escapeAttr = (s: string): string =>
+  s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
 const pixiAdapter = new PixiBoardAdapter(canvasHost, {
   onHoverSegment(segmentId) {
@@ -108,15 +234,27 @@ const pixiAdapter = new PixiBoardAdapter(canvasHost, {
   onDragSegmentEnd(targetNodeId) {
     postToWorker({ type: 'INTENT', intent: { type: 'DRAG_SEGMENT_END', targetNodeId } })
   },
+  onContextMenu(segmentId, nodeId, clientX, clientY) {
+    const segment = currentScene
+      ? Object.values(currentScene.nodes)
+          .flatMap((n) => n.segments)
+          .find((s) => s.id === segmentId)
+      : null
+    if (segment) {
+      showContextMenu(segmentId, nodeId, segment.itemDefId, clientX, clientY)
+    }
+  },
 })
 
 vmWorker.onmessage = (event: MessageEvent<WorkerToMainMessage>) => {
   const msg = event.data
   if (msg.type === 'SCENE_INIT') {
+    currentScene = msg.scene
     pixiAdapter.applyInit(msg.scene)
     return
   }
   if (msg.type === 'SCENE_PATCHES') {
+    currentScene = msg.scene
     pixiAdapter.applyPatches(msg.patches, msg.scene)
     return
   }

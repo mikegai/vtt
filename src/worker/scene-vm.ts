@@ -50,6 +50,7 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
       id: row.id,
       rowId: row.id,
       actorId: row.actorId,
+      actorKind: actor?.kind ?? 'pc',
       title: row.title,
       x: position.x,
       y: position.y,
@@ -72,6 +73,8 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
         sizeSixths: segment.sizeSixths,
         isOverflow: segment.isOverflow,
         isDropPreview: movedEntryId != null && segmentIdToEntryId(segment.id) === movedEntryId && row.id === localState.dropIntent?.targetNodeId && localState.dropIntent.sourceNodeId !== localState.dropIntent.targetNodeId,
+        itemDefId: segment.itemDefId,
+        wield: segment.state?.wield,
         tooltip: segment.tooltip,
       })),
     }
@@ -95,6 +98,7 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
         id: child.id,
         rowId: child.id,
         actorId: child.actorId,
+        actorKind: childActor?.kind ?? 'pc',
         title: child.title,
         x: childPosition.x,
         y: childPosition.y,
@@ -117,6 +121,8 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
           sizeSixths: segment.sizeSixths,
           isOverflow: segment.isOverflow,
           isDropPreview: movedEntryId != null && segmentIdToEntryId(segment.id) === movedEntryId && child.id === localState.dropIntent?.targetNodeId && localState.dropIntent.sourceNodeId !== localState.dropIntent.targetNodeId,
+          itemDefId: segment.itemDefId,
+          wield: segment.state?.wield,
           tooltip: segment.tooltip,
         })),
       }

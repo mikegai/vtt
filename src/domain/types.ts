@@ -8,10 +8,13 @@ export type ItemKind = 'armor' | 'bulky' | 'standard' | 'coins'
 
 export type CarryZone = 'worn' | 'attached' | 'accessible' | 'stowed' | 'dropped'
 
+export type WieldGrip = 'left' | 'right' | 'both'
+
 export type EquipmentState = {
   readonly worn?: boolean
   readonly attached?: boolean
   readonly heldHands?: 0 | 1 | 2
+  readonly wield?: WieldGrip
   readonly dropped?: boolean
   readonly inaccessible?: boolean
 }
