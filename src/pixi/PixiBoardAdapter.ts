@@ -1749,23 +1749,39 @@ export class PixiBoardAdapter {
     const totalSixths = totalSixthsForSlots(slotCount)
 
     let moveToRootBtn: Graphics | undefined
-    if (node.parentNodeId && this.handlers.onMoveNodeToRoot) {
-      moveToRootBtn = new Graphics()
-      moveToRootBtn.eventMode = 'static'
-      moveToRootBtn.cursor = 'pointer'
-      const btnW = 16
-      const btnH = 16
-      const btnX = -btnW - 4
-      const btnY = totalHeight / 2 - btnH / 2
-      moveToRootBtn.roundRect(btnX, btnY, btnW, btnH, 4)
-      moveToRootBtn.fill({ color: 0x2f4878, alpha: 0.6 })
-      moveToRootBtn.stroke({ width: 1, color: 0x5cadee, alpha: 0.8 })
-      ;(moveToRootBtn as Container & { __dragHandle?: boolean }).__dragHandle = true
-      moveToRootBtn.on('pointertap', () => {
-        if (this.activeDrag.type !== 'idle') return
-        this.handlers.onMoveNodeToRoot?.(node.id, root.position.x, root.position.y)
-      })
-      contentContainer.addChild(moveToRootBtn)
+    if (node.parentNodeId && this.handlers.onMoveNodeToGroupIndex && this.currentScene) {
+      const parent = this.currentScene.nodes[node.parentNodeId]
+      const groupId = parent?.groupId
+      const group = groupId ? this.currentScene.groups?.[groupId] : null
+      if (groupId != null) {
+        moveToRootBtn = new Graphics()
+        moveToRootBtn.eventMode = 'static'
+        moveToRootBtn.cursor = 'pointer'
+        const btnW = 16
+        const btnH = 16
+        const btnX = -btnW - 4
+        const btnY = totalHeight / 2 - btnH / 2
+        moveToRootBtn.roundRect(btnX, btnY, btnW, btnH, 4)
+        moveToRootBtn.fill({ color: 0x2f4878, alpha: 0.6 })
+        moveToRootBtn.stroke({ width: 1, color: 0x5cadee, alpha: 0.8 })
+        const cx = btnX + btnW / 2
+        const cy = btnY + btnH / 2
+        moveToRootBtn.moveTo(cx - 5, cy)
+        moveToRootBtn.lineTo(cx + 3, cy - 4)
+        moveToRootBtn.lineTo(cx + 3, cy + 4)
+        moveToRootBtn.fill({ color: 0xc5d8ff, alpha: 0.95 })
+        ;(moveToRootBtn as Container & { __dragHandle?: boolean }).__dragHandle = true
+        moveToRootBtn.on('pointertap', () => {
+          if (this.activeDrag.type !== 'idle') return
+          const scene = this.currentScene
+          const p = scene?.nodes[node.parentNodeId]
+          const g = p?.groupId && scene?.groups?.[p.groupId]
+          const idx = g ? g.nodeIds.indexOf(node.parentNodeId) : -1
+          const targetIdx = idx >= 0 ? idx + 1 : 0
+          this.handlers.onMoveNodeToGroupIndex?.(node.id, p?.groupId ?? groupId, targetIdx)
+        })
+        contentContainer.addChild(moveToRootBtn)
+      }
     }
 
     const bg = new Graphics()
@@ -1970,8 +1986,11 @@ export class PixiBoardAdapter {
       view.root.position.set(displayPos.x, displayPos.y)
     }
     const totalHeight = this.getNodeDisplayDimensions(node).height
-    if (node.parentNodeId && this.handlers.onMoveNodeToRoot) {
-      if (!view.moveToRootBtn) {
+    if (node.parentNodeId && this.handlers.onMoveNodeToGroupIndex && this.currentScene) {
+      const parent = this.currentScene.nodes[node.parentNodeId]
+      const groupId = parent?.groupId
+      const group = groupId ? this.currentScene.groups?.[groupId] : null
+      if (groupId != null && !view.moveToRootBtn) {
         const moveToRootBtn = new Graphics()
         moveToRootBtn.eventMode = 'static'
         moveToRootBtn.cursor = 'pointer'
@@ -1982,10 +2001,21 @@ export class PixiBoardAdapter {
         moveToRootBtn.roundRect(btnX, btnY, btnW, btnH, 4)
         moveToRootBtn.fill({ color: 0x2f4878, alpha: 0.6 })
         moveToRootBtn.stroke({ width: 1, color: 0x5cadee, alpha: 0.8 })
+        const cx = btnX + btnW / 2
+        const cy = btnY + btnH / 2
+        moveToRootBtn.moveTo(cx - 5, cy)
+        moveToRootBtn.lineTo(cx + 3, cy - 4)
+        moveToRootBtn.lineTo(cx + 3, cy + 4)
+        moveToRootBtn.fill({ color: 0xc5d8ff, alpha: 0.95 })
         ;(moveToRootBtn as Container & { __dragHandle?: boolean }).__dragHandle = true
         moveToRootBtn.on('pointertap', () => {
           if (this.activeDrag.type !== 'idle') return
-          this.handlers.onMoveNodeToRoot?.(node.id, view.root.position.x, view.root.position.y)
+          const scene = this.currentScene
+          const p = scene?.nodes[node.parentNodeId]
+          const g = p?.groupId && scene?.groups?.[p.groupId]
+          const idx = g ? g.nodeIds.indexOf(node.parentNodeId) : -1
+          const targetIdx = idx >= 0 ? idx + 1 : 0
+          this.handlers.onMoveNodeToGroupIndex?.(node.id, p?.groupId ?? groupId, targetIdx)
         })
         view.contentContainer.addChildAt(moveToRootBtn, 0)
         ;(view as NodeView).moveToRootBtn = moveToRootBtn
