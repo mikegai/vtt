@@ -1,4 +1,4 @@
-import { Application, Color, Container, Graphics, Text } from 'pixi.js'
+import { Application, Assets, BitmapText, Color, Container, Graphics } from 'pixi.js'
 import type { SceneNodeVM, ScenePatch, SceneVM, SceneSegmentVM } from '../worker/protocol'
 
 type AdapterHandlers = {
@@ -37,6 +37,22 @@ const SPEED_COLORS: Record<string, number> = {
   red: 0xc93d4e,
 }
 
+const FONT_SEMIBOLD = 'Alegreya-SemiBold'
+const FONT_REGULAR = 'Alegreya-Regular'
+
+const ALEGREYA_SB_ADV: Record<number, number> = {
+  32:9,33:14,34:15,35:25,36:22,37:34,38:34,39:8,40:14,41:14,42:20,43:24,44:13,
+  45:17,46:14,47:16,48:25,49:17,50:23,51:20,52:22,53:21,54:22,55:20,56:23,57:22,
+  58:11,59:11,60:23,61:24,62:23,63:18,64:41,65:29,66:30,67:30,68:33,69:29,70:25,
+  71:32,72:36,73:17,74:16,75:31,76:25,77:40,78:35,79:33,80:27,81:33,82:30,83:26,
+  84:27,85:32,86:30,87:46,88:32,89:28,90:28,91:15,92:16,93:15,94:24,95:22,96:19,
+  97:23,98:25,99:21,100:26,101:22,102:16,103:24,104:26,105:14,106:13,107:25,108:12,
+  109:40,110:27,111:25,112:26,113:25,114:19,115:20,116:16,117:26,118:22,119:35,
+  120:24,121:22,122:22,123:15,124:17,125:15,126:24,
+}
+const ALEGREYA_SB_DEFAULT_ADV = 24
+const ALEGREYA_SB_FONT_SIZE = 48
+
 const fixedSlotBandColor = (stoneIndex: number, greenSlots: number): number => {
   if (stoneIndex < greenSlots) return SPEED_COLORS.green
   if (stoneIndex < greenSlots + 2) return SPEED_COLORS.yellow
@@ -63,9 +79,6 @@ const getTextCompensationScale = (zoom: number): number => {
   return Math.min(1.1, Math.max(0.85, matched))
 }
 
-const widthMeasureCanvas =
-  typeof document !== 'undefined' ? document.createElement('canvas') : null
-const widthMeasureCtx = widthMeasureCanvas?.getContext('2d') ?? null
 const textWidthCache = new Map<string, number>()
 const textFitCache = new Map<string, { text: string; fontSize: number }>()
 
@@ -78,17 +91,16 @@ const compactToken = (label: string, maxChars: number): string => {
   return raw.length === 0 ? '' : raw[0].toUpperCase() + raw.slice(1).toLowerCase()
 }
 
-const measureTextWidth = (text: string, fontSize: number, fontFamily = 'monospace', fontWeight = '600'): number => {
-  const cacheKey = `${fontWeight}|${fontSize}|${fontFamily}|${text}`
+const measureTextWidth = (text: string, fontSize: number): number => {
+  const cacheKey = `${fontSize}|${text}`
   const cached = textWidthCache.get(cacheKey)
   if (cached !== undefined) return cached
-
-  const measured = widthMeasureCtx
-    ? (() => {
-        widthMeasureCtx.font = `${fontWeight} ${fontSize}px ${fontFamily}`
-        return widthMeasureCtx.measureText(text).width
-      })()
-    : text.length * fontSize * 0.62
+  const scale = fontSize / ALEGREYA_SB_FONT_SIZE
+  let w = 0
+  for (let i = 0; i < text.length; i++) {
+    w += ALEGREYA_SB_ADV[text.charCodeAt(i)] ?? ALEGREYA_SB_DEFAULT_ADV
+  }
+  const measured = w * scale
   textWidthCache.set(cacheKey, measured)
   return measured
 }
@@ -391,9 +403,9 @@ const drawSegmentBlock = (
       minVisibleLabelPx,
       maxVisibleLabelPx,
     )
-    const txt = new Text({
+    const txt = new BitmapText({
       text: fit.text,
-      style: { fill: '#f0f8ff', fontSize: fit.fontSize, fontFamily: 'monospace', fontWeight: '600', align: 'center' },
+      style: { fill: '#f0f8ff', fontSize: fit.fontSize, fontFamily: FONT_SEMIBOLD, align: 'center' },
     })
     txt.scale.set(visualScale)
 
@@ -417,14 +429,15 @@ export class PixiBoardAdapter {
   private readonly handlers: AdapterHandlers
   private zoom = 0.85
   private pan = { x: 60, y: 60 }
-  private readonly paceText: Text
+  private readonly paceText: BitmapText
   private readonly tooltipLayer: Container
   private readonly tooltipBg: Graphics
-  private readonly tooltipText: Text
+  private readonly tooltipText: BitmapText
   private currentScene: SceneVM | null = null
   private segmentDrag: SegmentDragState | null = null
   private minVisibleLabelPx = DEFAULT_MIN_VISIBLE_PX
   private readonly maxVisibleLabelPx = DEFAULT_MAX_VISIBLE_PX
+  private fontsLoaded = false
 
   constructor(host: HTMLElement, handlers: AdapterHandlers) {
     this.handlers = handlers
@@ -434,13 +447,13 @@ export class PixiBoardAdapter {
     this.hudLayer = new Container()
     this.tooltipLayer = new Container()
     this.tooltipBg = new Graphics()
-    this.tooltipText = new Text({
+    this.tooltipText = new BitmapText({
       text: '',
-      style: { fill: '#eaf1ff', fontSize: 12, fontFamily: 'monospace' },
+      style: { fill: '#eaf1ff', fontSize: 12, fontFamily: FONT_REGULAR },
     })
-    this.paceText = new Text({
+    this.paceText = new BitmapText({
       text: '',
-      style: { fill: '#b8caee', fontSize: 14, fontFamily: 'monospace' },
+      style: { fill: '#b8caee', fontSize: 14, fontFamily: FONT_REGULAR },
     })
 
     void this.mount(host)
@@ -452,6 +465,12 @@ export class PixiBoardAdapter {
       antialias: true,
       backgroundColor: new Color('#070d1a'),
     })
+
+    await Promise.all([
+      Assets.load('fonts/Alegreya-SemiBold.fnt'),
+      Assets.load('fonts/Alegreya-Regular.fnt'),
+    ])
+    this.fontsLoaded = true
 
     host.replaceChildren(this.app.canvas)
     this.app.canvas.addEventListener('contextmenu', (event) => event.preventDefault())
@@ -468,6 +487,8 @@ export class PixiBoardAdapter {
 
     this.setupPanZoom()
     this.applyCamera()
+
+    if (this.currentScene) this.rebuildAllNodes(this.currentScene)
   }
 
   private setupPanZoom(): void {
@@ -668,25 +689,25 @@ export class PixiBoardAdapter {
     root.addChild(speedBar)
 
     if (tier !== 'far') {
-      const title = new Text({
+      const title = new BitmapText({
         text: node.title,
-        style: { fill: '#e8f0ff', fontSize: 13, fontFamily: "'SF Pro Display', Inter, system-ui, sans-serif", fontWeight: '600' },
+        style: { fill: '#e8f0ff', fontSize: 13, fontFamily: FONT_SEMIBOLD },
       })
       title.scale.set(textCompensationScale)
       title.position.set(16, 8)
       root.addChild(title)
 
-      const meta = new Text({
+      const meta = new BitmapText({
         text: `${node.speedFeet}' • ${node.usedStoneText} / ${node.capacityStoneText}`,
-        style: { fill: '#8ba0ca', fontSize: 11, fontFamily: 'monospace' },
+        style: { fill: '#8ba0ca', fontSize: 11, fontFamily: FONT_REGULAR },
       })
       meta.scale.set(textCompensationScale)
       meta.position.set(16, 24)
       root.addChild(meta)
     } else {
-      const compact = new Text({
+      const compact = new BitmapText({
         text: `${compactToken(node.title, 4)} ${node.speedFeet}'`,
-        style: { fill: '#b0c2e8', fontSize: 11, fontFamily: 'monospace' },
+        style: { fill: '#b0c2e8', fontSize: 11, fontFamily: FONT_REGULAR },
       })
       compact.scale.set(textCompensationScale)
       compact.position.set(16, 8)
@@ -773,6 +794,7 @@ export class PixiBoardAdapter {
   }
 
   private rebuildAllNodes(scene: SceneVM): void {
+    if (!this.fontsLoaded) return
     for (const [, view] of this.nodeViews) {
       this.worldLayer.removeChild(view.root)
       view.root.destroy({ children: true })
