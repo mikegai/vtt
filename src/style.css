@@ -463,7 +463,20 @@ html, body {
 }
 
 .parsed-item-dragging {
-  opacity: 0.55;
+  opacity: 0.4;
+}
+
+.parsed-drag-ghost {
+  position: fixed;
+  pointer-events: none;
+  opacity: 0.85;
+  z-index: 999;
+  transform: translate(-50%, -50%) rotate(-2deg);
+  filter: drop-shadow(0 4px 12px rgba(0, 0, 0, 0.4));
+  border-radius: 8px;
+  background: rgba(14, 20, 33, 0.95);
+  border: 1px solid rgba(116, 170, 255, 0.5);
+  padding: 8px 10px;
 }
 
 .status-resolved {

@@ -62,6 +62,7 @@ type AdapterHandlers = {
   onMoveLabel?(labelId: string, x: number, y: number): void
   onSelectLabel?(labelId: string | null): void
   onCanvasWorldClick?(x: number, y: number): boolean | void
+  onExternalDragEnd?(targetNodeId: string | null, x: number, y: number, cancelled: boolean): void
 }
 
 type SegmentView = {
@@ -117,6 +118,8 @@ type SegmentDragState = {
   proxyMode: 'compact' | 'absolute'
   /** For absolute mode: pointerAtStart - grabbedPos (constant). */
   readonly absoluteProxyAnchorOffset: { x: number; y: number }
+  /** True when this drag originated from outside the canvas (paste inventory). */
+  readonly isExternal?: boolean
 }
 
 type ZoomTier = 'far' | 'medium' | 'close'
@@ -1442,6 +1445,49 @@ export class PixiBoardAdapter {
     return this.findDropTarget(world.x, world.y)
   }
 
+  beginExternalDrag(segments: readonly SceneSegmentVM[], clientX: number, clientY: number): void {
+    if (this.activeDrag.type !== 'idle') return
+    if (segments.length === 0) return
+    const pointerWorld = this.screenToWorld(clientX, clientY)
+    const { proxy: compactProxy, pivot, segmentBounds: _segmentBounds } = this.buildDragProxy(segments)
+    const proxy = new Container()
+    proxy.addChild(compactProxy)
+    const lineLayer = new Container()
+    this.worldLayer.addChild(lineLayer)
+    this.worldLayer.addChild(proxy)
+    const proxyAnchorOffset = { x: 0, y: 0 }
+    this.activeDrag = {
+      type: 'segment',
+      state: {
+        segments,
+        segmentIds: segments.map((s) => s.id),
+        sourceNodeIds: {},
+        proxy,
+        lineLayer,
+        proxyAnchorOffset,
+        dropAnchorOffset: { x: pivot.x, y: pivot.y },
+        initialSegmentPositions: {},
+        pointerWorldAtStart: pointerWorld,
+        grabbedSegmentId: segments[0].id,
+        snap: null,
+        proxyMode: 'compact',
+        absoluteProxyAnchorOffset: { x: 0, y: 0 },
+        isExternal: true,
+      },
+    }
+    this.updateSegmentDrag(clientX, clientY)
+  }
+
+  cancelExternalDrag(): void {
+    if (this.activeDrag.type !== 'segment' || !this.activeDrag.state.isExternal) return
+    const drag = this.activeDrag.state
+    this.worldLayer.removeChild(drag.lineLayer)
+    this.worldLayer.removeChild(drag.proxy)
+    drag.lineLayer.destroy({ children: true })
+    drag.proxy.destroy({ children: true })
+    this.endDrag()
+  }
+
   /** Drop target = whole character node. Returns nodeId if world point is inside any node's bounds. */
   private findDropTarget(worldX: number, worldY: number): string | null {
     if (!this.currentScene) return null
@@ -1762,12 +1808,14 @@ export class PixiBoardAdapter {
     const drag = this.activeDrag.state
     const world = this.screenToWorld(clientX, clientY)
     const targetNodeId = this.findDropTarget(world.x, world.y)
-    this.handlers.onDragSegmentUpdate(targetNodeId ?? null)
+    if (!drag.isExternal) {
+      this.handlers.onDragSegmentUpdate(targetNodeId ?? null)
+    }
 
     const snap = this.findSnapTarget(world.x, world.y, drag.segments[0])
     drag.snap = snap
 
-    const useAbsolute = !targetNodeId
+    const useAbsolute = !targetNodeId && !drag.isExternal
     if (useAbsolute && drag.proxyMode !== 'absolute') {
       drag.proxyMode = 'absolute'
       const compact = drag.proxy.getChildAt(0) as Container
@@ -1802,6 +1850,29 @@ export class PixiBoardAdapter {
     this.lastDragEndTime = Date.now()
     const world = event ? this.screenToWorld(event.clientX, event.clientY) : null
     const targetNodeId = world ? this.findDropTarget(world.x, world.y) : drag.snap?.nodeId ?? null
+
+    if (drag.isExternal) {
+      let cancelled = !event
+      if (event && !cancelled) {
+        const rect = this.app.canvas.getBoundingClientRect()
+        if (
+          event.clientX < rect.left || event.clientX > rect.right ||
+          event.clientY < rect.top || event.clientY > rect.bottom
+        ) {
+          cancelled = true
+        }
+      }
+      const dropX = world?.x ?? 0
+      const dropY = world?.y ?? 0
+      this.worldLayer.removeChild(drag.lineLayer)
+      this.worldLayer.removeChild(drag.proxy)
+      drag.lineLayer.destroy({ children: true })
+      drag.proxy.destroy({ children: true })
+      this.endDrag()
+      this.handlers.onExternalDragEnd?.(targetNodeId, dropX, dropY, cancelled)
+      return
+    }
+
     const anyDifferentSource = drag.segmentIds.some((id) => drag.sourceNodeIds[id] !== targetNodeId)
     const effectiveTarget = targetNodeId && anyDifferentSource ? targetNodeId : null
     this.skipSegmentAnimationOnce.clear()
@@ -1865,7 +1936,6 @@ export class PixiBoardAdapter {
     if (node.parentNodeId && this.handlers.onMoveNodeToGroupIndex && this.currentScene) {
       const parent = this.currentScene.nodes[node.parentNodeId]
       const groupId = parent?.groupId
-      const group = groupId ? this.currentScene.groups?.[groupId] : null
       if (groupId != null) {
         moveToRootBtn = new Graphics()
         moveToRootBtn.eventMode = 'static'
@@ -1887,9 +1957,10 @@ export class PixiBoardAdapter {
         moveToRootBtn.on('pointertap', () => {
           if (this.activeDrag.type !== 'idle') return
           const scene = this.currentScene
-          const p = scene?.nodes[node.parentNodeId]
+          const parentNodeId = node.parentNodeId
+          const p = parentNodeId ? scene?.nodes[parentNodeId] : undefined
           const g = p?.groupId && scene?.groups?.[p.groupId]
-          const idx = g ? g.nodeIds.indexOf(node.parentNodeId) : -1
+          const idx = g && parentNodeId ? g.nodeIds.indexOf(parentNodeId) : -1
           const targetIdx = idx >= 0 ? idx + 1 : 0
           this.handlers.onMoveNodeToGroupIndex?.(node.id, p?.groupId ?? groupId, targetIdx)
         })
@@ -2102,7 +2173,6 @@ export class PixiBoardAdapter {
     if (node.parentNodeId && this.handlers.onMoveNodeToGroupIndex && this.currentScene) {
       const parent = this.currentScene.nodes[node.parentNodeId]
       const groupId = parent?.groupId
-      const group = groupId ? this.currentScene.groups?.[groupId] : null
       if (groupId != null && !view.moveToRootBtn) {
         const moveToRootBtn = new Graphics()
         moveToRootBtn.eventMode = 'static'
@@ -2124,9 +2194,10 @@ export class PixiBoardAdapter {
         moveToRootBtn.on('pointertap', () => {
           if (this.activeDrag.type !== 'idle') return
           const scene = this.currentScene
-          const p = scene?.nodes[node.parentNodeId]
+          const parentNodeId = node.parentNodeId
+          const p = parentNodeId ? scene?.nodes[parentNodeId] : undefined
           const g = p?.groupId && scene?.groups?.[p.groupId]
-          const idx = g ? g.nodeIds.indexOf(node.parentNodeId) : -1
+          const idx = g && parentNodeId ? g.nodeIds.indexOf(parentNodeId) : -1
           const targetIdx = idx >= 0 ? idx + 1 : 0
           this.handlers.onMoveNodeToGroupIndex?.(node.id, p?.groupId ?? groupId, targetIdx)
         })

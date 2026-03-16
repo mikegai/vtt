@@ -8,7 +8,8 @@ import { getWieldOptions } from './domain/weapon-metadata'
 import { PixiBoardAdapter } from './pixi/PixiBoardAdapter'
 import { sampleState } from './sample-data'
 import type { ActorKind } from './domain/types'
-import type { MainToWorkerMessage, SceneVM, WorkerToMainMessage } from './worker/protocol'
+import type { MainToWorkerMessage, SceneSegmentVM, SceneVM, WorkerToMainMessage } from './worker/protocol'
+import type { ItemCategory } from './domain/item-category'
 
 const app = document.querySelector<HTMLDivElement>('#app')
 if (!app) throw new Error('App root missing')
@@ -130,6 +131,8 @@ const toolTextBtnEl = document.querySelector<HTMLButtonElement>('#tool-text')!
 const drawerEl = document.querySelector<HTMLElement>('#drawer')!
 const drawerToggle = document.querySelector<HTMLElement>('#drawer-toggle')!
 const drawerClose = document.querySelector<HTMLElement>('#drawer-close')!
+const parseInputEl = document.querySelector<HTMLTextAreaElement>('#parse-input')!
+const parseResultsEl = document.querySelector<HTMLElement>('#parse-results')!
 
 drawerToggle.addEventListener('click', () => drawerEl.classList.toggle('open'))
 drawerClose.addEventListener('click', () => drawerEl.classList.remove('open'))
@@ -342,6 +345,34 @@ const showCanvasContextMenu = (worldX: number, worldY: number, clientX: number, 
 const escapeAttr = (s: string): string =>
   s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
+type ParsedSpawnItem = {
+  id: string
+  raw: string
+  status: 'resolved' | 'ambiguous' | 'unknown'
+  confidence: number
+  quantity: number
+  itemDefId: string | null
+  itemName: string
+  sizeSixths: number
+  alternatives: readonly { itemId: string; itemName: string }[]
+}
+
+const sourceItemById = new Map(allSourceItems.map((item) => [item.id, item]))
+const encumbranceToSixths = (enc: EncumbranceExpr): number => {
+  if (enc.kind === 'fixed') return Math.max(1, enc.sixths)
+  if (enc.kind === 'range') return Math.max(1, enc.minSixths)
+  if (enc.kind === 'at-least') return Math.max(1, enc.minSixths)
+  return 1
+}
+
+const consumedParsedIds = new Set<string>()
+let parsedSpawnItems: ParsedSpawnItem[] = []
+let activeParsedDrag: {
+  parsedItem: ParsedSpawnItem
+  ghost: HTMLElement
+  enteredCanvas: boolean
+} | null = null
+
 const pixiAdapter = new PixiBoardAdapter(canvasHost, {
   onHoverSegment(segmentId) {
     postToWorker({ type: 'INTENT', intent: { type: 'HOVER_SEGMENT', segmentId } })
@@ -427,6 +458,33 @@ const pixiAdapter = new PixiBoardAdapter(canvasHost, {
       postToWorker({ type: 'INTENT', intent: { type: 'SET_SELECTED_SEGMENTS', segmentIds } })
     }
   },
+  onExternalDragEnd(targetNodeId, x, y, cancelled) {
+    parseResultsEl.querySelectorAll('.parsed-item-dragging').forEach((el) => el.classList.remove('parsed-item-dragging'))
+    if (cancelled || !activeParsedDrag) {
+      activeParsedDrag = null
+      return
+    }
+    const item = activeParsedDrag.parsedItem
+    activeParsedDrag = null
+    if (!item.itemDefId) return
+    const sourceItem = item.itemDefId ? sourceItemById.get(item.itemDefId) : null
+    postToWorker({
+      type: 'INTENT',
+      intent: {
+        type: 'SPAWN_ITEM_INSTANCE',
+        itemDefId: item.itemDefId,
+        quantity: item.quantity,
+        targetNodeId,
+        x,
+        y,
+        itemName: item.itemName,
+        sixthsPerUnit: sourceItem ? encumbranceToSixths(sourceItem.encumbrance) : 1,
+        itemKind: 'standard',
+      },
+    })
+    consumedParsedIds.add(item.id)
+    renderParsed(parseInputEl.value)
+  },
 })
 
 vmWorker.onmessage = (event: MessageEvent<WorkerToMainMessage>) => {
@@ -454,8 +512,6 @@ const inputEl = document.querySelector<HTMLInputElement>('#search-input')!
 const chipsEl = document.querySelector<HTMLElement>('#search-chips')!
 const suggestionsEl = document.querySelector<HTMLElement>('#search-suggestions')!
 const resultsEl = document.querySelector<HTMLElement>('#search-results')!
-const parseInputEl = document.querySelector<HTMLTextAreaElement>('#parse-input')!
-const parseResultsEl = document.querySelector<HTMLElement>('#parse-results')!
 const bulkInputEl = document.querySelector<HTMLTextAreaElement>('#bulk-input')!
 const bulkResultsEl = document.querySelector<HTMLElement>('#bulk-results')!
 const labelEditInputEl = document.querySelector<HTMLInputElement>('#label-edit-input')!
@@ -520,39 +576,49 @@ const disambiguationOverrides: Record<string, string> = {}
 
 const renderParsed = (text: string): void => {
   const parsed = parseInventoryText(text, sourceItemSearch)
-  parseResultsEl.innerHTML = parsed.chunks
-    .map((c) => {
-      const override = disambiguationOverrides[c.raw]
-      const effectiveStatus = override ? 'resolved' : c.status
-      const displayItemId = override ?? c.resolvedItemId
-      const displayItemName = override
-        ? (c.alternatives.find((a) => a.itemId === override)?.itemName ?? c.candidateName)
-        : (c.resolvedItemName ?? c.candidateName)
+  parsedSpawnItems = parsed.chunks.map((c, idx) => {
+    const override = disambiguationOverrides[c.raw]
+    const itemDefId = override ?? c.resolvedItemId ?? null
+    const itemName = override
+      ? (c.alternatives.find((a) => a.itemId === override)?.itemName ?? c.candidateName)
+      : (c.resolvedItemName ?? c.candidateName)
+    const sourceItem = itemDefId ? sourceItemById.get(itemDefId) : null
+    const perUnitSixths = sourceItem ? encumbranceToSixths(sourceItem.encumbrance) : 1
+    return {
+      id: `${idx}`,
+      raw: c.raw,
+      status: override ? 'resolved' : c.status,
+      confidence: c.confidence,
+      quantity: c.quantity,
+      itemDefId,
+      itemName,
+      sizeSixths: Math.max(1, perUnitSixths * c.quantity),
+      alternatives: c.alternatives.map((a) => ({ itemId: a.itemId, itemName: a.itemName })),
+    }
+  })
 
+  parseResultsEl.innerHTML = parsedSpawnItems
+    .filter((item) => !consumedParsedIds.has(item.id))
+    .map((item) => {
       const altsHtml =
-        c.alternatives.length > 0
-          ? `<div class="alt-pills">${c.alternatives
+        item.alternatives.length > 0
+          ? `<div class="alt-pills">${item.alternatives
               .map(
                 (a) =>
-                  `<button class="alt-pill ${a.itemId === displayItemId ? 'alt-pill-selected' : ''}" data-raw="${escapeHtml(c.raw)}" data-item-id="${escapeHtml(a.itemId)}" type="button">${escapeHtml(a.itemName)}</button>`,
+                  `<button class="alt-pill ${a.itemId === item.itemDefId ? 'alt-pill-selected' : ''}" data-raw="${escapeHtml(item.raw)}" data-item-id="${escapeHtml(a.itemId)}" type="button">${escapeHtml(a.itemName)}</button>`,
               )
               .join('')}</div>`
           : ''
-
-      const dragAttrs = displayItemId
-        ? ` draggable="true" data-spawn-item-id="${escapeAttr(displayItemId)}" data-spawn-qty="${c.quantity}"`
-        : ''
-      const dragClass = displayItemId ? ' parsed-item-draggable' : ''
-
-      return `<div class="parsed-item${dragClass} status-${effectiveStatus}" data-raw="${escapeHtml(c.raw)}"${dragAttrs}>
+      const draggableClass = item.itemDefId ? ' parsed-item-draggable' : ''
+      return `<div class="parsed-item${draggableClass} status-${item.status}" data-parsed-id="${escapeAttr(item.id)}" data-raw="${escapeHtml(item.raw)}">
         <div class="parsed-head">
-          <span class="parsed-status">${effectiveStatus}</span>
-          <span class="parsed-qty">qty ${c.quantity}</span>
-          <span class="parsed-conf">${Math.round(c.confidence * 100)}%</span>
+          <span class="parsed-status">${item.status}</span>
+          <span class="parsed-qty">qty ${item.quantity}</span>
+          <span class="parsed-conf">${Math.round(item.confidence * 100)}%</span>
         </div>
-        <div class="parsed-text">${escapeHtml(c.raw)}</div>
+        <div class="parsed-text">${escapeHtml(item.raw)}</div>
         <div class="parsed-candidate">
-          <span class="parsed-display-name">${escapeHtml(displayItemName)}</span>
+          <span class="parsed-display-name">${escapeHtml(item.itemName)}</span>
           ${altsHtml}
         </div>
       </div>`
@@ -586,81 +652,114 @@ inputEl.addEventListener('input', () => renderSearch(inputEl.value))
 
 parseInputEl.value = '2 sacks, 14 torches and 3 flasks of oil'
 renderParsed(parseInputEl.value)
-parseInputEl.addEventListener('input', () => renderParsed(parseInputEl.value))
+parseInputEl.addEventListener('input', () => {
+  consumedParsedIds.clear()
+  renderParsed(parseInputEl.value)
+})
 
 parseResultsEl.addEventListener('click', (e) => {
-  const pill = (e.target as HTMLElement).closest('.alt-pill')
-  if (!pill) return
-  const raw = pill.getAttribute('data-raw')
-  const itemId = pill.getAttribute('data-item-id')
-  if (raw && itemId) {
-    disambiguationOverrides[raw] = itemId
-    renderParsed(parseInputEl.value)
+  const target = e.target as HTMLElement
+  const pill = target.closest('.alt-pill')
+  if (pill) {
+    const raw = pill.getAttribute('data-raw')
+    const itemId = pill.getAttribute('data-item-id')
+    if (raw && itemId) {
+      disambiguationOverrides[raw] = itemId
+      renderParsed(parseInputEl.value)
+    }
   }
 })
 
-const parseDragMime = 'application/x-vtt-paste-item'
+const DRAG_THRESHOLD = 5
+let parsedPointerDownState: {
+  parsedItem: ParsedSpawnItem
+  startX: number
+  startY: number
+  el: HTMLElement
+} | null = null
 
-parseResultsEl.addEventListener('dragstart', (event) => {
-  const target = event.target as HTMLElement | null
-  const item = target?.closest<HTMLElement>('.parsed-item[data-spawn-item-id]')
-  if (!item || !event.dataTransfer) return
-  const itemDefId = item.dataset.spawnItemId
-  const quantity = Number(item.dataset.spawnQty ?? '1')
-  if (!itemDefId || !Number.isFinite(quantity)) {
-    event.preventDefault()
+parseResultsEl.addEventListener('pointerdown', (e) => {
+  const target = e.target as HTMLElement
+  if (target.closest('.alt-pill')) return
+  const itemEl = target.closest<HTMLElement>('.parsed-item-draggable[data-parsed-id]')
+  if (!itemEl) return
+  const parsedId = itemEl.dataset.parsedId
+  if (!parsedId) return
+  const item = parsedSpawnItems.find((p) => p.id === parsedId)
+  if (!item || !item.itemDefId) return
+  e.preventDefault()
+  parsedPointerDownState = { parsedItem: item, startX: e.clientX, startY: e.clientY, el: itemEl }
+})
+
+document.addEventListener('pointermove', (e) => {
+  if (parsedPointerDownState && !activeParsedDrag) {
+    const dx = e.clientX - parsedPointerDownState.startX
+    const dy = e.clientY - parsedPointerDownState.startY
+    if (Math.abs(dx) + Math.abs(dy) < DRAG_THRESHOLD) return
+    const ghost = parsedPointerDownState.el.cloneNode(true) as HTMLElement
+    ghost.className = 'parsed-drag-ghost'
+    ghost.style.left = `${e.clientX}px`
+    ghost.style.top = `${e.clientY}px`
+    ghost.style.width = `${parsedPointerDownState.el.offsetWidth}px`
+    document.body.appendChild(ghost)
+    parsedPointerDownState.el.classList.add('parsed-item-dragging')
+    activeParsedDrag = {
+      parsedItem: parsedPointerDownState.parsedItem,
+      ghost,
+      enteredCanvas: false,
+    }
+    parsedPointerDownState = null
     return
   }
-  event.dataTransfer.effectAllowed = 'copy'
-  event.dataTransfer.setData(
-    parseDragMime,
-    JSON.stringify({
-      itemDefId,
-      quantity: Math.max(1, Math.floor(quantity)),
-    }),
-  )
-  item.classList.add('parsed-item-dragging')
-})
-
-parseResultsEl.addEventListener('dragend', (event) => {
-  const target = event.target as HTMLElement | null
-  const item = target?.closest<HTMLElement>('.parsed-item')
-  item?.classList.remove('parsed-item-dragging')
-})
-
-canvasHost.addEventListener('dragover', (event) => {
-  const hasPayload = event.dataTransfer?.types.includes(parseDragMime)
-  if (!hasPayload) return
-  event.preventDefault()
-  event.dataTransfer!.dropEffect = 'copy'
-})
-
-canvasHost.addEventListener('drop', (event) => {
-  const payloadRaw = event.dataTransfer?.getData(parseDragMime)
-  if (!payloadRaw) return
-  event.preventDefault()
-  let payload: { itemDefId: string; quantity: number } | null = null
-  try {
-    payload = JSON.parse(payloadRaw) as { itemDefId: string; quantity: number }
-  } catch {
-    payload = null
+  if (!activeParsedDrag) return
+  if (!activeParsedDrag.enteredCanvas) {
+    activeParsedDrag.ghost.style.left = `${e.clientX}px`
+    activeParsedDrag.ghost.style.top = `${e.clientY}px`
+    const canvasRect = canvasHost.getBoundingClientRect()
+    if (
+      e.clientX >= canvasRect.left &&
+      e.clientX <= canvasRect.right &&
+      e.clientY >= canvasRect.top &&
+      e.clientY <= canvasRect.bottom
+    ) {
+      activeParsedDrag.ghost.remove()
+      activeParsedDrag.enteredCanvas = true
+      const item = activeParsedDrag.parsedItem
+      const sourceItem = item.itemDefId ? sourceItemById.get(item.itemDefId) : null
+      const perUnitSixths = sourceItem ? encumbranceToSixths(sourceItem.encumbrance) : 1
+      const syntheticSegments: SceneSegmentVM[] = []
+      for (let i = 0; i < item.quantity; i++) {
+        syntheticSegments.push({
+          id: `ext-${item.id}-${i}`,
+          shortLabel: item.itemName.slice(0, 3),
+          mediumLabel: item.itemName.slice(0, 10),
+          fullLabel: item.itemName,
+          startSixth: 0,
+          sizeSixths: perUnitSixths,
+          isOverflow: false,
+          itemDefId: item.itemDefId!,
+          category: (sourceItem?.group ?? 'adventuring-equipment') as ItemCategory,
+          tooltip: {
+            title: item.itemName,
+            encumbranceText: formatSixthsAsStone(perUnitSixths),
+            zoneText: '',
+            quantityText: `qty ${item.quantity}`,
+          },
+        })
+      }
+      pixiAdapter.beginExternalDrag(syntheticSegments, e.clientX, e.clientY)
+    }
   }
-  if (!payload?.itemDefId) return
-  const quantity = Math.max(1, Math.floor(Number(payload.quantity)))
-  if (!Number.isFinite(quantity)) return
-  const targetNodeId = pixiAdapter.getDropTargetAtClient(event.clientX, event.clientY)
-  const world = pixiAdapter.getWorldPointAtClient(event.clientX, event.clientY)
-  postToWorker({
-    type: 'INTENT',
-    intent: {
-      type: 'SPAWN_ITEM_INSTANCE',
-      itemDefId: payload.itemDefId,
-      quantity,
-      targetNodeId,
-      x: world.x,
-      y: world.y,
-    },
-  })
+})
+
+document.addEventListener('pointerup', () => {
+  parsedPointerDownState = null
+  if (!activeParsedDrag) return
+  if (!activeParsedDrag.enteredCanvas) {
+    activeParsedDrag.ghost.remove()
+    parseResultsEl.querySelectorAll('.parsed-item-dragging').forEach((el) => el.classList.remove('parsed-item-dragging'))
+    activeParsedDrag = null
+  }
 })
 
 bulkInputEl.value = `Fighter:\nplate armor, shield, short sword\n\nLoot Pile - Crypt Chest:\n2 sacks, 14 torches and 3 flasks of oil`

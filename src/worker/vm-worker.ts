@@ -1,6 +1,6 @@
 /// <reference lib="webworker" />
 
-import type { Actor, CanonicalState, InventoryEntry } from '../domain/types'
+import type { Actor, CanonicalState, InventoryEntry, ItemDefinition, ItemKind } from '../domain/types'
 import { getWieldOptions, isTwoHandedOnly } from '../domain/weapon-metadata'
 import { parseNodeId, segmentIdToEntryId } from '../vm/drop-intent'
 import type { ActorRowVM } from '../vm/vm-types'
@@ -750,7 +750,22 @@ const applyIntent = (intent: WorkerIntent): void => {
 
   if (intent.type === 'SPAWN_ITEM_INSTANCE') {
     if (!worldState) return
-    const itemDef = worldState.itemDefinitions[intent.itemDefId]
+    let itemDef: ItemDefinition | undefined = worldState.itemDefinitions[intent.itemDefId]
+    if (!itemDef && intent.itemName) {
+      itemDef = {
+        id: intent.itemDefId,
+        canonicalName: intent.itemName,
+        kind: (intent.itemKind as ItemKind) ?? 'standard',
+        sixthsPerUnit: intent.sixthsPerUnit ?? 1,
+      }
+      worldState = {
+        ...worldState,
+        itemDefinitions: {
+          ...worldState.itemDefinitions,
+          [intent.itemDefId]: itemDef,
+        },
+      }
+    }
     const quantity = Math.max(1, Math.floor(intent.quantity))
     if (!itemDef || !Number.isFinite(quantity)) {
       recompute()
