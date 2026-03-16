@@ -191,16 +191,17 @@ const showContextMenu = (
 
   if (!currentScene) return
 
-  const segment = Object.values(currentScene.nodes)
+  let segment = Object.values(currentScene.nodes)
     .flatMap((n) => n.segments)
     .find((s) => s.id === segmentId)
+  if (!segment && currentScene.freeSegments?.[segmentId]) {
+    segment = currentScene.freeSegments[segmentId].segment
+  }
   if (!segment) return
 
-  const sourceNode = currentScene.nodes[nodeId]
-  if (!sourceNode) return
-
   const itemDef = sampleState.itemDefinitions[itemDefId]
-  const wieldOptions = itemDef ? getWieldOptions(itemDef) : []
+  const isFreeSegment = !!currentScene.freeSegments?.[segmentId]
+  const wieldOptions = !isFreeSegment && itemDef ? getWieldOptions(itemDef) : []
 
   const groupOrder: ActorKind[] = ['pc', 'retainer', 'hireling', 'animal', 'vehicle', 'loot-pile']
 
@@ -243,6 +244,7 @@ const showContextMenu = (
     const submenuId = 'ctx-wield-sub'
     html += `<div class="context-menu-submenu-wrap"><div class="context-menu-submenu-trigger" data-submenu="${submenuId}">Wield</div><div id="${submenuId}" class="context-menu-submenu">${wieldItems.join('')}</div></div>`
   }
+  html += `<button class="context-menu-item context-menu-item-danger" data-action="delete" type="button">Delete</button>`
 
   if (!html) return
 
@@ -288,6 +290,11 @@ const showContextMenu = (
         postToWorker({
           type: 'INTENT',
           intent: { type: 'UNWIELD', segmentId },
+        })
+      } else if (action === 'delete') {
+        postToWorker({
+          type: 'INTENT',
+          intent: { type: 'DELETE_ENTRY', segmentId },
         })
       }
       setTimeout(closeContextMenu, 0)
@@ -438,11 +445,14 @@ const pixiAdapter = new PixiBoardAdapter(canvasHost, {
     return true
   },
   onContextMenu(segmentId, nodeId, clientX, clientY) {
-    const segment = currentScene
+    let segment = currentScene
       ? Object.values(currentScene.nodes)
           .flatMap((n) => n.segments)
           .find((s) => s.id === segmentId)
       : null
+    if (!segment && currentScene?.freeSegments?.[segmentId]) {
+      segment = currentScene.freeSegments[segmentId].segment
+    }
     if (segment) {
       showContextMenu(segmentId, nodeId, segment.itemDefId, clientX, clientY)
     }

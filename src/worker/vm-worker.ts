@@ -912,6 +912,38 @@ const applyIntent = (intent: WorkerIntent): void => {
     return
   }
 
+  if (intent.type === 'DELETE_ENTRY') {
+    if (!worldState) return
+    const entryId = segmentIdToEntryId(intent.segmentId)
+    const entry = worldState.inventoryEntries[entryId]
+    if (!entry) {
+      recompute()
+      return
+    }
+    const { [entryId]: _, ...restEntries } = worldState.inventoryEntries
+    worldState = { ...worldState, inventoryEntries: restEntries }
+    const actor = worldState.actors[entry.actorId]
+    if (actor && (actor.leftWieldingEntryId === entryId || actor.rightWieldingEntryId === entryId)) {
+      const nextActor: Actor = {
+        ...actor,
+        leftWieldingEntryId: actor.leftWieldingEntryId === entryId ? undefined : actor.leftWieldingEntryId,
+        rightWieldingEntryId: actor.rightWieldingEntryId === entryId ? undefined : actor.rightWieldingEntryId,
+      }
+      worldState = {
+        ...worldState,
+        actors: { ...worldState.actors, [actor.id]: nextActor },
+      }
+    }
+    localState = {
+      ...localState,
+      freeSegmentPositions: Object.fromEntries(
+        Object.entries(localState.freeSegmentPositions).filter(([id]) => segmentIdToEntryId(id) !== entryId),
+      ),
+    }
+    recompute()
+    return
+  }
+
   if (intent.type === 'SET_WIELD') {
     if (!worldState) return
     const entryId = segmentIdToEntryId(intent.segmentId)

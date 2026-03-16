@@ -648,6 +648,10 @@ html, body {
   background: rgba(88, 140, 255, 0.15);
 }
 
+.context-menu-item-danger:hover {
+  background: rgba(180, 60, 60, 0.25);
+}
+
 /* --- HUD Bar (bottom of viewport) --- */
 .hud-bar {
   position: fixed;
