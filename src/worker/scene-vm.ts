@@ -17,6 +17,8 @@ export type WorkerLocalState = {
   readonly groupFreeSegmentPositions: Record<string, Record<string, { x: number; y: number }>>
   readonly groupNodeOrders: Record<string, readonly string[]>
   readonly customGroups: Record<string, { title: string }>
+  readonly groupTitleOverrides: Record<string, string>
+  readonly nodeTitleOverrides: Record<string, string>
   readonly dropIntent: DropIntent | null
   readonly stonesPerRow: number
   readonly filterCategory: ItemCategory | null
@@ -285,7 +287,7 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
     const hasOverride = Object.prototype.hasOwnProperty.call(localState.nodeGroupOverrides, row.id)
     const groupId = hasOverride ? localState.nodeGroupOverrides[row.id] : baseGroupId
     const groupTitle = groupId
-      ? (localState.customGroups[groupId]?.title ?? worldState.movementGroups[groupId]?.name ?? groupId)
+      ? (localState.groupTitleOverrides[groupId] ?? localState.customGroups[groupId]?.title ?? worldState.movementGroups[groupId]?.name ?? groupId)
       : null
     const parentNodeId = row.parentActorId
 
@@ -296,7 +298,7 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
       groupId,
       parentNodeId,
       actorKind: actor?.kind ?? 'pc',
-      title: row.title,
+      title: localState.nodeTitleOverrides[row.id] ?? row.title,
       x: 0,
       y: 0,
       width: nodeWidthForSlots(slotCount, localState.stonesPerRow),

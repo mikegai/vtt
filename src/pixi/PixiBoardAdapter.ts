@@ -64,6 +64,16 @@ type AdapterHandlers = {
   onMarqueeSelect?(segmentIds: string[], addToSelection: boolean): void
   onMoveLabel?(labelId: string, x: number, y: number): void
   onSelectLabel?(labelId: string | null): void
+  onEditNodeTitleRequest?(
+    nodeId: string,
+    currentTitle: string,
+    overlay: { left: number; top: number; width: number; height: number; fontSizePx: number },
+  ): void
+  onEditGroupTitleRequest?(
+    groupId: string,
+    currentTitle: string,
+    overlay: { left: number; top: number; width: number; height: number; fontSizePx: number },
+  ): void
   onCanvasWorldClick?(x: number, y: number): boolean | void
   onExternalDragEnd?(
     targetNodeId: string | null,
@@ -991,6 +1001,10 @@ export class PixiBoardAdapter {
   private readonly skipNodeAnimationOnce = new Set<string>()
   private readonly skipSegmentAnimationOnce = new Set<string>()
   private readonly hiddenNodeContentIds = new Set<string>()
+  private editingTitle: { type: 'node' | 'group'; id: string } | null = null
+  private lastTitleTap:
+    | { key: string; atMs: number }
+    | null = null
   private lastPointerPosition: { clientX: number; clientY: number } | null = null
   private autoPanRafId: number | null = null
 
@@ -1574,6 +1588,35 @@ export class PixiBoardAdapter {
     }
   }
 
+  setEditingTitle(target: { type: 'node' | 'group'; id: string } | null): void {
+    this.editingTitle = target
+    if (this.currentScene) this.rebuildAllNodes(this.currentScene)
+  }
+
+  private buildTitleOverlayMetrics(
+    title: BitmapText,
+    paddingPx: number,
+  ): { left: number; top: number; width: number; height: number; fontSizePx: number } {
+    const bounds = title.getBounds()
+    const canvasRect = this.app.canvas.getBoundingClientRect()
+    const worldScaleY = Math.abs(title.worldTransform.d || 1)
+    const baseFontSize = Number.parseFloat(String(title.style.fontSize)) || 14
+    return {
+      left: canvasRect.left + bounds.x - paddingPx,
+      top: canvasRect.top + bounds.y - paddingPx,
+      width: bounds.width + paddingPx * 2,
+      height: bounds.height + paddingPx * 2,
+      fontSizePx: Math.max(10, baseFontSize * worldScaleY),
+    }
+  }
+
+  private shouldTreatAsDoubleTap(key: string): boolean {
+    const now = Date.now()
+    const isDouble = this.lastTitleTap?.key === key && now - this.lastTitleTap.atMs <= 350
+    this.lastTitleTap = { key, atMs: now }
+    return isDouble
+  }
+
   private freeSegmentAnchorWorld(free: SceneFreeSegmentVM): { x: number; y: number } {
     if (!free.groupId || !this.currentScene?.groups?.[free.groupId]) return { x: free.x, y: free.y }
     const group = this.currentScene.groups[free.groupId]
@@ -2086,7 +2129,11 @@ export class PixiBoardAdapter {
     const drag = this.activeDrag.state
     this.lastDragEndTime = Date.now()
     const world = event ? this.screenToWorld(event.clientX, event.clientY) : null
-    const dropTarget = world ? this.findDropTarget(world.x, world.y) : drag.snap?.nodeId ? { type: 'node', nodeId: drag.snap.nodeId } : null
+    const dropTarget = world
+      ? this.findDropTarget(world.x, world.y)
+      : drag.snap?.nodeId
+        ? ({ type: 'node', nodeId: drag.snap.nodeId } as const)
+        : null
     const targetNodeId = dropTarget?.type === 'node' ? dropTarget.nodeId : null
     const targetGroupId = dropTarget?.type === 'group' ? dropTarget.groupId : null
     this.setSegmentDragHoveredGroup(null)
@@ -2308,7 +2355,34 @@ export class PixiBoardAdapter {
       title.scale.set(textCompensationScale)
       addExpandCaret(nodeTitleMidY)
       title.position.set(30, nodeTitleMidY)
+      title.visible = !(this.editingTitle?.type === 'node' && this.editingTitle.id === node.id)
       contentContainer.addChild(title)
+
+      const titleHitPadding = 8
+      const titleBounds = title.getLocalBounds()
+      const titleTapTarget = new Graphics()
+      titleTapTarget.eventMode = 'static'
+      titleTapTarget.cursor = 'text'
+      titleTapTarget.position.set(title.position.x, title.position.y)
+      titleTapTarget.roundRect(
+        titleBounds.x - titleHitPadding,
+        titleBounds.y - titleHitPadding,
+        Math.max(80, titleBounds.width + titleHitPadding * 2),
+        titleBounds.height + titleHitPadding * 2,
+        6,
+      )
+      titleTapTarget.fill({ color: 0xffffff, alpha: 0.001 })
+      ;(titleTapTarget as Container & { __dragHandle?: boolean }).__dragHandle = true
+      titleTapTarget.on('pointertap', (event: any) => {
+        if (event.button !== 0 || !this.shouldTreatAsDoubleTap(`node:${node.id}`)) return
+        event.stopPropagation()
+        this.handlers.onEditNodeTitleRequest?.(
+          node.id,
+          node.title,
+          this.buildTitleOverlayMetrics(title, 0),
+        )
+      })
+      contentContainer.addChild(titleTapTarget)
     } else {
       const compact = new BitmapText({
         text: `${compactToken(node.title, 4)} ${node.speedFeet}'`,
@@ -2716,7 +2790,34 @@ export class PixiBoardAdapter {
     title.anchor.set(0, 0.5)
     title.scale.set(getTextCompensationScale(this.zoom))
     title.position.set(34, groupTitleMidY)
+    title.visible = !(this.editingTitle?.type === 'group' && this.editingTitle.id === group.id)
     root.addChild(title)
+
+    const titleHitPadding = 8
+    const titleBounds = title.getLocalBounds()
+    const titleTapTarget = new Graphics()
+    titleTapTarget.eventMode = 'static'
+    titleTapTarget.cursor = 'text'
+    titleTapTarget.position.set(title.position.x, title.position.y)
+    titleTapTarget.roundRect(
+      titleBounds.x - titleHitPadding,
+      titleBounds.y - titleHitPadding,
+      Math.max(80, titleBounds.width + titleHitPadding * 2),
+      titleBounds.height + titleHitPadding * 2,
+      6,
+    )
+    titleTapTarget.fill({ color: 0xffffff, alpha: 0.001 })
+    ;(titleTapTarget as Container & { __dragHandle?: boolean }).__dragHandle = true
+    titleTapTarget.on('pointertap', (event: any) => {
+      if (event.button !== 0 || !this.shouldTreatAsDoubleTap(`group:${group.id}`)) return
+      event.stopPropagation()
+      this.handlers.onEditGroupTitleRequest?.(
+        group.id,
+        group.title,
+        this.buildTitleOverlayMetrics(title, 0),
+      )
+    })
+    root.addChild(titleTapTarget)
 
     this.groupLayer.addChild(root)
     return { root, hoverOutline }

@@ -468,6 +468,96 @@ let activeParsedDrag: {
   enteredCanvas: boolean
 } | null = null
 
+type ActiveInlineTitleEditor = {
+  readonly input: HTMLInputElement
+  cancel(): void
+}
+
+type InlineTitleOverlay = {
+  readonly left: number
+  readonly top: number
+  readonly width: number
+  readonly height: number
+  readonly fontSizePx: number
+}
+
+let activeInlineTitleEditor: ActiveInlineTitleEditor | null = null
+const INLINE_EDITOR_NUDGE_X_PX = 2
+const INLINE_EDITOR_NUDGE_Y_PX = 1
+
+const closeInlineTitleEditor = (): void => {
+  if (!activeInlineTitleEditor) return
+  activeInlineTitleEditor.cancel()
+  activeInlineTitleEditor = null
+}
+
+const startInlineTitleEditor = (
+  target: { type: 'node'; id: string } | { type: 'group'; id: string },
+  currentTitle: string,
+  overlay: InlineTitleOverlay,
+): void => {
+  closeInlineTitleEditor()
+  pixiAdapter.setEditingTitle(target)
+
+  const input = document.createElement('input')
+  input.type = 'text'
+  input.className = 'canvas-inline-editor'
+  input.value = currentTitle
+  input.style.left = `${Math.max(8, overlay.left + INLINE_EDITOR_NUDGE_X_PX)}px`
+  input.style.top = `${Math.max(8, overlay.top + INLINE_EDITOR_NUDGE_Y_PX)}px`
+  input.style.width = `${Math.max(80, overlay.width)}px`
+  input.style.height = `${Math.max(18, overlay.height)}px`
+  input.style.fontSize = `${Math.max(10, overlay.fontSizePx)}px`
+  document.body.appendChild(input)
+
+  let cancelled = false
+  let cleanedUp = false
+  const cleanup = (): void => {
+    if (cleanedUp) return
+    cleanedUp = true
+    pixiAdapter.setEditingTitle(null)
+    if (input.parentElement) input.remove()
+    if (activeInlineTitleEditor?.input === input) {
+      activeInlineTitleEditor = null
+    }
+  }
+
+  input.addEventListener('blur', () => {
+    if (!cancelled) {
+      const title = input.value.trim()
+      if (title.length > 0 && title !== currentTitle) {
+        if (target.type === 'node') {
+          postToWorker({ type: 'INTENT', intent: { type: 'UPDATE_NODE_TITLE', nodeId: target.id, title } })
+        } else {
+          postToWorker({ type: 'INTENT', intent: { type: 'UPDATE_GROUP_TITLE', groupId: target.id, title } })
+        }
+      }
+    }
+    cleanup()
+  })
+
+  input.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      input.blur()
+    } else if (event.key === 'Escape') {
+      event.preventDefault()
+      cancelled = true
+      input.blur()
+    }
+  })
+
+  input.focus()
+  input.select()
+  activeInlineTitleEditor = {
+    input,
+    cancel: () => {
+      cancelled = true
+      cleanup()
+    },
+  }
+}
+
 const pixiAdapter = new PixiBoardAdapter(canvasHost, {
   onHoverSegment(segmentId) {
     postToWorker({ type: 'INTENT', intent: { type: 'HOVER_SEGMENT', segmentId } })
@@ -505,6 +595,12 @@ const pixiAdapter = new PixiBoardAdapter(canvasHost, {
     selectedLabelId = labelId
     postToWorker({ type: 'INTENT', intent: { type: 'SELECT_LABEL', labelId } })
     syncLabelEditor()
+  },
+  onEditNodeTitleRequest(nodeId, currentTitle, overlay) {
+    startInlineTitleEditor({ type: 'node', id: nodeId }, currentTitle, overlay)
+  },
+  onEditGroupTitleRequest(groupId, currentTitle, overlay) {
+    startInlineTitleEditor({ type: 'group', id: groupId }, currentTitle, overlay)
   },
   onCanvasWorldClick(x, y) {
     if (activeCanvasTool !== 'text') return false
@@ -595,6 +691,7 @@ const pixiAdapter = new PixiBoardAdapter(canvasHost, {
 vmWorker.onmessage = (event: MessageEvent<WorkerToMainMessage>) => {
   const msg = event.data
   if (msg.type === 'SCENE_INIT') {
+    closeInlineTitleEditor()
     currentScene = msg.scene
     selectedLabelId = msg.scene.selectedLabelId ?? null
     pixiAdapter.applyInit(msg.scene)
@@ -602,6 +699,7 @@ vmWorker.onmessage = (event: MessageEvent<WorkerToMainMessage>) => {
     return
   }
   if (msg.type === 'SCENE_PATCHES') {
+    closeInlineTitleEditor()
     currentScene = msg.scene
     selectedLabelId = msg.scene.selectedLabelId ?? null
     pixiAdapter.applyPatches(msg.patches, msg.scene)

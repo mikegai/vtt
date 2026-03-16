@@ -10,8 +10,11 @@ const makeLocalState = (): WorkerLocalState =>
     nodeGroupOverrides: {},
     nodePositions: {},
     freeSegmentPositions: {},
+    groupFreeSegmentPositions: {},
     groupNodeOrders: {},
     customGroups: {},
+    groupTitleOverrides: {},
+    nodeTitleOverrides: {},
     dropIntent: null,
     stonesPerRow: 25,
     filterCategory: null,
@@ -78,5 +81,16 @@ describe('group segment behavior', () => {
     expect(free?.groupId).toBe('custom-group:space')
     expect(free?.x).toBe(12)
     expect(free?.y).toBe(34)
+  })
+
+  it('applies session title overrides for groups and nodes', () => {
+    const local = makeLocalState()
+    local.groupTitleOverrides = { party: 'Renamed Party' }
+    local.nodeTitleOverrides = { cutthroat: 'Renamed Cutthroat' }
+
+    const scene = buildSceneVM(sampleState, local)
+
+    expect(scene.groups.party?.title).toBe('Renamed Party')
+    expect(scene.nodes.cutthroat?.title).toBe('Renamed Cutthroat')
   })
 })

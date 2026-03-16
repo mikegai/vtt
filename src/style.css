@@ -652,6 +652,21 @@ html, body {
   background: rgba(180, 60, 60, 0.25);
 }
 
+.canvas-inline-editor {
+  position: fixed;
+  z-index: 250;
+  margin: 0;
+  padding: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: #e8f0ff;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1;
+  font-family: 'Alegreya', 'Times New Roman', serif;
+}
+
 /* --- HUD Bar (bottom of viewport) --- */
 .hud-bar {
   position: fixed;

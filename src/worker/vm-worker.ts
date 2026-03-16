@@ -20,6 +20,8 @@ let localState: WorkerLocalState = {
   groupFreeSegmentPositions: {},
   groupNodeOrders: {},
   customGroups: {},
+  groupTitleOverrides: {},
+  nodeTitleOverrides: {},
   dropIntent: null,
   stonesPerRow: 25,
   filterCategory: null,
@@ -489,6 +491,33 @@ const applyIntent = (intent: WorkerIntent): void => {
     return
   }
 
+  if (intent.type === 'UPDATE_GROUP_TITLE') {
+    const nextTitle = intent.title.trim()
+    if (nextTitle.length === 0) {
+      recompute()
+      return
+    }
+    localState = {
+      ...localState,
+      groupTitleOverrides: {
+        ...localState.groupTitleOverrides,
+        [intent.groupId]: nextTitle,
+      },
+      customGroups: localState.customGroups[intent.groupId]
+        ? {
+            ...localState.customGroups,
+            [intent.groupId]: {
+              ...localState.customGroups[intent.groupId],
+              title: nextTitle,
+            },
+          }
+        : localState.customGroups,
+    }
+    // TODO(spacetimedb): persist group title edits when board state is backed by SpacetimeDB.
+    recompute()
+    return
+  }
+
   if (intent.type === 'MOVE_NODE_TO_GROUP_INDEX') {
     if (!worldState) {
       recompute()
@@ -640,6 +669,28 @@ const applyIntent = (intent: WorkerIntent): void => {
       persistedPosition: nextNodePositions[intent.nodeId],
       subtreeNodeIds,
     })
+    recompute()
+    return
+  }
+
+  if (intent.type === 'UPDATE_NODE_TITLE') {
+    if (!worldState?.actors[intent.nodeId]) {
+      recompute()
+      return
+    }
+    const nextTitle = intent.title.trim()
+    if (nextTitle.length === 0) {
+      recompute()
+      return
+    }
+    localState = {
+      ...localState,
+      nodeTitleOverrides: {
+        ...localState.nodeTitleOverrides,
+        [intent.nodeId]: nextTitle,
+      },
+    }
+    // TODO(spacetimedb): persist node title edits when board state is backed by SpacetimeDB.
     recompute()
     return
   }
