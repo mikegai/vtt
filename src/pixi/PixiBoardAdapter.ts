@@ -18,6 +18,9 @@ type NodeReorderDragData = {
   readonly handleView: Container
   /** Pointer offset from primary node top-left in world units. */
   readonly anchorOffset: { x: number; y: number }
+  readonly originalGroupId: string | null
+  readonly originalIndex: number
+  readonly originalNestParentId: string | null
   targetGroupId: string | null
   targetIndex: number
   targetNestParentNodeId: string | null
@@ -2107,6 +2110,15 @@ export class PixiBoardAdapter {
         x: point.x - nodeContainer.position.x,
         y: point.y - nodeContainer.position.y,
       }
+      const primaryNode = this.currentScene.nodes[nodeId]
+      const originalGroupId = primaryNode?.groupId ?? null
+      const originalIndex = (() => {
+        const gid = primaryNode?.groupId
+        if (!gid || !this.currentScene?.groups?.[gid]) return 0
+        const idx = this.currentScene.groups[gid].nodeIds.indexOf(nodeId)
+        return idx >= 0 ? idx : 0
+      })()
+      const originalNestParentId = primaryNode?.parentNodeId ?? null
       this.activeDrag = {
         type: 'nodeReorder',
         state: {
@@ -2115,6 +2127,9 @@ export class PixiBoardAdapter {
           initialPositions,
           handleView,
           anchorOffset,
+          originalGroupId,
+          originalIndex,
+          originalNestParentId,
           targetGroupId: null,
           targetIndex: 0,
           targetNestParentNodeId: null,
@@ -2334,7 +2349,9 @@ export class PixiBoardAdapter {
     for (let i = 0; i < candidateIds.length; i += 1) {
       const n = this.currentScene.nodes[candidateIds[i]]
       if (!n) continue
-      if (worldY < n.y + n.height / 2) {
+      const nPos = this.getNodeDisplayPosition(n)
+      const nDims = this.getNodeDisplayDimensions(n)
+      if (worldY < nPos.y + nDims.height / 2) {
         index = i
         break
       }
@@ -2452,7 +2469,20 @@ export class PixiBoardAdapter {
     drag.handleView.cursor = 'grab'
     this.groupDropIndicator.clear()
     this.skipNodeAnimationOnce.clear()
-    if (drag.targetNestParentNodeId && this.handlers.onNestNodeUnder) {
+    const isNoOp = drag.targetNestParentNodeId
+      ? drag.targetNestParentNodeId === drag.originalNestParentId
+      : drag.targetGroupId === drag.originalGroupId && drag.targetIndex === drag.originalIndex
+    if (isNoOp && this.currentScene) {
+      this.recomputeDisplayFlow(this.currentScene)
+      for (const nodeId of drag.nodeIds) {
+        const view = this.nodeViews.get(nodeId)
+        const node = this.currentScene.nodes[nodeId]
+        if (view && node) {
+          const pos = this.getNodeDisplayPosition(node)
+          view.root.position.set(pos.x, pos.y)
+        }
+      }
+    } else if (drag.targetNestParentNodeId && this.handlers.onNestNodeUnder) {
       drag.nodeIds.forEach((nodeId) => this.skipNodeAnimationOnce.add(nodeId))
       this.handlers.onNestNodeUnder(drag.nodeIds[0], drag.targetNestParentNodeId)
     } else if (drag.targetGroupId && this.handlers.onMoveNodeToGroupIndex) {
