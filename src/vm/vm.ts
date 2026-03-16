@@ -196,7 +196,7 @@ const buildRow = (
     if (!baseEntry || !definition) return []
     const vm = toSegmentVM(actor, segment, definition)
     return Array.isArray(vm) ? vm : [vm]
-  })
+  }).sort((a, b) => a.tooltip.title.localeCompare(b.tooltip.title) || a.id.localeCompare(b.id))
   const encumbranceSixths = normalizedInputs
     .map((input) => encumbranceCostSixths(input.definition, input.entry.quantity))
     .reduce((sum, value) => sum + value, 0)
