@@ -3228,7 +3228,7 @@ export class PixiBoardAdapter {
   }
 
   private isGroupExpanded(groupId: string): boolean {
-    return this.groupExpandedState.get(groupId) !== false
+    return this.groupExpandedState.get(groupId) === true
   }
 
   private setGroupExpanded(groupId: string, expanded: boolean): void {
