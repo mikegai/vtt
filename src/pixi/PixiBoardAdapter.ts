@@ -210,17 +210,78 @@ const selectLabelFit = (
   return fallback
 }
 
+const selectLabelFitForSteps = (
+  steps: string[],
+  tier: ZoomTier,
+  availableWorldWidth: number,
+  availableWorldHeight: number,
+  visualScale: number,
+  zoom: number,
+  minVisiblePx: number,
+  maxVisiblePx: number,
+): { text: string; fontSize: number } => {
+  const gridCols = tier === 'far' ? 2 : 1
+  const cellW = availableWorldWidth / gridCols
+  const maxLineWidth = cellW / visualScale
+  const maxLines = GRID_ROWS
+
+  const apparentScale = Math.max(0.01, visualScale * zoom)
+  const minFontSize = Math.max(1, Math.ceil(minVisiblePx / apparentScale))
+  const maxFontSize = Math.max(minFontSize, Math.floor(maxVisiblePx / visualScale))
+
+  const cacheKey = `steps:${steps.join('|')}|${tier}|${gridCols}|${Math.round(availableWorldWidth)}|${Math.round(availableWorldHeight)}|${Math.round(visualScale * 100)}|${Math.round(zoom * 100)}|${minFontSize}|${maxFontSize}`
+  const cached = textFitCache.get(cacheKey)
+  if (cached) return cached
+
+  for (const stepText of steps) {
+    for (let fontSize = maxFontSize; fontSize >= minFontSize; fontSize -= 1) {
+      const lineHeight = fontSize * 1.14
+      const wrapped = wrapTextByWidth(stepText, maxLineWidth, fontSize, maxLines)
+      if (!wrapped) continue
+      const widestLine = wrapped.reduce((max, line) => Math.max(max, measureTextWidth(line, fontSize)), 0)
+      const totalHeight = wrapped.length * lineHeight
+      const worldWidth = widestLine * visualScale
+      const worldHeight = totalHeight * visualScale
+      if (worldWidth <= availableWorldWidth && worldHeight <= availableWorldHeight) {
+        const fit = { text: wrapped.join('\n'), fontSize }
+        textFitCache.set(cacheKey, fit)
+        return fit
+      }
+    }
+  }
+
+  const fallback = {
+    text: steps[steps.length - 1] ?? '?',
+    fontSize: minFontSize,
+  }
+  textFitCache.set(cacheKey, fallback)
+  return fallback
+}
 
 const isMultiStone = (segment: SceneSegmentVM): boolean =>
   segment.sizeSixths >= 6 && segment.sizeSixths % 6 === 0
 
-const isBookLikeChainable = (segment: SceneSegmentVM): boolean => {
-  const title = segment.tooltip.title.toLowerCase()
-  if (!title.includes('book')) return false
-  return title.includes('holy') || title.includes('spell')
-}
-
 const stoneToX = (stoneIndex: number): number => stoneIndex * (STONE_W + STONE_GAP)
+
+/** Group sixths by stone column for blended rect drawing. */
+const groupSixthsByStone = (
+  startSixth: number,
+  sizeSixths: number,
+): { stone: number; startRow: number; count: number }[] => {
+  const groups: { stone: number; startRow: number; count: number }[] = []
+  for (let i = 0; i < sizeSixths; i += 1) {
+    const sixth = startSixth + i
+    const stone = Math.floor(sixth / 6)
+    const row = sixth % 6
+    const last = groups[groups.length - 1]
+    if (last && last.stone === stone) {
+      last.count += 1
+    } else {
+      groups.push({ stone, startRow: row, count: 1 })
+    }
+  }
+  return groups
+}
 
 const sixthToCellLocal = (sixthIndex: number, totalSixths: number): { x: number; y: number } => {
   const clamped = Math.max(0, Math.min(totalSixths, sixthIndex))
@@ -274,7 +335,8 @@ const localToSixth = (localX: number, localY: number, slotCount: number): number
   return totalSixths
 }
 
-const drawMultiItemChain = (
+/** Draw individual cells for drag ghost (no labels). */
+const drawGhostCells = (
   container: Container,
   startSixth: number,
   baseX: number,
@@ -282,33 +344,101 @@ const drawMultiItemChain = (
   sizeSixths: number,
   color: number,
   alpha: number,
-  connectEdges: boolean,
-  compactCells: boolean,
-  totalSixths: number,
 ): void => {
-  let previousCenter: { x: number; y: number } | null = null
   for (let i = 0; i < sizeSixths; i += 1) {
-    const slot = sixthToCellLocal(startSixth + i, totalSixths)
-    const x = baseX + slot.x
-    const y = baseY + slot.y
+    const stone = Math.floor((startSixth + i) / 6)
+    const row = (startSixth + i) % 6
+    const x = baseX + stoneToX(stone)
+    const y = baseY + row * CELL_H
     const cellGraphic = new Graphics()
-    const padX = compactCells ? 4.2 : 1.2
-    const padY = compactCells ? 2.1 : 0.6
-    cellGraphic.roundRect(x + padX, y + padY, STONE_W - padX * 2, CELL_H - padY * 2, 1.8)
+    cellGraphic.roundRect(x + 1.2, y + 0.6, STONE_W - 2.4, CELL_H - 1.2, 1.8)
     cellGraphic.fill({ color, alpha })
     container.addChild(cellGraphic)
+  }
+}
 
-    const centerX = x + STONE_W / 2
-    const centerY = y + CELL_H / 2
-    if (connectEdges && previousCenter) {
-      const edge = new Graphics()
-      edge.setStrokeStyle({ width: 1.2, color, alpha: Math.min(1, alpha + 0.15) })
-      edge.moveTo(previousCenter.x, previousCenter.y)
-      edge.lineTo(centerX, centerY)
-      edge.stroke()
-      container.addChild(edge)
-    }
-    previousCenter = { x: centerX, y: centerY }
+/** Draw blended rectangles: one per stone column, with (cont.) label for continuations. */
+const drawBlendedSegmentRects = (
+  container: Container,
+  segment: SceneSegmentVM,
+  baseX: number,
+  baseY: number,
+  color: number,
+  alpha: number,
+  totalSixths: number,
+  tier: ZoomTier,
+  zoom: number,
+  textCompensationScale: number,
+  minVisibleLabelPx: number,
+  maxVisibleLabelPx: number,
+): { hitBounds: { x: number; y: number; w: number; h: number } } => {
+  const groups = groupSixthsByStone(segment.startSixth, segment.sizeSixths)
+  const PAD = 1.2
+  let minX = Infinity
+  let minY = Infinity
+  let maxX = -Infinity
+  let maxY = -Infinity
+
+  const zoomReadableScale = zoom < 0.45 ? 1.14 : 1
+  const visualScale = textCompensationScale * zoomReadableScale
+
+  groups.forEach((group, index) => {
+    const x = baseX + stoneToX(group.stone)
+    const y = baseY + group.startRow * CELL_H
+    const w = STONE_W
+    const h = group.count * CELL_H
+
+    const rect = new Graphics()
+    rect.roundRect(x + PAD, y + PAD, w - PAD * 2, h - PAD * 2, 4)
+    rect.fill({ color, alpha })
+    container.addChild(rect)
+
+    minX = Math.min(minX, x)
+    minY = Math.min(minY, y)
+    maxX = Math.max(maxX, x + w)
+    maxY = Math.max(maxY, y + h)
+
+    const availableWorldWidth = Math.max(8, w - 6)
+    const availableWorldHeight = Math.max(8, h - 6)
+    const centerX = x + w / 2
+    const centerY = y + h / 2
+
+    const steps = index === 0
+      ? uniqueTextSteps(segment)
+      : uniqueTextSteps(segment).map((s) => `${s} (cont.)`)
+    const fit = selectLabelFitForSteps(
+      steps,
+      tier,
+      availableWorldWidth,
+      availableWorldHeight,
+      visualScale,
+      zoom,
+      minVisibleLabelPx,
+      maxVisibleLabelPx,
+    )
+    const txt = new BitmapText({
+      text: fit.text,
+      style: { fill: '#f0f8ff', fontSize: fit.fontSize, fontFamily: FONT_SEMIBOLD, align: 'center' },
+    })
+    txt.scale.set(visualScale)
+    txt.anchor.set(0.5, 0.5)
+    txt.position.set(centerX, centerY)
+
+    const clip = new Graphics()
+    clip.rect(centerX - availableWorldWidth / 2, centerY - availableWorldHeight / 2, availableWorldWidth, availableWorldHeight)
+    clip.fill({ color: 0xffffff, alpha: 0.001 })
+    container.addChild(clip)
+    txt.mask = clip
+    container.addChild(txt)
+  })
+
+  return {
+    hitBounds: {
+      x: minX,
+      y: minY,
+      w: maxX - minX,
+      h: maxY - minY,
+    },
   }
 }
 
@@ -334,7 +464,6 @@ const drawSegmentBlock = (
   const width = (endStone - startStone) * (STONE_W + STONE_GAP) - STONE_GAP
   const color = segment.isOverflow ? 0x932d4e : hovered ? 0x5cadee : 0x3d9ac9
   const alpha = segment.isOverflow ? 0.58 : 0.82
-  const useConnectedChain = !isMultiStone(segment) && isBookLikeChainable(segment)
 
   const block = new Graphics()
   block.eventMode = 'static'
@@ -362,74 +491,57 @@ const drawSegmentBlock = (
     block.roundRect(startX + 0.5, METER_Y + 2.5, width - 1, STONE_H - 5, 5)
     block.fill({ color, alpha })
     container.addChild(block)
+
+    if (segment.sizeSixths >= 1) {
+      const availableWorldWidth = Math.max(8, width - 6)
+      const availableWorldHeight = Math.max(8, STONE_H - 8)
+      const centerX = startX + width / 2
+      const centerY = METER_Y + STONE_H / 2
+      const zoomReadableScale = zoom < 0.45 ? 1.14 : 1
+      const visualScale = textCompensationScale * zoomReadableScale
+      const fit = selectLabelFit(
+        segment,
+        tier,
+        availableWorldWidth,
+        availableWorldHeight,
+        visualScale,
+        zoom,
+        minVisibleLabelPx,
+        maxVisibleLabelPx,
+      )
+      const txt = new BitmapText({
+        text: fit.text,
+        style: { fill: '#f0f8ff', fontSize: fit.fontSize, fontFamily: FONT_SEMIBOLD, align: 'center' },
+      })
+      txt.scale.set(visualScale)
+      txt.anchor.set(0.5, 0.5)
+      txt.position.set(centerX, centerY)
+
+      const clip = new Graphics()
+      clip.rect(centerX - availableWorldWidth / 2, centerY - availableWorldHeight / 2, availableWorldWidth, availableWorldHeight)
+      clip.fill({ color: 0xffffff, alpha: 0.001 })
+      container.addChild(clip)
+      txt.mask = clip
+      container.addChild(txt)
+    }
   } else {
-    drawMultiItemChain(
+    const { hitBounds } = drawBlendedSegmentRects(
       container,
-      segment.startSixth,
+      segment,
       METER_X,
       METER_Y,
-      segment.sizeSixths,
       color,
       alpha,
-      useConnectedChain,
-      !useConnectedChain,
       totalSixths,
-    )
-    const first = sixthToCellLocal(segment.startSixth, totalSixths)
-    const last = sixthToCellLocal(segment.startSixth + segment.sizeSixths - 1, totalSixths)
-    const hitX = METER_X + Math.min(first.x, last.x)
-    const hitY = METER_Y + Math.min(first.y, last.y)
-    const hitW = Math.max(first.x, last.x) + STONE_W - Math.min(first.x, last.x)
-    const hitH = Math.max(first.y, last.y) + CELL_H - Math.min(first.y, last.y)
-    block.rect(hitX, hitY, hitW, hitH)
-    block.fill({ color: 0xffffff, alpha: 0.001 })
-    container.addChild(block)
-  }
-
-  if (segment.sizeSixths >= 1) {
-    let availableWorldWidth = Math.max(8, width - 6)
-    let availableWorldHeight = Math.max(8, STONE_H - 8)
-    let centerX = startX + width / 2
-    let centerY = METER_Y + STONE_H / 2
-    if (!isMultiStone(segment)) {
-      const first = sixthToCellLocal(segment.startSixth, totalSixths)
-      const last = sixthToCellLocal(segment.startSixth + segment.sizeSixths - 1, totalSixths)
-      const minX = METER_X + Math.min(first.x, last.x)
-      const maxX = METER_X + Math.max(first.x, last.x) + STONE_W
-      const minY = METER_Y + Math.min(first.y, last.y)
-      const maxY = METER_Y + Math.max(first.y, last.y) + CELL_H
-      centerX = (minX + maxX) / 2
-      centerY = (minY + maxY) / 2
-      availableWorldWidth = Math.max(8, maxX - minX - 6)
-      availableWorldHeight = Math.max(8, maxY - minY - 6)
-    }
-    const zoomReadableScale = zoom < 0.45 ? 1.14 : 1
-    const visualScale = textCompensationScale * zoomReadableScale
-    const fit = selectLabelFit(
-      segment,
       tier,
-      availableWorldWidth,
-      availableWorldHeight,
-      visualScale,
       zoom,
+      textCompensationScale,
       minVisibleLabelPx,
       maxVisibleLabelPx,
     )
-    const txt = new BitmapText({
-      text: fit.text,
-      style: { fill: '#f0f8ff', fontSize: fit.fontSize, fontFamily: FONT_SEMIBOLD, align: 'center' },
-    })
-    txt.scale.set(visualScale)
-    txt.anchor.set(0.5, 0.5)
-
-    txt.position.set(centerX, centerY)
-
-    const clip = new Graphics()
-    clip.rect(centerX - availableWorldWidth / 2, centerY - availableWorldHeight / 2, availableWorldWidth, availableWorldHeight)
-    clip.fill({ color: 0xffffff, alpha: 0.001 })
-    container.addChild(clip)
-    txt.mask = clip
-    container.addChild(txt)
+    block.rect(hitBounds.x, hitBounds.y, hitBounds.w, hitBounds.h)
+    block.fill({ color: 0xffffff, alpha: 0.001 })
+    container.addChild(block)
   }
 }
 
@@ -634,11 +746,24 @@ export class PixiBoardAdapter {
       rect.stroke({ width: 1, color: 0xd3ebff, alpha: 0.7 })
       ghost.addChild(rect)
     } else {
-      drawMultiItemChain(ghost, 0, 0, 0, segment.sizeSixths, color, alpha, isBookLikeChainable(segment), !isBookLikeChainable(segment))
+      drawGhostCells(ghost, 0, 0, 0, segment.sizeSixths, color, alpha)
+      const groups = groupSixthsByStone(0, segment.sizeSixths)
+      let minX = Infinity
+      let minY = Infinity
+      let maxX = -Infinity
+      let maxY = -Infinity
+      groups.forEach((g) => {
+        const x = stoneToX(g.stone)
+        const y = g.startRow * CELL_H
+        const w = STONE_W
+        const h = g.count * CELL_H
+        minX = Math.min(minX, x)
+        minY = Math.min(minY, y)
+        maxX = Math.max(maxX, x + w)
+        maxY = Math.max(maxY, y + h)
+      })
       const stroke = new Graphics()
-      const span = segmentStoneSpan(0, segment.sizeSixths)
-      const w = (span.endStone - span.startStone) * (STONE_W + STONE_GAP) - STONE_GAP
-      stroke.roundRect(0, 0, Math.max(STONE_W, w), STONE_H, 4)
+      stroke.roundRect(minX, minY, maxX - minX, maxY - minY, 4)
       stroke.stroke({ width: 1, color: 0xd3ebff, alpha: 0.65 })
       ghost.addChild(stroke)
     }
