@@ -536,7 +536,12 @@ const renderParsed = (text: string): void => {
               .join('')}</div>`
           : ''
 
-      return `<div class="parsed-item status-${effectiveStatus}" data-raw="${escapeHtml(c.raw)}">
+      const dragAttrs = displayItemId
+        ? ` draggable="true" data-spawn-item-id="${escapeAttr(displayItemId)}" data-spawn-qty="${c.quantity}"`
+        : ''
+      const dragClass = displayItemId ? ' parsed-item-draggable' : ''
+
+      return `<div class="parsed-item${dragClass} status-${effectiveStatus}" data-raw="${escapeHtml(c.raw)}"${dragAttrs}>
         <div class="parsed-head">
           <span class="parsed-status">${effectiveStatus}</span>
           <span class="parsed-qty">qty ${c.quantity}</span>
@@ -589,6 +594,70 @@ parseResultsEl.addEventListener('click', (e) => {
     disambiguationOverrides[raw] = itemId
     renderParsed(parseInputEl.value)
   }
+})
+
+const parseDragMime = 'application/x-vtt-paste-item'
+
+parseResultsEl.addEventListener('dragstart', (event) => {
+  const target = event.target as HTMLElement | null
+  const item = target?.closest<HTMLElement>('.parsed-item[data-spawn-item-id]')
+  if (!item || !event.dataTransfer) return
+  const itemDefId = item.dataset.spawnItemId
+  const quantity = Number(item.dataset.spawnQty ?? '1')
+  if (!itemDefId || !Number.isFinite(quantity)) {
+    event.preventDefault()
+    return
+  }
+  event.dataTransfer.effectAllowed = 'copy'
+  event.dataTransfer.setData(
+    parseDragMime,
+    JSON.stringify({
+      itemDefId,
+      quantity: Math.max(1, Math.floor(quantity)),
+    }),
+  )
+  item.classList.add('parsed-item-dragging')
+})
+
+parseResultsEl.addEventListener('dragend', (event) => {
+  const target = event.target as HTMLElement | null
+  const item = target?.closest<HTMLElement>('.parsed-item')
+  item?.classList.remove('parsed-item-dragging')
+})
+
+canvasHost.addEventListener('dragover', (event) => {
+  const hasPayload = event.dataTransfer?.types.includes(parseDragMime)
+  if (!hasPayload) return
+  event.preventDefault()
+  event.dataTransfer!.dropEffect = 'copy'
+})
+
+canvasHost.addEventListener('drop', (event) => {
+  const payloadRaw = event.dataTransfer?.getData(parseDragMime)
+  if (!payloadRaw) return
+  event.preventDefault()
+  let payload: { itemDefId: string; quantity: number } | null = null
+  try {
+    payload = JSON.parse(payloadRaw) as { itemDefId: string; quantity: number }
+  } catch {
+    payload = null
+  }
+  if (!payload?.itemDefId) return
+  const quantity = Math.max(1, Math.floor(Number(payload.quantity)))
+  if (!Number.isFinite(quantity)) return
+  const targetNodeId = pixiAdapter.getDropTargetAtClient(event.clientX, event.clientY)
+  const world = pixiAdapter.getWorldPointAtClient(event.clientX, event.clientY)
+  postToWorker({
+    type: 'INTENT',
+    intent: {
+      type: 'SPAWN_ITEM_INSTANCE',
+      itemDefId: payload.itemDefId,
+      quantity,
+      targetNodeId,
+      x: world.x,
+      y: world.y,
+    },
+  })
 })
 
 bulkInputEl.value = `Fighter:\nplate armor, shield, short sword\n\nLoot Pile - Crypt Chest:\n2 sacks, 14 torches and 3 flasks of oil`

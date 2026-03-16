@@ -1393,6 +1393,15 @@ export class PixiBoardAdapter {
     return { x, y }
   }
 
+  getWorldPointAtClient(clientX: number, clientY: number): { x: number; y: number } {
+    return this.screenToWorld(clientX, clientY)
+  }
+
+  getDropTargetAtClient(clientX: number, clientY: number): string | null {
+    const world = this.screenToWorld(clientX, clientY)
+    return this.findDropTarget(world.x, world.y)
+  }
+
   /** Drop target = whole character node. Returns nodeId if world point is inside any node's bounds. */
   private findDropTarget(worldX: number, worldY: number): string | null {
     if (!this.currentScene) return null

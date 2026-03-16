@@ -112,6 +112,14 @@ export type WorkerIntent =
   | { readonly type: 'DRAG_SEGMENT_START'; readonly segmentIds: readonly string[] }
   | { readonly type: 'DRAG_SEGMENT_UPDATE'; readonly targetNodeId: string | null }
   | { readonly type: 'DRAG_SEGMENT_END'; readonly targetNodeId: string | null; readonly x?: number; readonly y?: number }
+  | {
+      readonly type: 'SPAWN_ITEM_INSTANCE'
+      readonly itemDefId: string
+      readonly quantity: number
+      readonly targetNodeId: string | null
+      readonly x?: number
+      readonly y?: number
+    }
   | { readonly type: 'MOVE_ENTRY_TO'; readonly segmentId: string; readonly sourceNodeId: string; readonly targetNodeId: string }
   | { readonly type: 'SET_WIELD'; readonly segmentId: string; readonly wield: WieldGrip }
   | { readonly type: 'UNWIELD'; readonly segmentId: string }

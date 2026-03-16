@@ -84,6 +84,38 @@ const collectSceneSubtreeNodeIds = (scene: SceneVM, rootNodeId: string): string[
 
 const droppedGroupIdForActor = (actorId: string): string => `${actorId}:ground`
 
+const ensureDroppedGroup = (state: CanonicalState, actorId: string): CanonicalState => {
+  const droppedGroupId = droppedGroupIdForActor(actorId)
+  if (state.carryGroups[droppedGroupId]) return state
+  return {
+    ...state,
+    carryGroups: {
+      ...state.carryGroups,
+      [droppedGroupId]: {
+        id: droppedGroupId,
+        ownerActorId: actorId,
+        name: 'Ground',
+        dropped: true,
+      },
+    },
+  }
+}
+
+const createInventoryEntryId = (state: CanonicalState, itemDefId: string): string => {
+  const base = `spawn:${itemDefId}`
+  let attempt = 0
+  while (attempt < 1000) {
+    const suffix =
+      attempt === 0
+        ? `${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 7)}`
+        : `${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 7)}:${attempt}`
+    const nextId = `${base}:${suffix}`
+    if (!state.inventoryEntries[nextId]) return nextId
+    attempt += 1
+  }
+  return `${base}:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 7)}:fallback`
+}
+
 const STONE_W = 36
 const STONE_H = 54
 const STONE_GAP = 3
@@ -710,6 +742,99 @@ const applyIntent = (intent: WorkerIntent): void => {
       }
     }
     localState = { ...localState, dropIntent: null }
+    recompute()
+    return
+  }
+
+  if (intent.type === 'SPAWN_ITEM_INSTANCE') {
+    if (!worldState) return
+    const itemDef = worldState.itemDefinitions[intent.itemDefId]
+    const quantity = Math.max(1, Math.floor(intent.quantity))
+    if (!itemDef || !Number.isFinite(quantity)) {
+      recompute()
+      return
+    }
+
+    let targetActorId: string | null = null
+    let targetCarryGroupId: string | undefined
+    let shouldDropToGround = false
+
+    if (intent.targetNodeId) {
+      const parsedTarget = parseNodeId(intent.targetNodeId)
+      if (parsedTarget.actorId && worldState.actors[parsedTarget.actorId]) {
+        targetActorId = parsedTarget.actorId
+        targetCarryGroupId = parsedTarget.carryGroupId
+        shouldDropToGround = !!parsedTarget.carryGroupId
+      }
+    }
+
+    if (!targetActorId && intent.x != null && intent.y != null) {
+      const dropX = intent.x
+      const dropY = intent.y
+      const sceneAtDrop = buildSceneVM(worldState, localState)
+      const nearestNode = Object.values(sceneAtDrop.nodes).reduce<SceneVM['nodes'][string] | null>((best, node) => {
+        const centerX = node.x + node.width / 2
+        const centerY = node.y + node.height / 2
+        const distSq = (centerX - dropX) ** 2 + (centerY - dropY) ** 2
+        if (!best) return node
+        const bestCenterX = best.x + best.width / 2
+        const bestCenterY = best.y + best.height / 2
+        const bestDistSq = (bestCenterX - dropX) ** 2 + (bestCenterY - dropY) ** 2
+        return distSq < bestDistSq ? node : best
+      }, null)
+      if (nearestNode && worldState.actors[nearestNode.actorId]) {
+        targetActorId = nearestNode.actorId
+        shouldDropToGround = true
+      }
+    }
+
+    if (!targetActorId) {
+      recompute()
+      return
+    }
+
+    if (shouldDropToGround && !targetCarryGroupId) {
+      worldState = ensureDroppedGroup(worldState, targetActorId)
+      targetCarryGroupId = droppedGroupIdForActor(targetActorId)
+    } else if (targetCarryGroupId && !worldState.carryGroups[targetCarryGroupId]) {
+      worldState = ensureDroppedGroup(worldState, targetActorId)
+      targetCarryGroupId = droppedGroupIdForActor(targetActorId)
+      shouldDropToGround = true
+    }
+
+    const entryId = createInventoryEntryId(worldState, intent.itemDefId)
+    const nextEntry: InventoryEntry = {
+      id: entryId,
+      actorId: targetActorId,
+      itemDefId: intent.itemDefId,
+      quantity,
+      zone: shouldDropToGround ? 'dropped' : 'stowed',
+      carryGroupId: targetCarryGroupId,
+      state: shouldDropToGround ? { dropped: true } : undefined,
+    }
+
+    worldState = {
+      ...worldState,
+      inventoryEntries: {
+        ...worldState.inventoryEntries,
+        [entryId]: nextEntry,
+      },
+    }
+
+    if (shouldDropToGround && intent.x != null && intent.y != null) {
+      const sceneAtDrop = buildSceneVM(worldState, localState)
+      const createdSegId = Object.values(sceneAtDrop.freeSegments).find((free) => segmentIdToEntryId(free.id) === entryId)?.id
+      if (createdSegId) {
+        localState = {
+          ...localState,
+          freeSegmentPositions: {
+            ...localState.freeSegmentPositions,
+            [createdSegId]: { x: intent.x, y: intent.y },
+          },
+        }
+      }
+    }
+
     recompute()
     return
   }

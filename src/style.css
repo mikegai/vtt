@@ -454,6 +454,18 @@ html, body {
   padding: 8px 10px;
 }
 
+.parsed-item-draggable {
+  cursor: grab;
+}
+
+.parsed-item-draggable:active {
+  cursor: grabbing;
+}
+
+.parsed-item-dragging {
+  opacity: 0.55;
+}
+
 .status-resolved {
   border-color: rgba(89, 210, 148, 0.4);
 }
