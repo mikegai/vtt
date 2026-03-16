@@ -452,7 +452,7 @@ const drawArrowLine = (g: Graphics, x1: number, y1: number, x2: number, y2: numb
   g.moveTo(ax1, ay1)
   g.lineTo(x2, y2)
   g.lineTo(ax2, ay2)
-  g.stroke({ width: 2, color: 0x5cadee, alpha: 0.85 })
+  g.stroke({ width: 2, color: 0xffffff, alpha: 0.95 })
 }
 
 /** Split stone range into chunks at stonesPerRow boundaries. */
@@ -1142,9 +1142,10 @@ export class PixiBoardAdapter {
     if (!this.currentScene) return
     const selectedIds = new Set(this.currentScene.selectedSegmentIds ?? [])
     if (selectedIds.size === 0) return
-    const PAD = 0.75
-    const STROKE = 2.5
-    const RADIUS = 5
+    const PAD = 0.2
+    const STROKE = 0.8
+    const RADIUS = 2
+    const boxBounds: { left: number; top: number; right: number; bottom: number }[] = []
     for (const [nodeId, view] of this.nodeViews) {
       const node = this.currentScene.nodes[nodeId]
       if (!node) continue
@@ -1156,10 +1157,15 @@ export class PixiBoardAdapter {
         const nodePos = this.getNodeDisplayPosition(node)
         const worldX = nodePos.x + (segView ? segView.container.position.x : pos.x) + bounds.x - pos.x
         const worldY = nodePos.y + (segView ? segView.container.position.y : pos.y) + bounds.y - pos.y
+        const left = worldX - PAD
+        const top = worldY - PAD
+        const right = worldX + bounds.w + PAD
+        const bottom = worldY + bounds.h + PAD
+        boxBounds.push({ left, top, right, bottom })
         const g = new Graphics()
         g.eventMode = 'none'
-        g.roundRect(worldX - PAD, worldY - PAD, bounds.w + PAD * 2, bounds.h + PAD * 2, RADIUS)
-        g.stroke({ width: STROKE, color: 0xffffff, alpha: 0.95 })
+        g.roundRect(left, top, bounds.w + PAD * 2, bounds.h + PAD * 2, RADIUS)
+        g.stroke({ width: STROKE, color: 0xffffff, alpha: 0.55 })
         this.selectionOverlayLayer.addChild(g)
       }
     }
@@ -1168,11 +1174,27 @@ export class PixiBoardAdapter {
       const b = segmentBoundsInNodeLocal(free.segment)
       const segX = free.x + b.x - SLOT_START_X
       const segY = free.y + b.y - TOP_BAND_H
+      const left = segX - PAD
+      const top = segY - PAD
+      const right = segX + b.w + PAD
+      const bottom = segY + b.h + PAD
+      boxBounds.push({ left, top, right, bottom })
       const g = new Graphics()
       g.eventMode = 'none'
-      g.roundRect(segX - PAD, segY - PAD, b.w + PAD * 2, b.h + PAD * 2, RADIUS)
-      g.stroke({ width: STROKE, color: 0xffffff, alpha: 0.95 })
+      g.roundRect(left, top, b.w + PAD * 2, b.h + PAD * 2, RADIUS)
+      g.stroke({ width: STROKE, color: 0xffffff, alpha: 0.55 })
       this.selectionOverlayLayer.addChild(g)
+    }
+    if (selectedIds.size > 1 && boxBounds.length > 0) {
+      const minX = Math.min(...boxBounds.map((bb) => bb.left))
+      const minY = Math.min(...boxBounds.map((bb) => bb.top))
+      const maxX = Math.max(...boxBounds.map((bb) => bb.right))
+      const maxY = Math.max(...boxBounds.map((bb) => bb.bottom))
+      const outer = new Graphics()
+      outer.eventMode = 'none'
+      outer.rect(minX, minY, maxX - minX, maxY - minY)
+      outer.stroke({ width: 1, color: 0xffffff, alpha: 0.7 })
+      this.selectionOverlayLayer.addChild(outer)
     }
   }
 
