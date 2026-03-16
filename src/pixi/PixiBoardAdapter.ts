@@ -150,6 +150,10 @@ const NODE_INDENT = 24
 const EMPTY_GROUP_MIN_WIDTH = 300
 const EMPTY_GROUP_MIN_HEIGHT = 140
 
+/** Auto-pan when dragging near viewport edge (Miro-style). */
+const AUTO_PAN_MARGIN = 60
+const AUTO_PAN_SPEED = 12
+
 let stonesPerRow = DEFAULT_STONES_PER_ROW
 
 const meterWidthForSlots = (slotCount: number): number =>
@@ -967,6 +971,8 @@ export class PixiBoardAdapter {
   private readonly skipNodeAnimationOnce = new Set<string>()
   private readonly skipSegmentAnimationOnce = new Set<string>()
   private readonly hiddenNodeContentIds = new Set<string>()
+  private lastPointerPosition: { clientX: number; clientY: number } | null = null
+  private autoPanRafId: number | null = null
 
   constructor(host: HTMLElement, handlers: AdapterHandlers) {
     this.handlers = handlers
@@ -1077,6 +1083,8 @@ export class PixiBoardAdapter {
         if (!hitInteractive && this.handlers.onMarqueeSelect) {
           const { x, y } = canvasCoords(event)
           this.activeDrag = { type: 'marquee', startX: x, startY: y, endX: x, endY: y }
+          this.lastPointerPosition = { clientX: event.clientX, clientY: event.clientY }
+          this.startAutoPanLoop()
           this.drawMarquee()
         }
         return
@@ -1103,6 +1111,7 @@ export class PixiBoardAdapter {
             const { x, y } = canvasCoords(event)
             this.activeDrag.endX = x
             this.activeDrag.endY = y
+            this.stopAutoPanLoop()
             this.finishMarquee(event.shiftKey || event.ctrlKey || event.metaKey)
             this.activeDrag = { type: 'idle' }
             this.drawMarquee()
@@ -1119,6 +1128,9 @@ export class PixiBoardAdapter {
     }
 
     const onMove = (event: PointerEvent): void => {
+      if (this.activeDrag.type !== 'idle') {
+        this.lastPointerPosition = { clientX: event.clientX, clientY: event.clientY }
+      }
       switch (this.activeDrag.type) {
         case 'nodeReorder':
           this.updateNodeReorderDrag(event.clientX, event.clientY)
@@ -1172,6 +1184,86 @@ export class PixiBoardAdapter {
   private applyCamera(): void {
     this.sceneRoot.position.set(this.pan.x, this.pan.y)
     this.sceneRoot.scale.set(this.zoom, this.zoom)
+  }
+
+  /** Returns pan delta (dx, dy) when pointer is in margin zone. Positive dx = pan right, positive dy = pan down. */
+  private getAutoPanDelta(
+    rect: DOMRect,
+    clientX: number,
+    clientY: number,
+  ): { dx: number; dy: number } {
+    let dx = 0
+    let dy = 0
+    const left = rect.left
+    const right = rect.right
+    const top = rect.top
+    const bottom = rect.bottom
+    if (clientX < left + AUTO_PAN_MARGIN) {
+      const strength = (left + AUTO_PAN_MARGIN - clientX) / AUTO_PAN_MARGIN
+      dx = strength * AUTO_PAN_SPEED
+    } else if (clientX > right - AUTO_PAN_MARGIN) {
+      const strength = (clientX - (right - AUTO_PAN_MARGIN)) / AUTO_PAN_MARGIN
+      dx = -strength * AUTO_PAN_SPEED
+    }
+    if (clientY < top + AUTO_PAN_MARGIN) {
+      const strength = (top + AUTO_PAN_MARGIN - clientY) / AUTO_PAN_MARGIN
+      dy = strength * AUTO_PAN_SPEED
+    } else if (clientY > bottom - AUTO_PAN_MARGIN) {
+      const strength = (clientY - (bottom - AUTO_PAN_MARGIN)) / AUTO_PAN_MARGIN
+      dy = -strength * AUTO_PAN_SPEED
+    }
+    return { dx, dy }
+  }
+
+  private startAutoPanLoop(): void {
+    if (this.autoPanRafId != null) return
+    const tick = (): void => {
+      this.autoPanRafId = null
+      if (this.activeDrag.type === 'idle') return
+      const pos = this.lastPointerPosition
+      if (!pos) {
+        this.autoPanRafId = requestAnimationFrame(tick)
+        return
+      }
+      const rect = this.app.canvas.getBoundingClientRect()
+      const { dx, dy } = this.getAutoPanDelta(rect, pos.clientX, pos.clientY)
+      if (dx !== 0 || dy !== 0) {
+        this.pan.x += dx
+        this.pan.y += dy
+        this.applyCamera()
+        switch (this.activeDrag.type) {
+          case 'segment':
+            this.updateSegmentDrag(pos.clientX, pos.clientY)
+            break
+          case 'group':
+            this.updateGroupDrag(pos.clientX, pos.clientY)
+            break
+          case 'label':
+            this.updateLabelDrag(pos.clientX, pos.clientY)
+            break
+          case 'nodeReorder':
+            this.updateNodeReorderDrag(pos.clientX, pos.clientY)
+            break
+          case 'marquee': {
+            const canvasX = pos.clientX - rect.left
+            const canvasY = pos.clientY - rect.top
+            this.activeDrag.endX = canvasX
+            this.activeDrag.endY = canvasY
+            this.drawMarquee()
+            break
+          }
+        }
+      }
+      this.autoPanRafId = requestAnimationFrame(tick)
+    }
+    this.autoPanRafId = requestAnimationFrame(tick)
+  }
+
+  private stopAutoPanLoop(): void {
+    if (this.autoPanRafId != null) {
+      cancelAnimationFrame(this.autoPanRafId)
+      this.autoPanRafId = null
+    }
   }
 
   private updateSelectionOverlay(): void {
@@ -1420,6 +1512,8 @@ export class PixiBoardAdapter {
         anchorOffset: { x: world.x - group.x, y: world.y - group.y },
       },
     }
+    this.lastPointerPosition = { clientX: event.clientX, clientY: event.clientY }
+    this.startAutoPanLoop()
     return true
   }
 
@@ -1504,6 +1598,8 @@ export class PixiBoardAdapter {
         isExternal: true,
       },
     }
+    this.lastPointerPosition = { clientX, clientY }
+    this.startAutoPanLoop()
     this.updateSegmentDrag(clientX, clientY)
   }
 
@@ -1828,6 +1924,8 @@ export class PixiBoardAdapter {
         absoluteProxyAnchorOffset,
       },
     }
+    this.lastPointerPosition = { clientX, clientY }
+    this.startAutoPanLoop()
     this.handlers.onDragSegmentStart(segmentIds)
     this.updateSegmentDrag(clientX, clientY)
   }
@@ -2377,6 +2475,8 @@ export class PixiBoardAdapter {
           targetNestParentNodeId: null,
         },
       }
+      this.lastPointerPosition = { clientX, clientY }
+      this.startAutoPanLoop()
       handleView.cursor = 'grabbing'
       event.stopPropagation()
     })
@@ -2554,6 +2654,8 @@ export class PixiBoardAdapter {
           offset: { x: world.x - root.position.x, y: world.y - root.position.y },
         },
       }
+      this.lastPointerPosition = { clientX, clientY }
+      this.startAutoPanLoop()
       this.handlers.onSelectLabel?.(label.id)
       handle.cursor = 'grabbing'
       event.stopPropagation()
@@ -2788,6 +2890,7 @@ export class PixiBoardAdapter {
   }
 
   private endDrag(): void {
+    this.stopAutoPanLoop()
     if (this.activeDrag.type === 'group') {
       this.setGroupNodeContentVisibility(this.activeDrag.state.groupId, true)
     } else if (this.activeDrag.type === 'nodeReorder') {
