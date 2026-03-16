@@ -297,15 +297,22 @@ const pixiAdapter = new PixiBoardAdapter(canvasHost, {
       showContextMenu(segmentId, nodeId, segment.itemDefId, clientX, clientY)
     }
   },
-  onSegmentClick(segmentId, _nodeId, ctrlKey) {
-    if (ctrlKey) {
+  onSegmentClick(segmentId, _nodeId, addToSelection) {
+    if (addToSelection) {
       postToWorker({ type: 'INTENT', intent: { type: 'SELECT_SEGMENTS_ADD', segmentIds: [segmentId] } })
     } else {
       postToWorker({ type: 'INTENT', intent: { type: 'SET_SELECTED_SEGMENTS', segmentIds: [segmentId] } })
     }
   },
-  onSegmentDoubleClick(_segmentId, itemDefId) {
-    postToWorker({ type: 'INTENT', intent: { type: 'SELECT_ALL_OF_TYPE', itemDefId } })
+  onSegmentDoubleClick(_segmentId, itemDefId, nodeId) {
+    postToWorker({ type: 'INTENT', intent: { type: 'SELECT_ALL_OF_TYPE', itemDefId, nodeId } })
+  },
+  onMarqueeSelect(segmentIds, addToSelection) {
+    if (addToSelection) {
+      postToWorker({ type: 'INTENT', intent: { type: 'SELECT_SEGMENTS_ADD', segmentIds } })
+    } else {
+      postToWorker({ type: 'INTENT', intent: { type: 'SET_SELECTED_SEGMENTS', segmentIds } })
+    }
   },
 })
 

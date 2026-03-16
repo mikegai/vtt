@@ -118,7 +118,10 @@ const applyIntent = (intent: WorkerIntent): void => {
     }
     const scene = buildSceneVM(worldState, localState)
     const allOfType: string[] = []
-    for (const node of Object.values(scene.nodes)) {
+    const nodes = intent.nodeId
+      ? [scene.nodes[intent.nodeId]].filter(Boolean)
+      : Object.values(scene.nodes)
+    for (const node of nodes) {
       for (const seg of node.segments) {
         if (seg.itemDefId === intent.itemDefId) allOfType.push(seg.id)
       }

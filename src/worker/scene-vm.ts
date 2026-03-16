@@ -37,6 +37,7 @@ const nodeWidthForSlots = (slotCount: number, stonesPerRow: number): number =>
   SLOT_START_X + meterWidthForSlots(slotCount, stonesPerRow) + 20
 
 const INDENT_X = 40
+const NODE_ROW_GAP = 20
 
 const segmentIdToEntryId = (segmentId: string): string => {
   const colon = segmentId.indexOf(':')
@@ -51,7 +52,7 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
   const movedEntryId = localState.dropIntent ? segmentIdToEntryId(localState.dropIntent.segmentId) : null
   const nodes: Record<string, SceneNodeVM> = {}
 
-  let index = 0
+  let accumY = 80
   for (const row of board.rows) {
     const actor = worldState.actors[row.actorId]
     const twoBandSlots = actor?.kind === 'animal' || actor?.kind === 'vehicle'
@@ -62,9 +63,11 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
         ? 7
         : 5
 
-    const fallback = { x: 80, y: 80 + index * 104 }
-    const position = localState.nodePositions[row.id] ?? fallback
     const slotCount = totalStoneSlots
+    const nodeHeight = nodeHeightForSlots(slotCount, localState.stonesPerRow)
+    const fallback = { x: 80, y: accumY }
+    const position = localState.nodePositions[row.id] ?? fallback
+    accumY += nodeHeight + NODE_ROW_GAP
     nodes[row.id] = {
       id: row.id,
       rowId: row.id,
@@ -98,7 +101,6 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
         tooltip: segment.tooltip,
       })),
     }
-    index += 1
 
     for (const child of row.childRows) {
       const childActor = worldState.actors[child.actorId]
@@ -110,9 +112,11 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
           ? 7
           : 5
 
-      const childFallback = { x: 80 + INDENT_X, y: 80 + index * 104 }
-      const childPosition = localState.nodePositions[child.id] ?? childFallback
       const childSlotCount = childTotalStoneSlots
+      const childNodeHeight = nodeHeightForSlots(childSlotCount, localState.stonesPerRow)
+      const childFallback = { x: 80 + INDENT_X, y: accumY }
+      const childPosition = localState.nodePositions[child.id] ?? childFallback
+      accumY += childNodeHeight + NODE_ROW_GAP
       nodes[child.id] = {
         id: child.id,
         rowId: child.id,
@@ -146,7 +150,6 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
           tooltip: segment.tooltip,
         })),
       }
-      index += 1
     }
   }
 

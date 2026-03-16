@@ -71,7 +71,7 @@ export type WorkerIntent =
   | { readonly type: 'SET_SELECTED_SEGMENTS'; readonly segmentIds: readonly string[] }
   | { readonly type: 'SELECT_SEGMENTS_ADD'; readonly segmentIds: readonly string[] }
   | { readonly type: 'SELECT_SEGMENTS_REMOVE'; readonly segmentIds: readonly string[] }
-  | { readonly type: 'SELECT_ALL_OF_TYPE'; readonly itemDefId: string }
+  | { readonly type: 'SELECT_ALL_OF_TYPE'; readonly itemDefId: string; readonly nodeId?: string }
   | { readonly type: 'MOVE_NODE'; readonly nodeId: string; readonly x: number; readonly y: number }
   | { readonly type: 'DRAG_SEGMENT_START'; readonly segmentId: string; readonly sourceNodeId: string }
   | { readonly type: 'DRAG_SEGMENT_UPDATE'; readonly targetNodeId: string | null }

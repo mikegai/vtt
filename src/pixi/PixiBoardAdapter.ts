@@ -13,8 +13,9 @@ type AdapterHandlers = {
   onDragSegmentUpdate(targetNodeId: string | null): void
   onDragSegmentEnd(targetNodeId: string | null): void
   onContextMenu(segmentId: string, nodeId: string, clientX: number, clientY: number): void
-  onSegmentClick?(segmentId: string, nodeId: string, ctrlKey: boolean): void
-  onSegmentDoubleClick?(segmentId: string, itemDefId: string): void
+  onSegmentClick?(segmentId: string, nodeId: string, addToSelection: boolean): void
+  onSegmentDoubleClick?(segmentId: string, itemDefId: string, nodeId: string): void
+  onMarqueeSelect?(segmentIds: string[], addToSelection: boolean): void
 }
 
 type SegmentView = {
@@ -282,6 +283,42 @@ const segmentPositionInNode = (segment: SceneSegmentVM): { x: number; y: number 
   return {
     x: SLOT_START_X + minX,
     y: TOP_BAND_H + minY,
+  }
+}
+
+/** Bounds of segment in node-local space (relative to node root). */
+const segmentBoundsInNodeLocal = (segment: SceneSegmentVM): { x: number; y: number; w: number; h: number } => {
+  const { startStone, endStone } = segmentStoneSpan(segment.startSixth, segment.sizeSixths)
+  const isMulti = isMultiStone(segment)
+  if (isMulti) {
+    const chunks = splitStonesAtWrap(startStone, endStone)
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+    chunks.forEach((chunk) => {
+      const cx = SLOT_START_X + stoneToX(chunk.start)
+      const cy = TOP_BAND_H + stoneToY(chunk.start)
+      const cw = (chunk.end - chunk.start) * (STONE_W + STONE_GAP) - STONE_GAP
+      minX = Math.min(minX, cx)
+      minY = Math.min(minY, cy)
+      maxX = Math.max(maxX, cx + cw)
+      maxY = Math.max(maxY, cy + STONE_H)
+    })
+    return { x: minX, y: minY, w: maxX - minX, h: maxY - minY }
+  }
+  const groups = groupSixthsByStone(segment.startSixth, segment.sizeSixths)
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+  groups.forEach((g) => {
+    const x = stoneToX(g.stone)
+    const y = stoneToY(g.stone) + g.startRow * CELL_H
+    minX = Math.min(minX, x)
+    minY = Math.min(minY, y)
+    maxX = Math.max(maxX, x + STONE_W)
+    maxY = Math.max(maxY, y + g.count * CELL_H)
+  })
+  return {
+    x: SLOT_START_X + minX,
+    y: TOP_BAND_H + minY,
+    w: maxX - minX,
+    h: maxY - minY,
   }
 }
 
@@ -599,19 +636,17 @@ const drawSegmentBlock = (
   onDragStart?: (segment: SceneSegmentVM, nodeId: string, x: number, y: number) => void,
   baseOffset?: { x: number; y: number },
   filterCategory?: string | null,
-  selectedSegmentIds?: readonly string[],
-  onSegmentClick?: (segmentId: string, nodeId: string, ctrlKey: boolean) => void,
-  onSegmentDoubleClick?: (segmentId: string, itemDefId: string) => void,
+  _selectedSegmentIds?: readonly string[],
+  onSegmentClick?: (segmentId: string, nodeId: string, addToSelection: boolean) => void,
+  onSegmentDoubleClick?: (segmentId: string, itemDefId: string, nodeId: string) => void,
   getLastDragEndTime?: () => number,
 ): void => {
   const o = baseOffset ?? { x: 0, y: 0 }
   const { startStone, endStone } = segmentStoneSpan(segment.startSixth, segment.sizeSixths)
   const isDropPreview = segment.isDropPreview === true
-  const selected = selectedSegmentIds?.includes(segment.id) ?? false
   const dimmed = filterCategory != null && segment.category !== filterCategory
-  let color = isDropPreview ? 0x5cadee : segment.isOverflow ? 0x932d4e : hovered ? 0x5cadee : selected ? 0x6dd96d : 0x3d9ac9
-  let alpha = isDropPreview ? 0.25 : segment.isOverflow ? 0.58 : dimmed ? 0.32 : 0.82
-  if (dimmed && selected) alpha = 0.5
+  const color = isDropPreview ? 0x5cadee : segment.isOverflow ? 0x932d4e : hovered ? 0x5cadee : 0x3d9ac9
+  const alpha = isDropPreview ? 0.25 : segment.isOverflow ? 0.88 : dimmed ? 0.65 : 0.95
 
   const block = new Graphics()
   block.eventMode = 'static'
@@ -641,9 +676,9 @@ const drawSegmentBlock = (
       if (event.button !== 0) return
       if (getLastDragEndTime && Date.now() - getLastDragEndTime() < 150) return
       if (event.detail === 2) {
-        onSegmentDoubleClick?.(segment.id, segment.itemDefId)
+        onSegmentDoubleClick?.(segment.id, segment.itemDefId, nodeId)
       } else {
-        onSegmentClick?.(segment.id, nodeId, event.ctrlKey || event.metaKey)
+        onSegmentClick?.(segment.id, nodeId, event.ctrlKey || event.metaKey || event.shiftKey)
       }
     })
   }
@@ -756,6 +791,7 @@ export class PixiBoardAdapter {
   private app: Application
   private sceneRoot: Container
   private worldLayer: Container
+  private selectionOverlayLayer: Container
   private hudLayer: Container
   private readonly nodeViews = new Map<string, NodeView>()
   private readonly handlers: AdapterHandlers
@@ -768,6 +804,8 @@ export class PixiBoardAdapter {
   private currentScene: SceneVM | null = null
   private segmentDrag: SegmentDragState | null = null
   private lastDragEndTime = 0
+  private marqueeState: { startX: number; startY: number; endX: number; endY: number } | null = null
+  private marqueeGraphics: Graphics | null = null
   private minVisibleLabelPx = DEFAULT_MIN_VISIBLE_PX
   private readonly maxVisibleLabelPx = DEFAULT_MAX_VISIBLE_PX
   private fontsLoaded = false
@@ -777,6 +815,8 @@ export class PixiBoardAdapter {
     this.app = new Application()
     this.sceneRoot = new Container()
     this.worldLayer = new Container()
+    this.selectionOverlayLayer = new Container()
+    this.selectionOverlayLayer.eventMode = 'none'
     this.hudLayer = new Container()
     this.tooltipLayer = new Container()
     this.tooltipBg = new Graphics()
@@ -813,12 +853,16 @@ export class PixiBoardAdapter {
     })
 
     this.sceneRoot.addChild(this.worldLayer)
+    this.sceneRoot.addChild(this.selectionOverlayLayer)
     this.app.stage.addChild(this.sceneRoot)
     this.hudLayer.addChild(this.paceText)
     this.tooltipLayer.addChild(this.tooltipBg)
     this.tooltipLayer.addChild(this.tooltipText)
     this.tooltipLayer.visible = false
     this.hudLayer.addChild(this.tooltipLayer)
+    this.marqueeGraphics = new Graphics()
+    this.marqueeGraphics.eventMode = 'none'
+    this.hudLayer.addChild(this.marqueeGraphics)
     this.app.stage.addChild(this.hudLayer)
     this.paceText.position.set(16, 12)
 
@@ -843,7 +887,20 @@ export class PixiBoardAdapter {
       { capture: true },
     )
 
+    const canvasCoords = (e: PointerEvent) => {
+      const rect = this.app.canvas.getBoundingClientRect()
+      return { x: e.clientX - rect.left, y: e.clientY - rect.top }
+    }
+
     const onDown = (event: PointerEvent): void => {
+      if (event.button === 0) {
+        if (!this.hitTestSkipMarquee(event.clientX, event.clientY) && this.handlers.onMarqueeSelect) {
+          const { x, y } = canvasCoords(event)
+          this.marqueeState = { startX: x, startY: y, endX: x, endY: y }
+          this.drawMarquee()
+        }
+        return
+      }
       if (event.button === 1 || event.button === 2) {
         panning = true
         last = { x: event.clientX, y: event.clientY }
@@ -851,11 +908,27 @@ export class PixiBoardAdapter {
     }
 
     const onUp = (event: PointerEvent): void => {
+      if (event.button === 0 && this.marqueeState) {
+        const { x, y } = canvasCoords(event)
+        this.marqueeState.endX = x
+        this.marqueeState.endY = y
+        this.finishMarquee(event.shiftKey || event.ctrlKey || event.metaKey)
+        this.marqueeState = null
+        this.drawMarquee()
+        return
+      }
       panning = false
       if (this.segmentDrag) this.endSegmentDrag(event)
     }
 
     const onMove = (event: PointerEvent): void => {
+      if (this.marqueeState) {
+        const { x, y } = canvasCoords(event)
+        this.marqueeState.endX = x
+        this.marqueeState.endY = y
+        this.drawMarquee()
+        return
+      }
       if (this.segmentDrag) {
         this.updateSegmentDrag(event.clientX, event.clientY)
         return
@@ -890,6 +963,75 @@ export class PixiBoardAdapter {
   private applyCamera(): void {
     this.sceneRoot.position.set(this.pan.x, this.pan.y)
     this.sceneRoot.scale.set(this.zoom, this.zoom)
+  }
+
+  private updateSelectionOverlay(): void {
+    this.selectionOverlayLayer.removeChildren()
+    if (!this.currentScene) return
+    const selectedIds = new Set(this.currentScene.selectedSegmentIds ?? [])
+    if (selectedIds.size === 0) return
+    const PAD = 1.5
+    const STROKE = 3
+    for (const [nodeId, view] of this.nodeViews) {
+      const node = this.currentScene.nodes[nodeId]
+      if (!node) continue
+      for (const segment of node.segments) {
+        if (!selectedIds.has(segment.id)) continue
+        const segView = view.segmentViews.get(segment.id)
+        const bounds = segmentBoundsInNodeLocal(segment)
+        const pos = segmentPositionInNode(segment)
+        const worldX = node.x + (segView ? segView.container.position.x : pos.x) + bounds.x - pos.x
+        const worldY = node.y + (segView ? segView.container.position.y : pos.y) + bounds.y - pos.y
+        const g = new Graphics()
+        g.eventMode = 'none'
+        g.rect(worldX - PAD, worldY - PAD, bounds.w + PAD * 2, bounds.h + PAD * 2)
+        g.stroke({ width: STROKE, color: 0xffffff, alpha: 0.95 })
+        this.selectionOverlayLayer.addChild(g)
+      }
+    }
+  }
+
+  private drawMarquee(): void {
+    if (!this.marqueeGraphics) return
+    this.marqueeGraphics.clear()
+    if (!this.marqueeState) return
+    const { startX, startY, endX, endY } = this.marqueeState
+    const x = Math.min(startX, endX)
+    const y = Math.min(startY, endY)
+    const w = Math.abs(endX - startX)
+    const h = Math.abs(endY - startY)
+    if (w < 2 && h < 2) return
+    this.marqueeGraphics.rect(x, y, w, h)
+    this.marqueeGraphics.stroke({ width: 2, color: 0x5cadee, alpha: 0.9 })
+    this.marqueeGraphics.fill({ color: 0x5cadee, alpha: 0.12 })
+  }
+
+  private finishMarquee(addToSelection: boolean): void {
+    if (!this.marqueeState || !this.currentScene || !this.handlers.onMarqueeSelect) return
+    const { startX, startY, endX, endY } = this.marqueeState
+    const x1 = Math.min(startX, endX)
+    const y1 = Math.min(startY, endY)
+    const x2 = Math.max(startX, endX)
+    const y2 = Math.max(startY, endY)
+    const minW = (x1 - this.pan.x) / this.zoom
+    const maxW = (x2 - this.pan.x) / this.zoom
+    const minH = (y1 - this.pan.y) / this.zoom
+    const maxH = (y2 - this.pan.y) / this.zoom
+    const segmentIds: string[] = []
+    for (const node of Object.values(this.currentScene.nodes)) {
+      for (const segment of node.segments) {
+        if (segment.isDropPreview) continue
+        const b = segmentBoundsInNodeLocal(segment)
+        const segX1 = node.x + b.x
+        const segY1 = node.y + b.y
+        const segX2 = segX1 + b.w
+        const segY2 = segY1 + b.h
+        if (segX1 < maxW && segX2 > minW && segY1 < maxH && segY2 > minH) {
+          segmentIds.push(segment.id)
+        }
+      }
+    }
+    this.handlers.onMarqueeSelect(segmentIds, addToSelection)
   }
 
   private showTooltip(segment: SceneSegmentVM, globalX: number, globalY: number): void {
@@ -949,6 +1091,23 @@ export class PixiBoardAdapter {
       cur = cur.parent
     }
     return null
+  }
+
+  /** True if we hit a segment or drag handle (should not start marquee). */
+  private hitTestSkipMarquee(clientX: number, clientY: number): boolean {
+    const events = (this.app.renderer as { events?: { mapPositionToPoint: (p: Point, x: number, y: number) => void; rootBoundary?: { hitTest: (x: number, y: number) => Container } } }).events
+    if (!events?.rootBoundary) return false
+    const pt = new Point()
+    events.mapPositionToPoint(pt, clientX, clientY)
+    const hit = events.rootBoundary.hitTest(pt.x, pt.y)
+    if (!hit) return false
+    let cur: Container | null = hit
+    while (cur) {
+      const c = cur as Container & { __segmentContext?: SegmentContext; __dragHandle?: boolean }
+      if (c.__segmentContext || c.__dragHandle) return true
+      cur = cur.parent
+    }
+    return false
   }
 
   private screenToWorld(clientX: number, clientY: number): { x: number; y: number } {
@@ -1129,6 +1288,7 @@ export class PixiBoardAdapter {
     const dragHandle = new Graphics()
     dragHandle.eventMode = 'static'
     dragHandle.cursor = 'grab'
+    ;(dragHandle as Container & { __dragHandle?: boolean }).__dragHandle = true
     dragHandle.rect(0, 0, totalWidth, TOP_BAND_H)
     dragHandle.fill({ color: 0xffffff, alpha: 0.001 })
     dragHandle.rect(0, TOP_BAND_H, SLOT_START_X + SLOT_PADDING, totalHeight - TOP_BAND_H)
@@ -1358,6 +1518,7 @@ export class PixiBoardAdapter {
     Object.values(scene.nodes).forEach((node) => {
       this.nodeViews.set(node.id, this.createNode(node, scene.hoveredSegmentId ?? null, filterCategory, selectedSegmentIds))
     })
+    this.updateSelectionOverlay()
   }
 
   applyInit(scene: SceneVM): void {
@@ -1384,6 +1545,7 @@ export class PixiBoardAdapter {
         segView.container.position.set(segView.spring.x, segView.spring.y)
       }
     }
+    this.updateSelectionOverlay()
     if (!anyActive) {
       this.app.ticker.remove(this.springTickerBound)
     }
@@ -1408,6 +1570,7 @@ export class PixiBoardAdapter {
             scene.filterCategory ?? null,
             scene.selectedSegmentIds ?? [],
           )
+          this.updateSelectionOverlay()
           this.startSpringTicker()
         } else {
           needsFullRebuild = true
