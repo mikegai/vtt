@@ -404,29 +404,26 @@ const renderParsed = (text: string): void => {
     .map((c) => {
       const override = disambiguationOverrides[c.raw]
       const effectiveStatus = override ? 'resolved' : c.status
-      const locked = !!override
       const displayItemId = override ?? c.resolvedItemId
       const displayItemName = override
         ? (c.alternatives.find((a) => a.itemId === override)?.itemName ?? c.candidateName)
         : (c.resolvedItemName ?? c.candidateName)
 
-      let altsHtml = ''
-      if (locked) {
-        altsHtml = `<button class="alt-unlock" data-raw="${escapeHtml(c.raw)}" type="button" title="Unlock and show alternatives">↩ unlock</button>`
-      } else if (c.alternatives.length > 0) {
-        altsHtml = `<div class="alt-pills">${c.alternatives
-          .map(
-            (a) =>
-              `<button class="alt-pill ${a.itemId === displayItemId ? 'alt-pill-selected' : ''}" data-raw="${escapeHtml(c.raw)}" data-item-id="${escapeHtml(a.itemId)}" type="button">${escapeHtml(a.itemName)}</button>`,
-          )
-          .join('')}</div>`
-      }
+      const altsHtml =
+        c.alternatives.length > 0
+          ? `<div class="alt-pills">${c.alternatives
+              .map(
+                (a) =>
+                  `<button class="alt-pill ${a.itemId === displayItemId ? 'alt-pill-selected' : ''}" data-raw="${escapeHtml(c.raw)}" data-item-id="${escapeHtml(a.itemId)}" type="button">${escapeHtml(a.itemName)}</button>`,
+              )
+              .join('')}</div>`
+          : ''
 
-      return `<div class="parsed-item status-${effectiveStatus} ${locked ? 'parsed-item-locked' : ''}" data-raw="${escapeHtml(c.raw)}">
+      return `<div class="parsed-item status-${effectiveStatus}" data-raw="${escapeHtml(c.raw)}">
         <div class="parsed-head">
           <span class="parsed-status">${effectiveStatus}</span>
           <span class="parsed-qty">qty ${c.quantity}</span>
-          ${locked ? '' : `<span class="parsed-conf">${Math.round(c.confidence * 100)}%</span>`}
+          <span class="parsed-conf">${Math.round(c.confidence * 100)}%</span>
         </div>
         <div class="parsed-text">${escapeHtml(c.raw)}</div>
         <div class="parsed-candidate">
@@ -467,19 +464,12 @@ renderParsed(parseInputEl.value)
 parseInputEl.addEventListener('input', () => renderParsed(parseInputEl.value))
 
 parseResultsEl.addEventListener('click', (e) => {
-  const target = e.target as HTMLElement
-  const pill = target.closest('.alt-pill')
-  const unlock = target.closest('.alt-unlock')
-  const raw = (pill ?? unlock)?.getAttribute('data-raw')
-  if (!raw) return
-  if (pill) {
-    const itemId = pill.getAttribute('data-item-id')
-    if (itemId) {
-      disambiguationOverrides[raw] = itemId
-      renderParsed(parseInputEl.value)
-    }
-  } else if (unlock) {
-    delete disambiguationOverrides[raw]
+  const pill = (e.target as HTMLElement).closest('.alt-pill')
+  if (!pill) return
+  const raw = pill.getAttribute('data-raw')
+  const itemId = pill.getAttribute('data-item-id')
+  if (raw && itemId) {
+    disambiguationOverrides[raw] = itemId
     renderParsed(parseInputEl.value)
   }
 })
