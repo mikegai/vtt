@@ -1,7 +1,7 @@
 import './style.css'
 import { parseInventoryImportPlan } from './domain/inventory-import-plan'
 import { parseInventoryText } from './domain/inventory-text-parser'
-import { allSourceItems, itemSourceCatalog, type EncumbranceExpr } from './domain/item-source-catalog'
+import { allSourceItems, itemSourceCatalog, type EncumbranceExpr, type SourceItem } from './domain/item-source-catalog'
 import { formatSixthsAsStone } from './domain/rules'
 import { createSourceItemSearchIndex } from './domain/item-source-search'
 import { getWieldOptions } from './domain/weapon-metadata'
@@ -365,6 +365,25 @@ const encumbranceToSixths = (enc: EncumbranceExpr): number => {
   return 1
 }
 
+const SIXTHS_PER_STONE = 6
+
+const deriveItemKind = (source: SourceItem): { kind: string; sixthsPerUnit: number; armorClass?: number } => {
+  const perUnit = encumbranceToSixths(source.encumbrance)
+  const name = source.name.toLowerCase()
+  if (source.group === 'armor-and-barding') {
+    if (name.includes('shield') || name.includes('helmet')) {
+      return { kind: 'bulky', sixthsPerUnit: perUnit }
+    }
+    if (perUnit >= SIXTHS_PER_STONE) {
+      return { kind: 'armor', sixthsPerUnit: perUnit, armorClass: perUnit / SIXTHS_PER_STONE }
+    }
+  }
+  if (source.group === 'weapons' && perUnit >= SIXTHS_PER_STONE) {
+    return { kind: 'bulky', sixthsPerUnit: perUnit }
+  }
+  return { kind: 'standard', sixthsPerUnit: perUnit }
+}
+
 const consumedParsedIds = new Set<string>()
 let parsedSpawnItems: ParsedSpawnItem[] = []
 let activeParsedDrag: {
@@ -467,7 +486,9 @@ const pixiAdapter = new PixiBoardAdapter(canvasHost, {
     const item = activeParsedDrag.parsedItem
     activeParsedDrag = null
     if (!item.itemDefId) return
+    if (!targetNodeId && (x == null || y == null)) return
     const sourceItem = item.itemDefId ? sourceItemById.get(item.itemDefId) : null
+    const derived = sourceItem ? deriveItemKind(sourceItem) : { kind: 'standard', sixthsPerUnit: 1 }
     postToWorker({
       type: 'INTENT',
       intent: {
@@ -478,8 +499,9 @@ const pixiAdapter = new PixiBoardAdapter(canvasHost, {
         x,
         y,
         itemName: item.itemName,
-        sixthsPerUnit: sourceItem ? encumbranceToSixths(sourceItem.encumbrance) : 1,
-        itemKind: 'standard',
+        sixthsPerUnit: derived.sixthsPerUnit,
+        itemKind: derived.kind,
+        armorClass: derived.armorClass,
       },
     })
     consumedParsedIds.add(item.id)

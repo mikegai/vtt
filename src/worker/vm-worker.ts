@@ -101,19 +101,20 @@ const ensureDroppedGroup = (state: CanonicalState, actorId: string): CanonicalSt
   }
 }
 
-const createInventoryEntryId = (state: CanonicalState, itemDefId: string): string => {
-  const base = `spawn:${itemDefId}`
+const createInventoryEntryId = (state: CanonicalState, itemDefId: string, index?: number): string => {
+  const safeDefId = itemDefId.replace(/:/g, '_')
+  const base = `spawn_${safeDefId}`
   let attempt = 0
   while (attempt < 1000) {
     const suffix =
       attempt === 0
-        ? `${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 7)}`
-        : `${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 7)}:${attempt}`
-    const nextId = `${base}:${suffix}`
+        ? `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}${index != null ? `_${index}` : ''}`
+        : `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}_${attempt}${index != null ? `_${index}` : ''}`
+    const nextId = `${base}_${suffix}`
     if (!state.inventoryEntries[nextId]) return nextId
     attempt += 1
   }
-  return `${base}:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 7)}:fallback`
+  return `${base}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}_fallback`
 }
 
 const STONE_W = 36
@@ -757,6 +758,7 @@ const applyIntent = (intent: WorkerIntent): void => {
         canonicalName: intent.itemName,
         kind: (intent.itemKind as ItemKind) ?? 'standard',
         sixthsPerUnit: intent.sixthsPerUnit ?? 1,
+        armorClass: intent.armorClass,
       }
       worldState = {
         ...worldState,
@@ -819,37 +821,38 @@ const applyIntent = (intent: WorkerIntent): void => {
       shouldDropToGround = true
     }
 
-    const entryId = createInventoryEntryId(worldState, intent.itemDefId)
-    const nextEntry: InventoryEntry = {
-      id: entryId,
-      actorId: targetActorId,
-      itemDefId: intent.itemDefId,
-      quantity,
-      zone: shouldDropToGround ? 'dropped' : 'stowed',
-      carryGroupId: targetCarryGroupId,
-      state: shouldDropToGround ? { dropped: true } : undefined,
-    }
-
-    worldState = {
-      ...worldState,
-      inventoryEntries: {
-        ...worldState.inventoryEntries,
-        [entryId]: nextEntry,
-      },
+    const createdEntryIds: string[] = []
+    for (let i = 0; i < quantity; i++) {
+      const entryId = createInventoryEntryId(worldState, intent.itemDefId, i)
+      createdEntryIds.push(entryId)
+      const nextEntry: InventoryEntry = {
+        id: entryId,
+        actorId: targetActorId,
+        itemDefId: intent.itemDefId,
+        quantity: 1,
+        zone: shouldDropToGround ? 'dropped' : 'stowed',
+        carryGroupId: targetCarryGroupId,
+        state: shouldDropToGround ? { dropped: true } : undefined,
+      }
+      worldState = {
+        ...worldState,
+        inventoryEntries: {
+          ...worldState.inventoryEntries,
+          [entryId]: nextEntry,
+        },
+      }
     }
 
     if (shouldDropToGround && intent.x != null && intent.y != null) {
       const sceneAtDrop = buildSceneVM(worldState, localState)
-      const createdSegId = Object.values(sceneAtDrop.freeSegments).find((free) => segmentIdToEntryId(free.id) === entryId)?.id
-      if (createdSegId) {
-        localState = {
-          ...localState,
-          freeSegmentPositions: {
-            ...localState.freeSegmentPositions,
-            [createdSegId]: { x: intent.x, y: intent.y },
-          },
+      const createdEntryIdSet = new Set(createdEntryIds)
+      const freeSegmentPositions = { ...localState.freeSegmentPositions }
+      for (const free of Object.values(sceneAtDrop.freeSegments)) {
+        if (createdEntryIdSet.has(segmentIdToEntryId(free.id))) {
+          freeSegmentPositions[free.id] = { x: intent.x, y: intent.y }
         }
       }
+      localState = { ...localState, freeSegmentPositions }
     }
 
     recompute()

@@ -128,6 +128,7 @@ export type WorkerIntent =
       readonly itemName?: string
       readonly sixthsPerUnit?: number
       readonly itemKind?: string
+      readonly armorClass?: number
     }
   | { readonly type: 'MOVE_ENTRY_TO'; readonly segmentId: string; readonly sourceNodeId: string; readonly targetNodeId: string }
   | { readonly type: 'SET_WIELD'; readonly segmentId: string; readonly wield: WieldGrip }
