@@ -971,8 +971,9 @@ export class PixiBoardAdapter {
     if (!this.currentScene) return
     const selectedIds = new Set(this.currentScene.selectedSegmentIds ?? [])
     if (selectedIds.size === 0) return
-    const PAD = 1.5
-    const STROKE = 3
+    const PAD = 0.75
+    const STROKE = 2.5
+    const RADIUS = 5
     for (const [nodeId, view] of this.nodeViews) {
       const node = this.currentScene.nodes[nodeId]
       if (!node) continue
@@ -985,7 +986,7 @@ export class PixiBoardAdapter {
         const worldY = node.y + (segView ? segView.container.position.y : pos.y) + bounds.y - pos.y
         const g = new Graphics()
         g.eventMode = 'none'
-        g.rect(worldX - PAD, worldY - PAD, bounds.w + PAD * 2, bounds.h + PAD * 2)
+        g.roundRect(worldX - PAD, worldY - PAD, bounds.w + PAD * 2, bounds.h + PAD * 2, RADIUS)
         g.stroke({ width: STROKE, color: 0xffffff, alpha: 0.95 })
         this.selectionOverlayLayer.addChild(g)
       }
