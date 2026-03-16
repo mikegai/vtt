@@ -1,6 +1,7 @@
 /// <reference lib="webworker" />
 
 import type { CanonicalState } from '../domain/types'
+import { parseNodeId, segmentIdToEntryId } from '../vm/drop-intent'
 import { diffSceneVM } from './scene-diff'
 import { buildSceneVM, type WorkerLocalState } from './scene-vm'
 import type { MainToWorkerMessage, SceneVM, WorkerIntent, WorkerToMainMessage } from './protocol'
@@ -9,6 +10,7 @@ let worldState: CanonicalState | null = null
 let localState: WorkerLocalState = {
   hoveredSegmentId: null,
   nodePositions: {},
+  dropIntent: null,
 }
 let previousScene: SceneVM | null = null
 
@@ -51,6 +53,61 @@ const applyIntent = (intent: WorkerIntent): void => {
         [intent.nodeId]: { x: intent.x, y: intent.y },
       },
     }
+    recompute()
+    return
+  }
+
+  if (intent.type === 'DRAG_SEGMENT_START') {
+    localState = {
+      ...localState,
+      dropIntent: {
+        segmentId: intent.segmentId,
+        sourceNodeId: intent.sourceNodeId,
+        targetNodeId: intent.sourceNodeId,
+      },
+    }
+    recompute()
+    return
+  }
+
+  if (intent.type === 'DRAG_SEGMENT_UPDATE') {
+    if (!localState.dropIntent) return
+    localState = {
+      ...localState,
+      dropIntent: {
+        ...localState.dropIntent,
+        targetNodeId: intent.targetNodeId ?? localState.dropIntent.sourceNodeId,
+      },
+    }
+    recompute()
+    return
+  }
+
+  if (intent.type === 'DRAG_SEGMENT_END') {
+    if (localState.dropIntent && intent.targetNodeId) {
+      const { segmentId, sourceNodeId, targetNodeId } = localState.dropIntent
+      const source = parseNodeId(sourceNodeId)
+      const target = parseNodeId(targetNodeId)
+      if (worldState && (source.actorId !== target.actorId || source.carryGroupId !== target.carryGroupId)) {
+        const entryId = segmentIdToEntryId(segmentId)
+        const entry = worldState.inventoryEntries[entryId]
+        if (entry) {
+          const movedEntry = {
+            ...entry,
+            actorId: target.actorId,
+            carryGroupId: target.carryGroupId,
+          }
+          worldState = {
+            ...worldState,
+            inventoryEntries: {
+              ...worldState.inventoryEntries,
+              [entryId]: movedEntry,
+            },
+          }
+        }
+      }
+    }
+    localState = { ...localState, dropIntent: null }
     recompute()
     return
   }

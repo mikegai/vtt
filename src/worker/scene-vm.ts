@@ -1,11 +1,14 @@
 import { SIXTHS_PER_STONE } from '../domain/types'
+import { applyDropIntentToState } from '../vm/drop-intent'
 import { buildBoardVM } from '../vm/vm'
 import type { CanonicalState } from '../domain/types'
+import type { DropIntent } from './protocol'
 import type { SceneNodeVM, SceneVM } from './protocol'
 
 export type WorkerLocalState = {
   readonly hoveredSegmentId: string | null
   readonly nodePositions: Record<string, { x: number; y: number }>
+  readonly dropIntent: DropIntent | null
 }
 
 const STONE_W = 36
@@ -15,8 +18,17 @@ const baseNodeHeight = 84
 
 const INDENT_X = 40
 
+const segmentIdToEntryId = (segmentId: string): string => {
+  const colon = segmentId.indexOf(':')
+  return colon >= 0 ? segmentId.slice(0, colon) : segmentId
+}
+
 export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocalState): SceneVM => {
-  const board = buildBoardVM(worldState)
+  const effectiveState = localState.dropIntent
+    ? applyDropIntentToState(worldState, localState.dropIntent)
+    : worldState
+  const board = buildBoardVM(effectiveState)
+  const movedEntryId = localState.dropIntent ? segmentIdToEntryId(localState.dropIntent.segmentId) : null
   const nodes: Record<string, SceneNodeVM> = {}
 
   let index = 0
@@ -59,6 +71,7 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
         startSixth: segment.startSixth,
         sizeSixths: segment.sizeSixths,
         isOverflow: segment.isOverflow,
+        isDropPreview: movedEntryId != null && segmentIdToEntryId(segment.id) === movedEntryId && row.id === localState.dropIntent?.targetNodeId && localState.dropIntent.sourceNodeId !== localState.dropIntent.targetNodeId,
         tooltip: segment.tooltip,
       })),
     }
@@ -103,6 +116,7 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
           startSixth: segment.startSixth,
           sizeSixths: segment.sizeSixths,
           isOverflow: segment.isOverflow,
+          isDropPreview: movedEntryId != null && segmentIdToEntryId(segment.id) === movedEntryId && child.id === localState.dropIntent?.targetNodeId && localState.dropIntent.sourceNodeId !== localState.dropIntent.targetNodeId,
           tooltip: segment.tooltip,
         })),
       }

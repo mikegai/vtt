@@ -99,6 +99,15 @@ const pixiAdapter = new PixiBoardAdapter(canvasHost, {
     postToWorker({ type: 'INTENT', intent: { type: 'MOVE_NODE', nodeId, x, y } })
   },
   onZoomChange(_zoom) {},
+  onDragSegmentStart(segmentId, sourceNodeId) {
+    postToWorker({ type: 'INTENT', intent: { type: 'DRAG_SEGMENT_START', segmentId, sourceNodeId } })
+  },
+  onDragSegmentUpdate(targetNodeId) {
+    postToWorker({ type: 'INTENT', intent: { type: 'DRAG_SEGMENT_UPDATE', targetNodeId } })
+  },
+  onDragSegmentEnd(targetNodeId) {
+    postToWorker({ type: 'INTENT', intent: { type: 'DRAG_SEGMENT_END', targetNodeId } })
+  },
 })
 
 vmWorker.onmessage = (event: MessageEvent<WorkerToMainMessage>) => {

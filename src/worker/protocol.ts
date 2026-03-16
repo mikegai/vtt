@@ -8,6 +8,8 @@ export type SceneSegmentVM = {
   readonly startSixth: number
   readonly sizeSixths: number
   readonly isOverflow: boolean
+  /** True when this segment is the drop-preview placeholder (dashed outline). */
+  readonly isDropPreview?: boolean
   readonly tooltip: {
     readonly title: string
     readonly encumbranceText: string
@@ -50,9 +52,18 @@ export type ScenePatch =
   | { readonly type: 'UPDATE_NODE'; readonly node: SceneNodeVM }
   | { readonly type: 'UPDATE_META'; readonly partyPaceText: string; readonly hoveredSegmentId: string | null }
 
+export type DropIntent = {
+  readonly segmentId: string
+  readonly sourceNodeId: string
+  readonly targetNodeId: string
+}
+
 export type WorkerIntent =
   | { readonly type: 'HOVER_SEGMENT'; readonly segmentId: string | null }
   | { readonly type: 'MOVE_NODE'; readonly nodeId: string; readonly x: number; readonly y: number }
+  | { readonly type: 'DRAG_SEGMENT_START'; readonly segmentId: string; readonly sourceNodeId: string }
+  | { readonly type: 'DRAG_SEGMENT_UPDATE'; readonly targetNodeId: string | null }
+  | { readonly type: 'DRAG_SEGMENT_END'; readonly targetNodeId: string | null }
   | { readonly type: 'SET_WORLD_STATE'; readonly worldState: CanonicalState }
 
 export type MainToWorkerMessage =

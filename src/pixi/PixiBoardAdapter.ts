@@ -5,6 +5,9 @@ type AdapterHandlers = {
   onHoverSegment(segmentId: string | null): void
   onMoveNode(nodeId: string, x: number, y: number): void
   onZoomChange(zoom: number): void
+  onDragSegmentStart(segmentId: string, sourceNodeId: string): void
+  onDragSegmentUpdate(targetNodeId: string | null): void
+  onDragSegmentEnd(targetNodeId: string | null): void
 }
 
 type NodeView = {
@@ -299,6 +302,7 @@ const segmentStoneSpan = (startSixth: number, sizeSixths: number): { startStone:
   return { startStone, endStone }
 }
 
+
 const occupiedSixthsFromSegments = (
   segments: readonly SceneSegmentVM[],
   totalSixths: number,
@@ -365,7 +369,7 @@ const drawBlendedSegmentRects = (
   baseY: number,
   color: number,
   alpha: number,
-  totalSixths: number,
+  _totalSixths: number,
   tier: ZoomTier,
   zoom: number,
   textCompensationScale: number,
@@ -382,6 +386,8 @@ const drawBlendedSegmentRects = (
   const zoomReadableScale = zoom < 0.45 ? 1.14 : 1
   const visualScale = textCompensationScale * zoomReadableScale
 
+  const isDropPreview = segment.isDropPreview === true
+
   groups.forEach((group, index) => {
     const x = baseX + stoneToX(group.stone)
     const y = baseY + group.startRow * CELL_H
@@ -391,6 +397,9 @@ const drawBlendedSegmentRects = (
     const rect = new Graphics()
     rect.roundRect(x + PAD, y + PAD, w - PAD * 2, h - PAD * 2, 4)
     rect.fill({ color, alpha })
+    if (isDropPreview) {
+      rect.stroke({ width: 2, color: 0x5cadee, alpha: 0.7 })
+    }
     container.addChild(rect)
 
     minX = Math.min(minX, x)
@@ -462,8 +471,9 @@ const drawSegmentBlock = (
   const { startStone, endStone } = segmentStoneSpan(segment.startSixth, segment.sizeSixths)
   const startX = METER_X + stoneToX(startStone)
   const width = (endStone - startStone) * (STONE_W + STONE_GAP) - STONE_GAP
-  const color = segment.isOverflow ? 0x932d4e : hovered ? 0x5cadee : 0x3d9ac9
-  const alpha = segment.isOverflow ? 0.58 : 0.82
+  const isDropPreview = segment.isDropPreview === true
+  const color = isDropPreview ? 0x5cadee : segment.isOverflow ? 0x932d4e : hovered ? 0x5cadee : 0x3d9ac9
+  const alpha = isDropPreview ? 0.25 : segment.isOverflow ? 0.58 : 0.82
 
   const block = new Graphics()
   block.eventMode = 'static'
@@ -489,7 +499,12 @@ const drawSegmentBlock = (
 
   if (isMultiStone(segment)) {
     block.roundRect(startX + 0.5, METER_Y + 2.5, width - 1, STONE_H - 5, 5)
-    block.fill({ color, alpha })
+    if (isDropPreview) {
+      block.fill({ color, alpha })
+      block.stroke({ width: 2, color: 0x5cadee, alpha: 0.7 })
+    } else {
+      block.fill({ color, alpha })
+    }
     container.addChild(block)
 
     if (segment.sizeSixths >= 1) {
@@ -627,9 +642,9 @@ export class PixiBoardAdapter {
       }
     }
 
-    const onUp = (): void => {
+    const onUp = (event: PointerEvent): void => {
       panning = false
-      if (this.segmentDrag) this.endSegmentDrag()
+      if (this.segmentDrag) this.endSegmentDrag(event)
     }
 
     const onMove = (event: PointerEvent): void => {
@@ -710,27 +725,40 @@ export class PixiBoardAdapter {
     }
   }
 
-  private findSnapTarget(worldX: number, worldY: number, segment: SceneSegmentVM): { nodeId: string; startSixth: number } | null {
+  /** Drop target = whole character node. Returns nodeId if world point is inside any node's bounds. */
+  private findDropTarget(worldX: number, worldY: number): string | null {
     if (!this.currentScene) return null
-
     for (const node of Object.values(this.currentScene.nodes)) {
-      const nodeMeterWidth = meterWidthForSlots(node.slotCount)
-      const inY = worldY >= node.y + METER_Y && worldY <= node.y + METER_Y + STONE_H
-      if (!inY) continue
-      const localX = worldX - node.x - METER_X
-      const localY = worldY - node.y - METER_Y
-      if (localX < -STONE_W || localX > nodeMeterWidth + STONE_W) continue
-
-      let startSixth = localToSixth(localX, localY, node.slotCount)
-      if (isMultiStone(segment)) {
-        startSixth = Math.floor(startSixth / 6) * 6
+      if (worldX >= node.x && worldX <= node.x + node.width &&
+          worldY >= node.y && worldY <= node.y + node.height) {
+        return node.id
       }
-      const totalSixths = totalSixthsForSlots(node.slotCount)
-      const maxStart = Math.max(0, totalSixths - segment.sizeSixths)
-      startSixth = Math.max(0, Math.min(maxStart, startSixth))
-      return { nodeId: node.id, startSixth }
     }
     return null
+  }
+
+  private findSnapTarget(worldX: number, worldY: number, segment: SceneSegmentVM): { nodeId: string; startSixth: number } | null {
+    const targetNodeId = this.findDropTarget(worldX, worldY)
+    if (!targetNodeId || !this.currentScene) return null
+
+    const node = this.currentScene.nodes[targetNodeId]
+    if (!node) return null
+
+    const nodeMeterWidth = meterWidthForSlots(node.slotCount)
+    const inY = worldY >= node.y + METER_Y && worldY <= node.y + METER_Y + STONE_H
+    if (!inY) return { nodeId: targetNodeId, startSixth: 0 }
+    const localX = worldX - node.x - METER_X
+    const localY = worldY - node.y - METER_Y
+    if (localX < -STONE_W || localX > nodeMeterWidth + STONE_W) return { nodeId: targetNodeId, startSixth: 0 }
+
+    let startSixth = localToSixth(localX, localY, node.slotCount)
+    if (isMultiStone(segment)) {
+      startSixth = Math.floor(startSixth / 6) * 6
+    }
+    const totalSixths = totalSixthsForSlots(node.slotCount)
+    const maxStart = Math.max(0, totalSixths - segment.sizeSixths)
+    startSixth = Math.max(0, Math.min(maxStart, startSixth))
+    return { nodeId: targetNodeId, startSixth }
   }
 
   private buildDragGhost(segment: SceneSegmentVM): Container {
@@ -776,12 +804,16 @@ export class PixiBoardAdapter {
     const ghost = this.buildDragGhost(segment)
     this.worldLayer.addChild(ghost)
     this.segmentDrag = { segment, sourceNodeId, ghost, snap: null }
+    this.handlers.onDragSegmentStart(segment.id, sourceNodeId)
     this.updateSegmentDrag(globalX, globalY)
   }
 
   private updateSegmentDrag(clientX: number, clientY: number): void {
     if (!this.segmentDrag) return
     const world = this.screenToWorld(clientX, clientY)
+    const targetNodeId = this.findDropTarget(world.x, world.y)
+    this.handlers.onDragSegmentUpdate(targetNodeId ?? null)
+
     const snap = this.findSnapTarget(world.x, world.y, this.segmentDrag.segment)
     this.segmentDrag.snap = snap
 
@@ -799,8 +831,11 @@ export class PixiBoardAdapter {
     this.segmentDrag.ghost.position.set(world.x, world.y - STONE_H / 2)
   }
 
-  private endSegmentDrag(): void {
+  private endSegmentDrag(event?: PointerEvent): void {
     if (!this.segmentDrag) return
+    const world = event ? this.screenToWorld(event.clientX, event.clientY) : null
+    const targetNodeId = world ? this.findDropTarget(world.x, world.y) : this.segmentDrag.snap?.nodeId ?? null
+    this.handlers.onDragSegmentEnd(targetNodeId)
     this.worldLayer.removeChild(this.segmentDrag.ghost)
     this.segmentDrag.ghost.destroy({ children: true })
     this.segmentDrag = null
