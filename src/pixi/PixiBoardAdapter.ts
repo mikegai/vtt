@@ -851,7 +851,7 @@ const drawSegmentBlock = (
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
     const strokeOpt = isDropPreview
       ? { width: 2, color: 0x5cadee, alpha: 0.7 }
-      : { width: 1.5, color: 0xd3ebff, alpha: dimmed ? dimmedAlpha : 0.9 }
+      : { width: 0, color: 0, alpha: 0 }
     const fillOpt = { color, alpha }
 
     container.addChild(block)
