@@ -25,7 +25,7 @@ const defaultMovementGroupId = (state: CanonicalState): string => {
   return 'party'
 }
 
-const createInventoryActorId = (state: CanonicalState, now: () => number, random: () => number): string => {
+export const createInventoryActorId = (state: CanonicalState, now: () => number, random: () => number): string => {
   let attempt = 0
   while (attempt < 1000) {
     const id = `inventory_${now().toString(36)}_${Math.floor(random() * 1_000_000).toString(36)}${attempt > 0 ? `_${attempt}` : ''}`
@@ -35,7 +35,7 @@ const createInventoryActorId = (state: CanonicalState, now: () => number, random
   return `inventory_${now().toString(36)}_${Math.floor(random() * 1_000_000).toString(36)}_fallback`
 }
 
-const nextInventoryName = (state: CanonicalState): string => {
+export const nextInventoryName = (state: CanonicalState): string => {
   let maxN = 0
   for (const actor of Object.values(state.actors)) {
     const m = actor.name.match(/^Inventory (\d+)$/)

@@ -148,6 +148,8 @@ export type WorkerIntent =
     }
   | { readonly type: 'DELETE_ENTRY'; readonly segmentIds: readonly string[] }
   | { readonly type: 'DUPLICATE_ENTRY'; readonly segmentIds: readonly string[] }
+  | { readonly type: 'DELETE_NODE'; readonly nodeId: string }
+  | { readonly type: 'DUPLICATE_NODE'; readonly nodeId: string }
   | { readonly type: 'SET_WIELD'; readonly segmentId: string; readonly wield: WieldGrip }
   | { readonly type: 'UNWIELD'; readonly segmentId: string }
   | { readonly type: 'ADD_LABEL'; readonly text: string; readonly x: number; readonly y: number }

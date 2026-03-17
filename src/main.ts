@@ -368,6 +368,45 @@ const showContextMenu = (
   }, 0)
 }
 
+const showNodeContextMenu = (nodeId: string, clientX: number, clientY: number): void => {
+  closeContextMenu()
+
+  contextMenuEl.innerHTML = [
+    `<button class="context-menu-item" data-action="duplicate-node" type="button">Duplicate Node</button>`,
+    `<button class="context-menu-item context-menu-item-danger" data-action="delete-node" type="button">Delete Node</button>`,
+  ].join('')
+  contextMenuEl.hidden = false
+
+  const padding = 8
+  const maxX = window.innerWidth - contextMenuEl.offsetWidth - padding
+  const maxY = window.innerHeight - contextMenuEl.offsetHeight - padding
+  contextMenuEl.style.left = `${Math.min(clientX, maxX)}px`
+  contextMenuEl.style.top = `${Math.min(clientY, maxY)}px`
+
+  contextMenuEl.querySelectorAll('.context-menu-item').forEach((btn) => {
+    const b = btn as HTMLButtonElement
+    b.addEventListener('click', (e) => {
+      e.stopPropagation()
+      if (b.dataset.action === 'duplicate-node') {
+        postToWorker({ type: 'INTENT', intent: { type: 'DUPLICATE_NODE', nodeId } })
+      } else if (b.dataset.action === 'delete-node') {
+        postToWorker({ type: 'INTENT', intent: { type: 'DELETE_NODE', nodeId } })
+      }
+      setTimeout(closeContextMenu, 0)
+    })
+  })
+
+  setTimeout(() => {
+    activeContextMenuClose = (event: Event): void => {
+      const target = event.target
+      if (target instanceof Node && contextMenuEl.contains(target)) return
+      closeContextMenu()
+    }
+    document.addEventListener('click', activeContextMenuClose)
+    document.addEventListener('contextmenu', activeContextMenuClose)
+  }, 0)
+}
+
 const showCanvasContextMenu = (
   worldX: number,
   worldY: number,
@@ -645,6 +684,9 @@ const pixiAdapter = new PixiBoardAdapter(canvasHost, {
     if (segment) {
       showContextMenu(segmentId, nodeId, segment.itemDefId, clientX, clientY)
     }
+  },
+  onNodeContextMenu(nodeId, clientX, clientY) {
+    showNodeContextMenu(nodeId, clientX, clientY)
   },
   onCanvasContextMenu(worldX, worldY, clientX, clientY) {
     const groupId = pixiAdapter.getGroupIdAtPoint(worldX, worldY)

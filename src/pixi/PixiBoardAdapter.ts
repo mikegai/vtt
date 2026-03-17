@@ -69,6 +69,7 @@ type AdapterHandlers = {
     freeSegmentPositions?: Readonly<Record<string, { x: number; y: number }>>,
   ): void
   onContextMenu(segmentId: string, nodeId: string, clientX: number, clientY: number): void
+  onNodeContextMenu?(nodeId: string, clientX: number, clientY: number): void
   onCanvasContextMenu?(worldX: number, worldY: number, clientX: number, clientY: number): void
   onSegmentClick?(segmentId: string, nodeId: string, addToSelection: boolean): void
   onSegmentDoubleClick?(segmentId: string, itemDefId: string, nodeId: string): void
@@ -1066,6 +1067,11 @@ export class PixiBoardAdapter {
         this.handlers.onContextMenu(ctx.segmentId, ctx.nodeId, event.clientX, event.clientY)
         return
       }
+      const nodeId = this.hitTestNodeContext(event.clientX, event.clientY)
+      if (nodeId) {
+        this.handlers.onNodeContextMenu?.(nodeId, event.clientX, event.clientY)
+        return
+      }
       const world = this.screenToWorld(event.clientX, event.clientY)
       this.handlers.onCanvasContextMenu?.(world.x, world.y, event.clientX, event.clientY)
     })
@@ -1485,6 +1491,24 @@ export class PixiBoardAdapter {
     stonesPerRow = v
     textFitCache.clear()
     // Worker will send new scene with updated node dimensions; applyInit will rebuild
+  }
+
+  /** Hit-test at client coords; returns nodeId if over a node (header/body) but not a segment. */
+  private hitTestNodeContext(clientX: number, clientY: number): string | null {
+    const events = (this.app.renderer as { events?: { mapPositionToPoint: (p: Point, x: number, y: number) => void; rootBoundary?: { hitTest: (x: number, y: number) => Container } } }).events
+    if (!events?.rootBoundary) return null
+    const pt = new Point()
+    events.mapPositionToPoint(pt, clientX, clientY)
+    const hit = events.rootBoundary.hitTest(pt.x, pt.y)
+    if (!hit) return null
+    let cur: Container | null = hit
+    while (cur) {
+      const c = cur as Container & { __segmentContext?: SegmentContext; __nodeId?: string }
+      if (c.__segmentContext) return null
+      if (typeof c.__nodeId === 'string' && c.__nodeId.length > 0) return c.__nodeId
+      cur = cur.parent
+    }
+    return null
   }
 
   /** Hit-test at client coords; returns segment context if over a segment block. */
@@ -2327,6 +2351,7 @@ export class PixiBoardAdapter {
     const textCompensationScale = getTextCompensationScale(this.zoom)
     const root = new Container()
     root.eventMode = 'static'
+    ;(root as Container & { __nodeId?: string }).__nodeId = node.id
     const contentContainer = new Container()
     root.addChild(contentContainer)
     const displayPos = this.getNodeDisplayPosition(node)

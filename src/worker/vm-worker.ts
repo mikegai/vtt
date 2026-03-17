@@ -7,7 +7,7 @@ import type { ActorRowVM } from '../vm/vm-types'
 import { buildBoardVM } from '../vm/vm'
 import { diffSceneVM } from './scene-diff'
 import { deriveGroupMode } from './group-mode'
-import { addInventoryNodeToState } from './inventory-node'
+import { addInventoryNodeToState, createInventoryActorId, nextInventoryName } from './inventory-node'
 import { buildSceneVM, type WorkerLocalState } from './scene-vm'
 import type { MainToWorkerMessage, SceneVM, WorkerIntent, WorkerToMainMessage } from './protocol'
 
@@ -1174,6 +1174,160 @@ const applyIntent = (intent: WorkerIntent): void => {
     if (!worldState) return
     for (const { segmentId, sourceNodeId } of intent.moves) {
       applyMoveEntryTo(segmentId, sourceNodeId, intent.targetNodeId)
+    }
+    recompute()
+    return
+  }
+
+  if (intent.type === 'DELETE_NODE') {
+    if (!worldState) return
+    const actorId = parseNodeId(intent.nodeId).actorId
+    const actor = worldState.actors[actorId]
+    if (!actor) {
+      recompute()
+      return
+    }
+    const entryIdsToRemove = Object.values(worldState.inventoryEntries)
+      .filter((e) => e.actorId === actorId)
+      .map((e) => e.id)
+    let nextEntries = worldState.inventoryEntries
+    for (const entryId of entryIdsToRemove) {
+      const { [entryId]: _, ...rest } = nextEntries
+      nextEntries = rest
+      worldState = { ...worldState, inventoryEntries: nextEntries }
+    }
+    const { [actorId]: _, ...nextActors } = worldState.actors
+    worldState = { ...worldState, actors: nextActors, inventoryEntries: nextEntries }
+    const carryGroupIdsToRemove = Object.values(worldState.carryGroups)
+      .filter((cg) => cg.ownerActorId === actorId)
+      .map((cg) => cg.id)
+    let nextCarryGroups = worldState.carryGroups
+    for (const cgId of carryGroupIdsToRemove) {
+      const { [cgId]: __, ...rest } = nextCarryGroups
+      nextCarryGroups = rest
+    }
+    worldState = { ...worldState, carryGroups: nextCarryGroups }
+    const entryIdSet = new Set(entryIdsToRemove)
+    localState = {
+      ...localState,
+      selectedSegmentIds: [],
+      nodeGroupOverrides: Object.fromEntries(
+        Object.entries(localState.nodeGroupOverrides).filter(([id]) => id !== actorId),
+      ),
+      nodePositions: Object.fromEntries(
+        Object.entries(localState.nodePositions).filter(([id]) => id !== actorId),
+      ),
+      freeSegmentPositions: Object.fromEntries(
+        Object.entries(localState.freeSegmentPositions).filter(([id]) => !entryIdSet.has(segmentIdToEntryId(id))),
+      ),
+      groupFreeSegmentPositions: removeSegmentsFromGroupPositions(localState.groupFreeSegmentPositions, entryIdsToRemove),
+    }
+    const nextGroupNodeOrders = { ...localState.groupNodeOrders }
+    for (const [gid, order] of Object.entries(nextGroupNodeOrders)) {
+      if (order.includes(actorId)) {
+        nextGroupNodeOrders[gid] = order.filter((id) => id !== actorId)
+      }
+    }
+    localState = { ...localState, groupNodeOrders: nextGroupNodeOrders }
+    recompute()
+    return
+  }
+
+  if (intent.type === 'DUPLICATE_NODE') {
+    if (!worldState) return
+    const actorId = parseNodeId(intent.nodeId).actorId
+    const actor = worldState.actors[actorId]
+    if (!actor) {
+      recompute()
+      return
+    }
+    const scene = buildSceneVM(worldState, localState)
+    const sourceEntries = Object.values(worldState.inventoryEntries).filter((e) => e.actorId === actorId)
+    const newActorId = createInventoryActorId(worldState, Date.now, Math.random)
+    const newName = actor.name.match(/^Inventory (\d+)$/)
+      ? nextInventoryName(worldState)
+      : `${actor.name} (copy)`
+    const newActor: Actor = {
+      ...actor,
+      id: newActorId,
+      name: newName,
+      leftWieldingEntryId: undefined,
+      rightWieldingEntryId: undefined,
+    }
+    worldState = {
+      ...worldState,
+      actors: {
+        ...worldState.actors,
+        [newActorId]: newActor,
+      },
+    }
+    worldState = ensureDroppedGroup(worldState, newActorId)
+    const newCarryGroupId = droppedGroupIdForActor(newActorId)
+    const entryIdMap = new Map<string, string>()
+    let nextFreeSegmentPositions = { ...localState.freeSegmentPositions }
+    const nextGroupFreeSegmentPositions = { ...localState.groupFreeSegmentPositions }
+    for (const entry of sourceEntries) {
+      const newEntryId = createInventoryEntryId(worldState, entry.itemDefId)
+      entryIdMap.set(entry.id, newEntryId)
+      const isDropped = !!entry.carryGroupId || entry.zone === 'dropped' || !!entry.state?.dropped
+      const nextEntry: InventoryEntry = {
+        id: newEntryId,
+        actorId: newActorId,
+        itemDefId: entry.itemDefId,
+        quantity: entry.quantity,
+        zone: isDropped ? 'dropped' : entry.zone,
+        carryGroupId: isDropped ? newCarryGroupId : undefined,
+        state: isDropped ? { dropped: true } : undefined,
+      }
+      worldState = {
+        ...worldState,
+        inventoryEntries: {
+          ...worldState.inventoryEntries,
+          [newEntryId]: nextEntry,
+        },
+      }
+      if (isDropped) {
+        const freeSeg = Object.values(scene.freeSegments ?? {}).find((f) => segmentIdToEntryId(f.id) === entry.id)
+        const offsetX = 40
+        const offsetY = 60
+        const srcX = freeSeg?.x ?? 120
+        const srcY = freeSeg?.y ?? 120
+        const newPos = { x: srcX + offsetX, y: srcY + offsetY }
+        if (freeSeg?.groupId) {
+          const groupPos = nextGroupFreeSegmentPositions[freeSeg.groupId] ?? {}
+          nextGroupFreeSegmentPositions[freeSeg.groupId] = { ...groupPos, [newEntryId]: newPos }
+        } else {
+          nextFreeSegmentPositions = { ...nextFreeSegmentPositions, [newEntryId]: newPos }
+        }
+      }
+    }
+    const node = scene.nodes[intent.nodeId] ?? Object.values(scene.nodes).find((n) => n.actorId === actorId)
+    const groupId = node?.groupId ?? null
+    if (groupId) {
+      localState = {
+        ...localState,
+        freeSegmentPositions: nextFreeSegmentPositions,
+        groupFreeSegmentPositions: nextGroupFreeSegmentPositions,
+        nodeGroupOverrides: { ...localState.nodeGroupOverrides, [newActorId]: groupId },
+        groupNodeOrders: {
+          ...localState.groupNodeOrders,
+          [groupId]: [...(localState.groupNodeOrders[groupId] ?? []), newActorId],
+        },
+        selectedSegmentIds: Array.from(entryIdMap.values()),
+      }
+    } else {
+      const pos = localState.nodePositions[actorId] ?? { x: 120, y: 120 }
+      localState = {
+        ...localState,
+        freeSegmentPositions: nextFreeSegmentPositions,
+        groupFreeSegmentPositions: nextGroupFreeSegmentPositions,
+        nodeGroupOverrides: { ...localState.nodeGroupOverrides, [newActorId]: null },
+        nodePositions: {
+          ...localState.nodePositions,
+          [newActorId]: { x: pos.x + 40, y: pos.y + 60 },
+        },
+        selectedSegmentIds: Array.from(entryIdMap.values()),
+      }
     }
     recompute()
     return
