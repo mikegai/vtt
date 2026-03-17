@@ -110,6 +110,7 @@ export type WorkerIntent =
   | { readonly type: 'MOVE_GROUP'; readonly groupId: string; readonly x: number; readonly y: number }
   | { readonly type: 'RESIZE_GROUP'; readonly groupId: string; readonly width: number; readonly height: number }
   | { readonly type: 'ADD_GROUP'; readonly x: number; readonly y: number }
+  | { readonly type: 'ADD_INVENTORY_NODE'; readonly x: number; readonly y: number; readonly groupId?: string | null }
   | { readonly type: 'UPDATE_GROUP_TITLE'; readonly groupId: string; readonly title: string }
   | { readonly type: 'MOVE_NODE_TO_GROUP_INDEX'; readonly nodeId: string; readonly groupId: string; readonly index: number }
   | { readonly type: 'NEST_NODE_UNDER'; readonly nodeId: string; readonly parentNodeId: string }

@@ -1718,17 +1718,22 @@ export class PixiBoardAdapter {
     return this.findSegmentNodeDropTarget(world.x, world.y)
   }
 
-  isPointInsideGroup(worldX: number, worldY: number): boolean {
-    if (!this.currentScene?.groups) return false
-    return Object.values(this.currentScene.groups).some((group) => {
+  getGroupIdAtPoint(worldX: number, worldY: number): string | null {
+    if (!this.currentScene?.groups) return null
+    for (const group of Object.values(this.currentScene.groups)) {
       const dims = this.getGroupDisplayDimensions(group)
-      return (
+      const inside =
         worldX >= group.x &&
         worldX <= group.x + dims.width &&
         worldY >= group.y &&
         worldY <= group.y + dims.height
-      )
-    })
+      if (inside) return group.id
+    }
+    return null
+  }
+
+  isPointInsideGroup(worldX: number, worldY: number): boolean {
+    return this.getGroupIdAtPoint(worldX, worldY) != null
   }
 
   /** Virtual node-style layout for segments (e.g. paste inventory). Used as initialSegmentPositions for external drag. */

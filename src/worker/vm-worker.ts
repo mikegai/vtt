@@ -7,6 +7,7 @@ import type { ActorRowVM } from '../vm/vm-types'
 import { buildBoardVM } from '../vm/vm'
 import { diffSceneVM } from './scene-diff'
 import { deriveGroupMode } from './group-mode'
+import { addInventoryNodeToState } from './inventory-node'
 import { buildSceneVM, type WorkerLocalState } from './scene-vm'
 import type { MainToWorkerMessage, SceneVM, WorkerIntent, WorkerToMainMessage } from './protocol'
 
@@ -503,6 +504,24 @@ const applyIntent = (intent: WorkerIntent): void => {
         [groupId]: [],
       },
     }
+    recompute()
+    return
+  }
+
+  if (intent.type === 'ADD_INVENTORY_NODE') {
+    if (!worldState) {
+      recompute()
+      return
+    }
+    const result = addInventoryNodeToState({
+      worldState,
+      localState,
+      x: intent.x,
+      y: intent.y,
+      groupId: intent.groupId ?? null,
+    })
+    worldState = result.worldState
+    localState = result.localState
     recompute()
     return
   }

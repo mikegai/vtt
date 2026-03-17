@@ -362,10 +362,19 @@ const showContextMenu = (
   }, 0)
 }
 
-const showCanvasContextMenu = (worldX: number, worldY: number, clientX: number, clientY: number): void => {
+const showCanvasContextMenu = (
+  worldX: number,
+  worldY: number,
+  clientX: number,
+  clientY: number,
+  groupId: string | null,
+): void => {
   closeContextMenu()
 
-  contextMenuEl.innerHTML = `<button class="context-menu-item" data-action="add-group" type="button">Add Group</button>`
+  contextMenuEl.innerHTML = [
+    `<button class="context-menu-item" data-action="add-inventory-node" type="button">Add Inventory Node</button>`,
+    `<button class="context-menu-item" data-action="add-group" type="button">Add Group</button>`,
+  ].join('')
   contextMenuEl.hidden = false
 
   const padding = 8
@@ -378,7 +387,12 @@ const showCanvasContextMenu = (worldX: number, worldY: number, clientX: number, 
     const b = btn as HTMLButtonElement
     b.addEventListener('click', (e) => {
       e.stopPropagation()
-      if (b.dataset.action === 'add-group') {
+      if (b.dataset.action === 'add-inventory-node') {
+        postToWorker({
+          type: 'INTENT',
+          intent: { type: 'ADD_INVENTORY_NODE', x: worldX, y: worldY, groupId },
+        })
+      } else if (b.dataset.action === 'add-group') {
         postToWorker({
           type: 'INTENT',
           intent: { type: 'ADD_GROUP', x: worldX, y: worldY },
@@ -627,8 +641,8 @@ const pixiAdapter = new PixiBoardAdapter(canvasHost, {
     }
   },
   onCanvasContextMenu(worldX, worldY, clientX, clientY) {
-    if (pixiAdapter.isPointInsideGroup(worldX, worldY)) return
-    showCanvasContextMenu(worldX, worldY, clientX, clientY)
+    const groupId = pixiAdapter.getGroupIdAtPoint(worldX, worldY)
+    showCanvasContextMenu(worldX, worldY, clientX, clientY, groupId)
   },
   onSegmentClick(segmentId, _nodeId, addToSelection) {
     if (addToSelection) {
