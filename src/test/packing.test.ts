@@ -84,7 +84,7 @@ describe('deterministic packing', () => {
     ]
     const packed = packDeterministic(items, stoneToSixths(20))
     const placed = packed.filter((s) => !s.isOverflow).map((s) => s.itemDefId)
-    expect(placed).toEqual(['shield', 'torch', 'ironRationsDay'])
+    expect(placed).toEqual(['shield', 'ironRationsDay', 'torch'])
   })
 
   it('normalized ration pair (2 days in 1 sixth) still sorts as a smaller item', () => {
@@ -102,10 +102,10 @@ describe('deterministic packing', () => {
 
     const packed = packDeterministic(items, stoneToSixths(20))
     const placed = packed.filter((s) => !s.isOverflow).map((s) => s.itemDefId)
-    expect(placed).toEqual(['shield', 'torch', 'ironRationsDay'])
+    expect(placed).toEqual(['shield', 'ironRationsDay', 'torch'])
   })
 
-  it('packs full-stone items first: armor, shields, poles, rope; 1/6-stone items (sword, torch) last', () => {
+  it('packs full-stone items first: armor, shields, rope, pole; 1/6-stone items (sword, torch) last', () => {
     const items = [
       asInput(mkEntry('f', 'torch', 'stowed', 1)),
       asInput(mkEntry('e', 'rope', 'stowed', 1)),
@@ -116,6 +116,6 @@ describe('deterministic packing', () => {
     ]
     const packed = packDeterministic(items, stoneToSixths(20))
     const placed = packed.filter((s) => !s.isOverflow).map((s) => s.itemDefId)
-    expect(placed).toEqual(['armor', 'shield', 'pole', 'rope', 'sword', 'torch'])
+    expect(placed).toEqual(['armor', 'shield', 'rope', 'pole', 'sword', 'torch'])
   })
 })

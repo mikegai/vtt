@@ -836,6 +836,7 @@ const drawBlendedSegmentRects = (
 ): { hitBounds: { x: number; y: number; w: number; h: number } } => {
   const groups = groupSixthsByStone(segment.startSixth, segment.sizeSixths)
   const PAD = 1.2
+  const strokeColor = darkenColor(color)
   let minX = Infinity
   let minY = Infinity
   let maxX = -Infinity
@@ -852,15 +853,34 @@ const drawBlendedSegmentRects = (
     const w = STONE_W
     const h = group.count * CELL_H
 
+    const prev = index > 0 ? groups[index - 1] : undefined
+    const next = index < groups.length - 1 ? groups[index + 1] : undefined
+    const continuesFromPrev =
+      !!prev &&
+      prev.stone + 1 === group.stone &&
+      prev.startRow + prev.count >= SIXTH_ROWS &&
+      group.startRow === 0
+    const continuesToNext =
+      !!next &&
+      group.stone + 1 === next.stone &&
+      group.startRow + group.count >= SIXTH_ROWS &&
+      next.startRow === 0
+    const top = !continuesFromPrev
+    const bottom = !continuesToNext
+
     const rect = new Graphics()
     rect.eventMode = 'none'
-    rect.roundRect(x + PAD, y + PAD, w - PAD * 2, h - PAD * 2, 4)
-    rect.fill({ color, alpha })
-    if (isDropPreview) {
-      rect.stroke({ width: 2, color: 0x5cadee, alpha: 0.7 })
-    } else {
-      rect.stroke({ width: 0.5, color: darkenColor(color), alpha: 1 })
-    }
+    drawChunkRect(
+      rect,
+      x + PAD,
+      y + PAD,
+      w - PAD * 2,
+      h - PAD * 2,
+      { left: true, top, right: true, bottom },
+      { color, alpha },
+      isDropPreview ? { width: 2, color: 0x5cadee, alpha: 0.7 } : { width: 0.5, color: strokeColor, alpha: 1 },
+      { tl: top ? 4 : 0, tr: top ? 4 : 0, br: bottom ? 4 : 0, bl: bottom ? 4 : 0 },
+    )
     container.addChild(rect)
 
     minX = Math.min(minX, x)
