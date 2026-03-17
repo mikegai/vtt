@@ -112,7 +112,7 @@ const normalizeEntriesForPacking = (
         },
         definition: {
           ...rationDef,
-          canonicalName: '2 iron rations',
+          canonicalName: '2 daily iron rations',
           sixthsPerUnit: 0.5,
         },
       })

@@ -106,6 +106,7 @@ type NodeView = {
   readonly root: Container
   readonly positionSpring: ReturnType<typeof createSpring2D>
   readonly segmentContainer: Container
+  readonly runVisualsContainer: Container
   readonly contentContainer: Container
   segmentViews: Map<string, SegmentView>
   moveToRootBtn?: Graphics
@@ -278,6 +279,46 @@ const measureTextWidth = (text: string, fontSize: number): number => {
   const measured = w * scale
   textWidthCache.set(cacheKey, measured)
   return measured
+}
+
+/** Simple pluralizer for item names. Pluralizes only the last word. */
+const pluralize = (name: string): string => {
+  const trimmed = name.trim()
+  if (trimmed.length === 0) return trimmed
+  const words = trimmed.split(/\s+/)
+  const last = words[words.length - 1]!
+  const lower = last.toLowerCase()
+  // If it already looks plural, keep it unchanged (e.g. "torches").
+  if ((lower.endsWith('s') && !lower.endsWith('ss')) || lower.endsWith('ies')) {
+    return trimmed
+  }
+  let plural: string
+  if (lower.endsWith('x') || lower.endsWith('z') || lower.endsWith('ch') || lower.endsWith('sh') || lower.endsWith('ss')) {
+    plural = last + 'es'
+  } else if (lower.endsWith('y') && lower.length > 1 && !'aeiou'.includes(lower[lower.length - 2]!)) {
+    plural = last.slice(0, -1) + 'ies'
+  } else {
+    plural = last + 's'
+  }
+  return words.length === 1 ? plural : [...words.slice(0, -1), plural].join(' ')
+}
+
+/** Label steps for a merged run: quantity + pluralized name (e.g. "7 torches"). */
+const runLabelSteps = (run: readonly SceneSegmentVM[]): string[] => {
+  const totalQty = run.reduce((s, seg) => s + (parseInt(seg.tooltip.quantityText, 10) || 1), 0)
+  const baseName = run[0]?.fullLabel ?? run[0]?.tooltip.title ?? '?'
+  const displayName = totalQty === 1 ? baseName : pluralize(baseName)
+  const withQty = totalQty === 1 ? baseName : `${totalQty} ${displayName}`
+  const withQtyTitle = totalQty === 1 ? baseName : `${totalQty} ${displayName.charAt(0).toUpperCase() + displayName.slice(1)}`
+  return [
+    withQtyTitle,
+    withQty,
+    ...uniqueTextSteps(run[0]!).map((s) => (totalQty > 1 ? `${totalQty} ${s}` : s)),
+    compactToken(withQty, 4),
+    compactToken(withQty, 3),
+    compactToken(withQty, 2),
+    compactToken(withQty, 1),
+  ].filter((v, i, a) => a.indexOf(v) === i)
 }
 
 const uniqueTextSteps = (segment: SceneSegmentVM): string[] => {
@@ -536,6 +577,76 @@ const drawArrowLine = (g: Graphics, x1: number, y1: number, x2: number, y2: numb
   g.stroke({ width: 2, color: 0xffffff, alpha: 0.95 })
 }
 
+/** Draw a dashed line (Pixi v8 has no built-in dash). Ensures the final dash extends to (x2,y2). */
+const drawDashedLine = (
+  g: Graphics,
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number,
+  color: number,
+  alpha: number,
+  dashLen = 3,
+  gapLen = 4,
+): void => {
+  const dx = x2 - x1
+  const dy = y2 - y1
+  const len = Math.sqrt(dx * dx + dy * dy)
+  if (len < 0.001) return
+  const ux = dx / len
+  const uy = dy / len
+  let t = 0
+  let dash = true
+  while (t < len - 0.001) {
+    const segLen = dash ? Math.min(dashLen, len - t) : Math.min(gapLen, len - t)
+    if (dash && segLen > 0) {
+      const endT = Math.min(t + segLen, len)
+      const ex = x1 + ux * endT
+      const ey = y1 + uy * endT
+      g.moveTo(x1 + ux * t, y1 + uy * t)
+      g.lineTo(ex, ey)
+      g.stroke({ width: 0.5, color, alpha })
+    }
+    t += segLen
+    dash = !dash
+  }
+  if (t < len - 0.001) {
+    g.moveTo(x1 + ux * t, y1 + uy * t)
+    g.lineTo(x2, y2)
+    g.stroke({ width: 0.5, color, alpha })
+  }
+}
+
+/** Darken a hex color by factor (0–1). Used for stroke/outline. */
+const darkenColor = (hex: number, factor = 0.65): number => {
+  const r = Math.floor(((hex >> 16) & 0xff) * factor)
+  const g = Math.floor(((hex >> 8) & 0xff) * factor)
+  const b = Math.floor((hex & 0xff) * factor)
+  return (r << 16) | (g << 8) | b
+}
+
+/** Draw a filled rect with per-corner radii (for wrap continuity). */
+const fillRoundedRect = (
+  g: Graphics,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  radii: { tl: number; tr: number; br: number; bl: number },
+): void => {
+  const { tl, tr, br, bl } = radii
+  g.moveTo(x + tl, y)
+  g.lineTo(x + w - tr, y)
+  if (tr > 0) g.arc(x + w - tr, y + tr, tr, -Math.PI / 2, 0)
+  g.lineTo(x + w, y + h - br)
+  if (br > 0) g.arc(x + w - br, y + h - br, br, 0, Math.PI / 2)
+  g.lineTo(x + bl, y + h)
+  if (bl > 0) g.arc(x + bl, y + h - bl, bl, Math.PI / 2, Math.PI)
+  g.lineTo(x, y + tl)
+  if (tl > 0) g.arc(x + tl, y + tl, tl, Math.PI, -Math.PI / 2)
+  g.closePath()
+}
+
 /** Split stone range into chunks at stonesPerRow boundaries. */
 const splitStonesAtWrap = (
   startStone: number,
@@ -563,15 +674,19 @@ const drawChunkRect = (
   sides: { left: boolean; top: boolean; right: boolean; bottom: boolean },
   fillOpt: { color: number; alpha: number },
   strokeOpt: { width: number; color: number; alpha: number },
-  cornerRadius: number,
+  cornerRadii: { tl: number; tr: number; br: number; bl: number },
 ): void => {
-  g.roundRect(x, y, w, h, cornerRadius)
+  fillRoundedRect(g, x, y, w, h, cornerRadii)
   g.fill(fillOpt)
   g.moveTo(x + w, y + h)
   if (sides.bottom) g.lineTo(x, y + h)
+  else g.moveTo(x, y + h)
   if (sides.left) g.lineTo(x, y)
+  else g.moveTo(x, y)
   if (sides.top) g.lineTo(x + w, y)
+  else g.moveTo(x + w, y)
   if (sides.right) g.lineTo(x + w, y + h)
+  else g.moveTo(x + w, y + h)
   g.stroke(strokeOpt)
 }
 
@@ -589,6 +704,25 @@ const occupiedSixthsFromSegments = (
     }
   })
   return occupied
+}
+
+/** Group contiguous segments of same itemDefId. Excludes overflow and drop preview. */
+const groupContiguousSameType = (segments: readonly SceneSegmentVM[]): SceneSegmentVM[][] => {
+  const eligible = segments
+    .filter((s) => !s.isOverflow && !s.isDropPreview)
+    .slice()
+    .sort((a, b) => a.startSixth - b.startSixth)
+  const runs: SceneSegmentVM[][] = []
+  for (const seg of eligible) {
+    const last = runs[runs.length - 1]
+    const prevEnd = last ? last[last.length - 1].startSixth + last[last.length - 1].sizeSixths : -1
+    if (last && last[0].itemDefId === seg.itemDefId && prevEnd === seg.startSixth) {
+      last.push(seg)
+    } else {
+      runs.push([seg])
+    }
+  }
+  return runs
 }
 
 const collapsedVisibleSlotCount = (
@@ -742,6 +876,8 @@ const drawBlendedSegmentRects = (
     rect.fill({ color, alpha })
     if (isDropPreview) {
       rect.stroke({ width: 2, color: 0x5cadee, alpha: 0.7 })
+    } else {
+      rect.stroke({ width: 0.5, color: darkenColor(color), alpha: 1 })
     }
     container.addChild(rect)
 
@@ -797,6 +933,216 @@ const drawBlendedSegmentRects = (
   }
 }
 
+/** Draw merged visual block for a contiguous run of same-type segments (run.length >= 2). */
+const drawRunVisuals = (
+  container: Container,
+  run: readonly SceneSegmentVM[],
+  baseX: number,
+  baseY: number,
+  color: number,
+  alpha: number,
+  tier: ZoomTier,
+  zoom: number,
+  textCompensationScale: number,
+  minVisibleLabelPx: number,
+  maxVisibleLabelPx: number,
+  dimmed: boolean,
+  dimmedAlpha: number,
+): void => {
+  const startSixth = run[0].startSixth
+  const sizeSixths = run.reduce((sum, s) => sum + s.sizeSixths, 0)
+  const { startStone, endStone } = segmentStoneSpan(startSixth, sizeSixths)
+  const strokeColor = darkenColor(color)
+  const isMulti = startSixth % 6 === 0 && sizeSixths >= 6 && sizeSixths % 6 === 0
+
+  const zoomReadableScale = zoom < 0.45 ? 1.14 : 1
+  const visualScale = textCompensationScale * zoomReadableScale
+
+  if (isMulti) {
+    const chunks = splitStonesAtWrap(startStone, endStone)
+    const R = 5
+    const multi = chunks.length > 1
+    const fillOpt = { color, alpha }
+    const strokeOpt = { width: 0.5, color: strokeColor, alpha: 1 }
+    let labelBounds: { x: number; y: number; w: number; h: number } | null = null
+
+    chunks.forEach((chunk, idx) => {
+      const cx = baseX + stoneToX(chunk.start)
+      const cy = baseY + stoneToY(chunk.start)
+      const cw = (chunk.end - chunk.start) * (STONE_W + STONE_GAP) - STONE_GAP
+      const ch = STONE_H
+      const pad = 0.5
+      const rx = cx + pad
+      const ry = cy + 2.5
+      const rw = cw - 1
+      const rh = ch - 5
+      const isFirst = idx === 0
+      const isLast = idx === chunks.length - 1
+      const sides = { left: true, top: isFirst || !multi, right: true, bottom: isLast || !multi }
+      const cornerRadii = {
+        tl: isFirst ? R : 0,
+        tr: isFirst ? R : 0,
+        br: isLast ? R : 0,
+        bl: isLast ? R : 0,
+      }
+      const g = new Graphics()
+      g.eventMode = 'none'
+      drawChunkRect(g, rx, ry, rw, rh, sides, fillOpt, strokeOpt, cornerRadii)
+      container.addChild(g)
+      if (idx === 0) {
+        labelBounds = { x: rx, y: ry, w: rw, h: rh }
+      }
+    })
+
+    const lb = labelBounds ?? { x: baseX, y: baseY, w: STONE_W, h: STONE_H }
+    const centerX = lb.x + lb.w / 2
+    const centerY = lb.y + lb.h / 2
+    const steps = runLabelSteps(run)
+    const fit = selectLabelFitForSteps(
+      steps,
+      tier,
+      Math.max(8, lb.w - 6),
+      Math.max(8, lb.h - 8),
+      visualScale,
+      zoom,
+      minVisibleLabelPx,
+      maxVisibleLabelPx,
+    )
+    const txt = new BitmapText({
+      text: fit.text,
+      style: { fill: '#f0f8ff', fontSize: fit.fontSize, fontFamily: FONT_SEMIBOLD, align: 'center' },
+    })
+    txt.eventMode = 'none'
+    txt.alpha = dimmed ? dimmedAlpha : 1
+    txt.scale.set(visualScale)
+    txt.anchor.set(0.5, 0.5)
+    txt.position.set(centerX, centerY)
+    const clip = new Graphics()
+    clip.eventMode = 'none'
+    clip.rect(centerX - lb.w / 2, centerY - lb.h / 2, lb.w, lb.h)
+    clip.fill({ color: 0xffffff, alpha: 0.001 })
+    container.addChild(clip)
+    txt.mask = clip
+    container.addChild(txt)
+
+    for (let i = 0; i < run.length - 1; i += 1) {
+      const boundarySixth = run[i].startSixth + run[i].sizeSixths
+      const div = new Graphics()
+      div.eventMode = 'none'
+      if (boundarySixth % 6 === 0) {
+        const stone = boundarySixth / 6
+        const x = baseX + stoneToX(stone - 1) + STONE_W
+        const y = baseY + stoneToY(stone - 1)
+        drawDashedLine(div, x, y, x, y + STONE_H, strokeColor, 0.85)
+      } else {
+        const stone = Math.floor(boundarySixth / 6)
+        const row = boundarySixth % 6
+        const x = baseX + stoneToX(stone)
+        const y = baseY + stoneToY(stone) + row * CELL_H
+        drawDashedLine(div, x, y, x + STONE_W, y, strokeColor, 0.85)
+      }
+      container.addChild(div)
+    }
+  } else {
+    const groups = groupSixthsByStone(startSixth, sizeSixths)
+    const PAD = 1.2
+
+    groups.forEach((group, idx) => {
+      const x = baseX + stoneToX(group.stone)
+      const y = baseY + stoneToY(group.stone) + group.startRow * CELL_H
+      const w = STONE_W
+      const h = group.count * CELL_H
+
+      const prev = idx > 0 ? groups[idx - 1] : undefined
+      const next = idx < groups.length - 1 ? groups[idx + 1] : undefined
+      const continuesFromPrev =
+        !!prev &&
+        prev.stone + 1 === group.stone &&
+        prev.startRow + prev.count >= SIXTH_ROWS &&
+        group.startRow === 0
+      const continuesToNext =
+        !!next &&
+        group.stone + 1 === next.stone &&
+        group.startRow + group.count >= SIXTH_ROWS &&
+        next.startRow === 0
+      const top = !continuesFromPrev
+      const bottom = !continuesToNext
+
+      const rect = new Graphics()
+      rect.eventMode = 'none'
+      drawChunkRect(
+        rect,
+        x + PAD,
+        y + PAD,
+        w - PAD * 2,
+        h - PAD * 2,
+        { left: true, top, right: true, bottom },
+        { color, alpha },
+        { width: 0.5, color: strokeColor, alpha: 1 },
+        { tl: top ? 4 : 0, tr: top ? 4 : 0, br: bottom ? 4 : 0, bl: bottom ? 4 : 0 },
+      )
+      container.addChild(rect)
+      // labels are drawn per-part below
+    })
+    const baseName = run[0]?.fullLabel ?? run[0]?.tooltip.title ?? '?'
+    groups.forEach((group) => {
+      const x = baseX + stoneToX(group.stone)
+      const y = baseY + stoneToY(group.stone) + group.startRow * CELL_H
+      const w = STONE_W
+      const h = group.count * CELL_H
+      const partQty = Math.max(1, group.count)
+      const partName = partQty === 1 ? baseName : pluralize(baseName)
+      const partLabel = `${partQty} ${partName}`
+      const steps = [partLabel, compactToken(partLabel, 4), compactToken(partLabel, 3), compactToken(partLabel, 2), compactToken(partLabel, 1)]
+      const fit = selectLabelFitForSteps(
+        steps,
+        tier,
+        Math.max(8, w - 6),
+        Math.max(8, h - 6),
+        visualScale,
+        zoom,
+        minVisibleLabelPx,
+        maxVisibleLabelPx,
+      )
+      const txt = new BitmapText({
+        text: fit.text,
+        style: { fill: '#f0f8ff', fontSize: fit.fontSize, fontFamily: FONT_SEMIBOLD, align: 'center' },
+      })
+      txt.eventMode = 'none'
+      txt.alpha = dimmed ? dimmedAlpha : 1
+      txt.scale.set(visualScale)
+      txt.anchor.set(0.5, 0.5)
+      txt.position.set(x + w / 2, y + h / 2)
+      const clip = new Graphics()
+      clip.eventMode = 'none'
+      clip.rect(x, y, w, h)
+      clip.fill({ color: 0xffffff, alpha: 0.001 })
+      container.addChild(clip)
+      txt.mask = clip
+      container.addChild(txt)
+    })
+
+    for (let i = 0; i < run.length - 1; i += 1) {
+      const boundarySixth = run[i].startSixth + run[i].sizeSixths
+      const div = new Graphics()
+      div.eventMode = 'none'
+      if (boundarySixth % 6 === 0) {
+        const stone = boundarySixth / 6
+        const x = baseX + stoneToX(stone - 1) + STONE_W
+        const y = baseY + stoneToY(stone - 1)
+        drawDashedLine(div, x, y, x, y + STONE_H, strokeColor, 0.85)
+      } else {
+        const stone = Math.floor(boundarySixth / 6)
+        const row = boundarySixth % 6
+        const x = baseX + stoneToX(stone)
+        const y = baseY + stoneToY(stone) + row * CELL_H
+        drawDashedLine(div, x, y, x + STONE_W, y, strokeColor, 0.85)
+      }
+      container.addChild(div)
+    }
+  }
+}
+
 const drawSegmentBlock = (
   container: Container,
   segment: SceneSegmentVM,
@@ -820,6 +1166,7 @@ const drawSegmentBlock = (
   onSegmentDoubleClick?: (segmentId: string, itemDefId: string, nodeId: string) => void,
   getLastDragEndTime?: () => number,
   allowInteraction?: () => boolean,
+  visuallyMerged?: boolean,
 ): void => {
   const o = baseOffset ?? { x: 0, y: 0 }
   const { startStone, endStone } = segmentStoneSpan(segment.startSixth, segment.sizeSixths)
@@ -877,15 +1224,26 @@ const drawSegmentBlock = (
     }
   }
 
+  if (visuallyMerged) {
+    const b = segmentBoundsInNodeLocal(segment)
+    block.rect(b.x - o.x, b.y - o.y, b.w, b.h)
+    block.fill({ color: 0xffffff, alpha: 0.001 })
+    block.hitArea = new Rectangle(b.x - o.x, b.y - o.y, b.w, b.h)
+    container.addChild(block)
+    return
+  }
+
   if (isMultiStone(segment)) {
     const chunks = splitStonesAtWrap(startStone, endStone)
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
     const strokeOpt = isDropPreview
       ? { width: 2, color: 0x5cadee, alpha: 0.7 }
-      : { width: 0, color: 0, alpha: 0 }
+      : { width: 0.5, color: darkenColor(color), alpha: 1 }
     const fillOpt = { color, alpha }
 
     container.addChild(block)
+    const R = 5
+    const multi = chunks.length > 1
     chunks.forEach((chunk, idx) => {
       const cx = SLOT_START_X + stoneToX(chunk.start) - o.x
       const cy = TOP_BAND_H + stoneToY(chunk.start) - o.y
@@ -899,12 +1257,18 @@ const drawSegmentBlock = (
       const isFirst = idx === 0
       const isLast = idx === chunks.length - 1
       const sides = {
-        left: isFirst || chunks.length === 1,
-        top: true,
-        right: isLast || chunks.length === 1,
-        bottom: true,
+        left: true,
+        top: isFirst || !multi,
+        right: true,
+        bottom: isLast || !multi,
       }
-      drawChunkRect(block, rx, ry, rw, rh, sides, fillOpt, strokeOpt, 5)
+      const cornerRadii = {
+        tl: isFirst ? R : 0,
+        tr: isFirst ? R : 0,
+        br: isLast ? R : 0,
+        bl: isLast ? R : 0,
+      }
+      drawChunkRect(block, rx, ry, rw, rh, sides, fillOpt, strokeOpt, cornerRadii)
       minX = Math.min(minX, rx)
       minY = Math.min(minY, ry)
       maxX = Math.max(maxX, rx + rw)
@@ -2625,6 +2989,38 @@ export class PixiBoardAdapter {
     segmentClip.fill({ color: 0xffffff, alpha: 0.001 })
     contentContainer.addChild(segmentClip)
     segmentContainer.mask = segmentClip
+    const runVisualsContainer = new Container()
+    runVisualsContainer.eventMode = 'none'
+    segmentContainer.addChild(runVisualsContainer)
+
+    const runs = groupContiguousSameType(node.segments)
+    const mergedIds = new Set(runs.filter((r) => r.length > 1).flatMap((r) => r.map((s) => s.id)))
+
+    for (const run of runs) {
+      if (run.length < 2) continue
+      const runHovered = run.some((s) => s.id === hoveredSegmentId)
+      const first = run[0]
+      const dimmed = filterCategory != null && first.category !== filterCategory
+      const dimmedAlpha = 0.12
+      const color = runHovered ? 0x5cadee : 0x3d9ac9
+      const alpha = dimmed ? dimmedAlpha : 0.95
+      drawRunVisuals(
+        runVisualsContainer,
+        run,
+        SLOT_START_X,
+        TOP_BAND_H,
+        color,
+        alpha,
+        tier,
+        this.zoom,
+        textCompensationScale,
+        this.minVisibleLabelPx,
+        this.maxVisibleLabelPx,
+        dimmed,
+        dimmedAlpha,
+      )
+    }
+
     const segmentViews = new Map<string, SegmentView>()
     node.segments.forEach((segment) => {
       const pos = segmentPositionInNode(segment)
@@ -2658,6 +3054,7 @@ export class PixiBoardAdapter {
         this.handlers.onSegmentDoubleClick,
         () => this.lastDragEndTime,
         () => this.activeDrag.type === 'idle' || this.activeDrag.type === 'pendingSegment',
+        mergedIds.has(segment.id),
       )
       segmentContainer.addChild(segContainer)
     })
@@ -2689,6 +3086,7 @@ export class PixiBoardAdapter {
       root,
       positionSpring,
       segmentContainer,
+      runVisualsContainer,
       contentContainer,
       segmentViews,
       moveToRootBtn,
@@ -2763,6 +3161,35 @@ export class PixiBoardAdapter {
     const tier = getZoomTier(this.zoom)
     const textCompensationScale = getTextCompensationScale(this.zoom)
     const totalSixths = totalSixthsForSlots(node.slotCount)
+
+    view.runVisualsContainer.removeChildren()
+    const runs = groupContiguousSameType(node.segments)
+    const mergedIds = new Set(runs.filter((r) => r.length > 1).flatMap((r) => r.map((s) => s.id)))
+    for (const run of runs) {
+      if (run.length < 2) continue
+      const runHovered = run.some((s) => s.id === hoveredSegmentId)
+      const first = run[0]
+      const dimmed = filterCategory != null && first.category !== filterCategory
+      const dimmedAlpha = 0.12
+      const color = runHovered ? 0x5cadee : 0x3d9ac9
+      const alpha = dimmed ? dimmedAlpha : 0.95
+      drawRunVisuals(
+        view.runVisualsContainer,
+        run,
+        SLOT_START_X,
+        TOP_BAND_H,
+        color,
+        alpha,
+        tier,
+        this.zoom,
+        textCompensationScale,
+        this.minVisibleLabelPx,
+        this.maxVisibleLabelPx,
+        dimmed,
+        dimmedAlpha,
+      )
+    }
+
     const nextIds = new Set(node.segments.map((s) => s.id))
     for (const [id, segView] of view.segmentViews) {
       if (!nextIds.has(id)) {
@@ -2806,6 +3233,7 @@ export class PixiBoardAdapter {
           this.handlers.onSegmentDoubleClick,
           () => this.lastDragEndTime,
           () => this.activeDrag.type === 'idle' || this.activeDrag.type === 'pendingSegment',
+          mergedIds.has(segment.id),
         )
         view.segmentContainer.addChild(segContainer)
       } else {
@@ -2845,6 +3273,7 @@ export class PixiBoardAdapter {
           this.handlers.onSegmentDoubleClick,
           () => this.lastDragEndTime,
           () => this.activeDrag.type === 'idle' || this.activeDrag.type === 'pendingSegment',
+          mergedIds.has(segment.id),
         )
       }
     })

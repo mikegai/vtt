@@ -58,7 +58,7 @@ describe('board view model', () => {
     expect(cutthroatRow).toBeDefined()
     const ironRationSegments = cutthroatRow!.segments.filter((s) => s.itemDefId === 'ironRationsDay')
     expect(ironRationSegments.length).toBe(6)
-    const pair = ironRationSegments.find((s) => s.tooltip.title === '2 iron rations')
+    const pair = ironRationSegments.find((s) => s.tooltip.title === '2 daily iron rations')
     expect(pair?.quantity).toBe(2)
     expect(ironRationSegments.filter((s) => s.quantity === 1).length).toBe(5)
   })
@@ -68,13 +68,13 @@ describe('board view model', () => {
     const row8 = board8.rows.find((r) => r.actorId === 'cutthroat')
     const ration8 = row8!.segments.filter((s) => s.itemDefId === 'ironRationsDay')
     expect(ration8.length).toBe(7)
-    expect(ration8.filter((s) => s.tooltip.title === '2 iron rations').length).toBe(1)
+    expect(ration8.filter((s) => s.tooltip.title === '2 daily iron rations').length).toBe(1)
 
     const board14 = buildBoardVM(stateWithCutthroatRations(14))
     const row14 = board14.rows.find((r) => r.actorId === 'cutthroat')
     const ration14 = row14!.segments.filter((s) => s.itemDefId === 'ironRationsDay')
     expect(ration14.length).toBe(12)
-    expect(ration14.filter((s) => s.tooltip.title === '2 iron rations').length).toBe(2)
+    expect(ration14.filter((s) => s.tooltip.title === '2 daily iron rations').length).toBe(2)
   })
 
   it('animal row uses 50% rule: green band and base speed at ≤50% capacity', () => {

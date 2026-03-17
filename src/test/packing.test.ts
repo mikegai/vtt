@@ -11,7 +11,7 @@ const defs: Record<string, ItemDefinition> = {
   rope: { id: 'rope', canonicalName: "50' rope", kind: 'standard', sixthsPerUnit: 6 },
   torch: { id: 'torch', canonicalName: 'Torch', kind: 'standard', sixthsPerUnit: 1 },
   fiveSixths: { id: 'fiveSixths', canonicalName: '5/6 item', kind: 'standard', sixthsPerUnit: 5 },
-  ironRationsDay: { id: 'ironRationsDay', canonicalName: "1 day's iron rations", kind: 'standard', sixthsPerUnit: 1 },
+  ironRationsDay: { id: 'ironRationsDay', canonicalName: 'Daily iron rations', kind: 'standard', sixthsPerUnit: 1 },
 }
 
 const mkEntry = (id: string, itemDefId: string, zone: InventoryEntry['zone'], quantity = 1): InventoryEntry => ({
@@ -91,7 +91,7 @@ describe('deterministic packing', () => {
     const rationPairEntry = { ...mkEntry('d', 'ironRationsDay', 'stowed', 2) }
     const rationPairDef: ItemDefinition = {
       ...defs.ironRationsDay,
-      canonicalName: '2 iron rations',
+      canonicalName: '2 daily iron rations',
       sixthsPerUnit: 0.5,
     }
     const items: PackInput[] = [

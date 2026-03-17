@@ -110,7 +110,7 @@ export const sampleState: CanonicalState = {
     waterskin: { id: 'waterskin', canonicalName: 'Waterskin', kind: 'standard', sixthsPerUnit: 1 },
     ironRationsDay: {
       id: 'ironRationsDay',
-      canonicalName: "1 day's iron rations",
+      canonicalName: 'Daily iron rations',
       kind: 'standard',
       sixthsPerUnit: 1,
       priceInGp: 1 / 7,
