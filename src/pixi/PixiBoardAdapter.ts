@@ -237,6 +237,20 @@ const fixedSlotBandColor = (stoneIndex: number, greenSlots: number): number => {
 const twoBandSlotColor = (stoneIndex: number, greenSlots: number): number =>
   stoneIndex < greenSlots ? SPEED_COLORS.green : SPEED_COLORS.orange
 
+/** Draw a scissors icon for "cut attachment" on a Graphics object. */
+const drawScissorsIcon = (g: Graphics, cx: number, cy: number): void => {
+  const color = 0xc5d8ff
+  const alpha = 0.95
+  g.moveTo(cx - 5, cy - 3)
+  g.lineTo(cx + 2, cy)
+  g.moveTo(cx - 5, cy + 3)
+  g.lineTo(cx + 2, cy)
+  g.stroke({ width: 1.5, color, alpha })
+  g.circle(cx - 5, cy - 3, 1.8)
+  g.circle(cx - 5, cy + 3, 1.8)
+  g.fill({ color, alpha })
+}
+
 const getZoomTier = (zoom: number): ZoomTier => {
   if (zoom < 0.55) return 'far'
   if (zoom < 1.4) return 'medium'
@@ -1395,6 +1409,7 @@ export class PixiBoardAdapter {
   private currentScene: SceneVM | null = null
   private activeDrag: ActiveDrag = { type: 'idle' }
   private groupDropIndicator: Graphics
+  private nestConnectorGraphics: Graphics
   private lastDragEndTime = 0
   private segmentDragHoveredGroupId: string | null = null
   private pendingRebuild = false
@@ -1427,6 +1442,8 @@ export class PixiBoardAdapter {
     this.groupLayer = new Container()
     this.groupDropIndicator = new Graphics()
     this.groupDropIndicator.eventMode = 'none'
+    this.nestConnectorGraphics = new Graphics()
+    this.nestConnectorGraphics.eventMode = 'none'
     this.worldLayer = new Container()
     this.labelLayer = new Container()
     this.selectionOverlayLayer = new Container()
@@ -1483,6 +1500,7 @@ export class PixiBoardAdapter {
 
     this.sceneRoot.addChild(this.groupLayer)
     this.groupLayer.addChild(this.groupDropIndicator)
+    this.worldLayer.addChild(this.nestConnectorGraphics)
     this.sceneRoot.addChild(this.worldLayer)
     this.sceneRoot.addChild(this.labelLayer)
     this.sceneRoot.addChild(this.selectionOverlayLayer)
@@ -2868,10 +2886,7 @@ export class PixiBoardAdapter {
         moveToRootBtn.stroke({ width: 1, color: 0x5cadee, alpha: 0.8 })
         const cx = btnX + btnW / 2
         const cy = btnY + btnH / 2
-        moveToRootBtn.moveTo(cx - 5, cy)
-        moveToRootBtn.lineTo(cx + 3, cy - 4)
-        moveToRootBtn.lineTo(cx + 3, cy + 4)
-        moveToRootBtn.fill({ color: 0xc5d8ff, alpha: 0.95 })
+        drawScissorsIcon(moveToRootBtn, cx, cy)
         ;(moveToRootBtn as Container & { __dragHandle?: boolean }).__dragHandle = true
         moveToRootBtn.on('pointertap', () => {
           if (this.activeDrag.type !== 'idle') return
@@ -3165,10 +3180,7 @@ export class PixiBoardAdapter {
         moveToRootBtn.stroke({ width: 1, color: 0x5cadee, alpha: 0.8 })
         const cx = btnX + btnW / 2
         const cy = btnY + btnH / 2
-        moveToRootBtn.moveTo(cx - 5, cy)
-        moveToRootBtn.lineTo(cx + 3, cy - 4)
-        moveToRootBtn.lineTo(cx + 3, cy + 4)
-        moveToRootBtn.fill({ color: 0xc5d8ff, alpha: 0.95 })
+        drawScissorsIcon(moveToRootBtn, cx, cy)
         ;(moveToRootBtn as Container & { __dragHandle?: boolean }).__dragHandle = true
         moveToRootBtn.on('pointertap', () => {
           if (this.activeDrag.type !== 'idle') return
@@ -4097,11 +4109,41 @@ export class PixiBoardAdapter {
         }
       }
     }
+    this.drawNestConnectors()
     this.updateSelectionOverlay()
     if (completedTransitions.length > 0) anyActive = true
     for (const done of completedTransitions) done()
     if (!anyActive) {
       this.app.ticker.remove(this.springTickerBound)
+    }
+  }
+
+  private drawNestConnectors(): void {
+    if (!this.currentScene) return
+    this.nestConnectorGraphics.clear()
+    const CONNECTOR_COLOR = 0x5cadee
+    const CONNECTOR_ALPHA = 0.6
+    const CONNECTOR_WIDTH = 2
+    for (const [nodeId, view] of this.nodeViews) {
+      const node = this.currentScene.nodes[nodeId]
+      const parentId = node?.parentNodeId
+      if (!parentId) continue
+      const parentView = this.nodeViews.get(parentId)
+      if (!parentView) continue
+      const px = parentView.root.position.x
+      const py = parentView.root.position.y
+      const ph = parentView.totalHeight
+      const cx = view.root.position.x
+      const cy = view.root.position.y
+      const parentBottom = py + ph
+      const childTop = cy
+      const midY = (parentBottom + childTop) / 2
+      const branchX = (px + cx) / 2
+      this.nestConnectorGraphics.moveTo(branchX, parentBottom)
+      this.nestConnectorGraphics.lineTo(branchX, midY)
+      this.nestConnectorGraphics.lineTo(cx, midY)
+      this.nestConnectorGraphics.lineTo(cx, childTop)
+      this.nestConnectorGraphics.stroke({ width: CONNECTOR_WIDTH, color: CONNECTOR_COLOR, alpha: CONNECTOR_ALPHA })
     }
   }
 
