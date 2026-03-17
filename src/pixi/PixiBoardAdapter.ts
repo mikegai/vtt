@@ -2421,7 +2421,7 @@ export class PixiBoardAdapter {
       freeSegmentPositionsCount: freeSegmentPositions ? Object.keys(freeSegmentPositions).length : 0,
       segmentIds: drag.segmentIds,
     })
-    this.handlers.onDragSegmentEnd(effectiveTarget, targetGroupId, dropX, dropY, freeSegmentPositions)
+    this.handlers.onDragSegmentEnd(targetNodeId, targetGroupId, dropX, dropY, freeSegmentPositions)
     this.worldLayer.removeChild(drag.lineLayer)
     this.worldLayer.removeChild(drag.proxy)
     drag.lineLayer.destroy({ children: true })
