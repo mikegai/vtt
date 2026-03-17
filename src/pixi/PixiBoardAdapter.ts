@@ -853,7 +853,7 @@ const drawBlendedSegmentRects = (
   maxVisibleLabelPx: number,
   dimmed: boolean,
   dimmedAlpha: number,
-): { hitBounds: { x: number; y: number; w: number; h: number } } => {
+): { hitBounds: { x: number; y: number; w: number; h: number }; groupBounds: { x: number; y: number; w: number; h: number }[] } => {
   const groups = groupSixthsByStone(segment.startSixth, segment.sizeSixths)
   const PAD = 1.2
   const strokeColor = darkenColor(color)
@@ -861,6 +861,7 @@ const drawBlendedSegmentRects = (
   let minY = Infinity
   let maxX = -Infinity
   let maxY = -Infinity
+  const groupBounds: { x: number; y: number; w: number; h: number }[] = []
 
   const zoomReadableScale = zoom < 0.45 ? 1.14 : 1
   const visualScale = textCompensationScale * zoomReadableScale
@@ -907,6 +908,7 @@ const drawBlendedSegmentRects = (
     minY = Math.min(minY, y)
     maxX = Math.max(maxX, x + w)
     maxY = Math.max(maxY, y + h)
+    groupBounds.push({ x, y, w, h })
 
     const availableWorldWidth = Math.max(8, w - 6)
     const availableWorldHeight = Math.max(8, h - 6)
@@ -952,6 +954,7 @@ const drawBlendedSegmentRects = (
       w: maxX - minX,
       h: maxY - minY,
     },
+    groupBounds,
   }
 }
 
@@ -1343,7 +1346,7 @@ const drawSegmentBlock = (
     block.hitArea = new Rectangle(blockBounds.x, blockBounds.y, blockBounds.w, blockBounds.h)
     drawGripIndicators(container, segment.wield, blockBounds, dimmed, dimmedAlpha)
   } else {
-    const { hitBounds } = drawBlendedSegmentRects(
+    const { hitBounds, groupBounds } = drawBlendedSegmentRects(
       container,
       segment,
       SLOT_START_X - o.x,
@@ -1361,7 +1364,10 @@ const drawSegmentBlock = (
     )
     block.rect(hitBounds.x, hitBounds.y, hitBounds.w, hitBounds.h)
     block.fill({ color: 0xffffff, alpha: 0.001 })
-    block.hitArea = new Rectangle(hitBounds.x, hitBounds.y, hitBounds.w, hitBounds.h)
+    block.hitArea = {
+      contains: (x: number, y: number) =>
+        groupBounds.some((b) => x >= b.x && x < b.x + b.w && y >= b.y && y < b.y + b.h),
+    }
     container.addChild(block)
     drawGripIndicators(container, segment.wield, hitBounds, dimmed, dimmedAlpha)
   }
