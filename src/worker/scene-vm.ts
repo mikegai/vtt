@@ -11,6 +11,7 @@ import type { SceneFreeSegmentVM, SceneGroupVM, SceneNodeVM, SceneVM } from './p
 export type WorkerLocalState = {
   readonly hoveredSegmentId: string | null
   readonly groupPositions: Record<string, { x: number; y: number }>
+  readonly groupSizeOverrides: Record<string, { width: number; height: number }>
   readonly nodeGroupOverrides: Record<string, string | null>
   readonly nodePositions: Record<string, { x: number; y: number }>
   readonly freeSegmentPositions: Record<string, { x: number; y: number }>
@@ -381,7 +382,6 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
     orderedRoots.forEach((rootId) => layoutGroupSubtree(rootId, 0))
 
     const segmentIds = meta.freeSegmentIds.filter((id) => !!freeSegments[id])
-    const hasNodes = orderedRoots.length > 0
     const hasSegments = segmentIds.length > 0
     let segmentWidth = 0
     let segmentHeight = 0
@@ -401,11 +401,19 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
       segmentHeight = maxY + GROUP_PADDING_BOTTOM
     }
     const mode = deriveGroupMode({ nodeIds: orderedNodeIds, freeSegmentIds: segmentIds })
-    const groupHeight = mode === 'nodes'
+    const contentMinHeight = mode === 'nodes'
       ? cursorY - NODE_ROW_GAP - pos.y + GROUP_PADDING_BOTTOM
       : mode === 'segments'
         ? Math.max(EMPTY_GROUP_MIN_HEIGHT, segmentHeight)
         : EMPTY_GROUP_MIN_HEIGHT
+    const contentMinWidth = mode === 'nodes'
+      ? maxNodeW + GROUP_PADDING_X * 2
+      : mode === 'segments'
+        ? Math.max(EMPTY_GROUP_MIN_WIDTH, segmentWidth)
+        : EMPTY_GROUP_MIN_WIDTH
+    const override = localState.groupSizeOverrides[groupId]
+    const width = override ? override.width : contentMinWidth
+    const height = override ? override.height : contentMinHeight
     groups[groupId] = {
       id: groupId,
       title: meta.title,
@@ -413,14 +421,10 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
       freeSegmentIds: segmentIds,
       x: pos.x,
       y: pos.y,
-      width: mode === 'nodes'
-        ? maxNodeW + GROUP_PADDING_X * 2
-        : mode === 'segments'
-          ? Math.max(EMPTY_GROUP_MIN_WIDTH, segmentWidth)
-          : EMPTY_GROUP_MIN_WIDTH,
-      height: groupHeight,
+      width,
+      height,
     }
-    if (!localState.groupPositions[groupId]) flowY = pos.y + groupHeight + GROUP_STACK_GAP
+    if (!localState.groupPositions[groupId]) flowY = pos.y + height + GROUP_STACK_GAP
   }
 
   // Ungrouped nodes are freely positioned on the world canvas.

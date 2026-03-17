@@ -3,10 +3,11 @@ import { sampleState } from '../sample-data'
 import { buildSceneVM, type WorkerLocalState } from '../worker/scene-vm'
 import { deriveGroupMode } from '../worker/group-mode'
 
-const makeLocalState = (): WorkerLocalState =>
+const makeLocalState = (overrides: Partial<WorkerLocalState> = {}): WorkerLocalState =>
   ({
     hoveredSegmentId: null,
     groupPositions: {},
+    groupSizeOverrides: {},
     nodeGroupOverrides: {},
     nodePositions: {},
     freeSegmentPositions: {},
@@ -21,16 +22,17 @@ const makeLocalState = (): WorkerLocalState =>
     selectedSegmentIds: [],
     labels: {},
     selectedLabelId: null,
+    ...overrides,
   }) as WorkerLocalState
 
 describe('group segment behavior', () => {
   it('derives group mode from contained ids only', () => {
-    expect(deriveGroupMode({ id: 'a', title: 'A', x: 0, y: 0, width: 1, height: 1, nodeIds: [], freeSegmentIds: [] })).toBe('empty')
+    expect(deriveGroupMode({ nodeIds: [], freeSegmentIds: [] })).toBe('empty')
     expect(
-      deriveGroupMode({ id: 'a', title: 'A', x: 0, y: 0, width: 1, height: 1, nodeIds: ['n1'], freeSegmentIds: [] }),
+      deriveGroupMode({ nodeIds: ['n1'], freeSegmentIds: [] }),
     ).toBe('nodes')
     expect(
-      deriveGroupMode({ id: 'a', title: 'A', x: 0, y: 0, width: 1, height: 1, nodeIds: [], freeSegmentIds: ['s1'] }),
+      deriveGroupMode({ nodeIds: [], freeSegmentIds: ['s1'] }),
     ).toBe('segments')
   })
 
@@ -50,26 +52,25 @@ describe('group segment behavior', () => {
         ...sampleState.inventoryEntries,
         cutthroatHandAxe: {
           ...sampleState.inventoryEntries.cutthroatHandAxe,
-          zone: 'dropped',
+          zone: 'dropped' as const,
           carryGroupId: 'cutthroat:ground',
           state: { dropped: true },
         },
       },
     }
-    const local = makeLocalState()
-    local.customGroups = {
-      'custom-group:space': { title: 'Space' },
-    }
-    local.groupPositions = {
-      'custom-group:space': { x: 400, y: 500 },
-    }
-    ;(local as WorkerLocalState & {
-      groupFreeSegmentPositions: Record<string, Record<string, { x: number; y: number }>>
-    }).groupFreeSegmentPositions = {
-      'custom-group:space': {
-        cutthroatHandAxe: { x: 12, y: 34 },
+    const local = makeLocalState({
+      customGroups: {
+        'custom-group:space': { title: 'Space' },
       },
-    }
+      groupPositions: {
+        'custom-group:space': { x: 400, y: 500 },
+      },
+      groupFreeSegmentPositions: {
+        'custom-group:space': {
+          cutthroatHandAxe: { x: 12, y: 34 },
+        },
+      },
+    })
 
     const scene = buildSceneVM(state, local)
     const group = scene.groups['custom-group:space']
@@ -84,13 +85,60 @@ describe('group segment behavior', () => {
   })
 
   it('applies session title overrides for groups and nodes', () => {
-    const local = makeLocalState()
-    local.groupTitleOverrides = { party: 'Renamed Party' }
-    local.nodeTitleOverrides = { cutthroat: 'Renamed Cutthroat' }
+    const local = makeLocalState({
+      groupTitleOverrides: { party: 'Renamed Party' },
+      nodeTitleOverrides: { cutthroat: 'Renamed Cutthroat' },
+    })
 
     const scene = buildSceneVM(sampleState, local)
 
     expect(scene.groups.party?.title).toBe('Renamed Party')
     expect(scene.nodes.cutthroat?.title).toBe('Renamed Cutthroat')
+  })
+
+  it('uses explicit group size override when larger than content minimum', () => {
+    const local = makeLocalState({
+      groupSizeOverrides: {
+        party: { width: 2400, height: 2400 },
+      },
+    })
+
+    const scene = buildSceneVM(sampleState, local)
+    expect(scene.groups.party).toBeDefined()
+    expect(scene.groups.party?.width).toBe(2400)
+    expect(scene.groups.party?.height).toBe(2400)
+  })
+
+  it('passes through explicit group size override without clamping (adapter clamps at display)', () => {
+    const local = makeLocalState({
+      groupSizeOverrides: {
+        party: { width: 10, height: 10 },
+      },
+    })
+
+    const scene = buildSceneVM(sampleState, local)
+    expect(scene.groups.party).toBeDefined()
+    expect(scene.groups.party!.width).toBe(10)
+    expect(scene.groups.party!.height).toBe(10)
+  })
+
+  it('passes through tiny overrides for empty groups (adapter clamps at display)', () => {
+    const local = makeLocalState({
+      customGroups: {
+        'custom-group:empty': { title: 'Empty' },
+      },
+      groupPositions: {
+        'custom-group:empty': { x: 200, y: 200 },
+      },
+      groupSizeOverrides: {
+        'custom-group:empty': { width: 1, height: 1 },
+      },
+    })
+
+    const scene = buildSceneVM(sampleState, local)
+    const empty = scene.groups['custom-group:empty']
+    expect(empty).toBeDefined()
+    expect(empty!.width).toBe(1)
+    expect(empty!.height).toBe(1)
   })
 })

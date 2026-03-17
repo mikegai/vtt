@@ -108,6 +108,7 @@ export type WorkerIntent =
   | { readonly type: 'SELECT_SEGMENTS_REMOVE'; readonly segmentIds: readonly string[] }
   | { readonly type: 'SELECT_ALL_OF_TYPE'; readonly itemDefId: string; readonly nodeId?: string }
   | { readonly type: 'MOVE_GROUP'; readonly groupId: string; readonly x: number; readonly y: number }
+  | { readonly type: 'RESIZE_GROUP'; readonly groupId: string; readonly width: number; readonly height: number }
   | { readonly type: 'ADD_GROUP'; readonly x: number; readonly y: number }
   | { readonly type: 'UPDATE_GROUP_TITLE'; readonly groupId: string; readonly title: string }
   | { readonly type: 'MOVE_NODE_TO_GROUP_INDEX'; readonly nodeId: string; readonly groupId: string; readonly index: number }

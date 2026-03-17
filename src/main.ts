@@ -565,6 +565,9 @@ const pixiAdapter = new PixiBoardAdapter(canvasHost, {
   onMoveGroup(groupId, x, y) {
     postToWorker({ type: 'INTENT', intent: { type: 'MOVE_GROUP', groupId, x, y } })
   },
+  onResizeGroup(groupId, width, height) {
+    postToWorker({ type: 'INTENT', intent: { type: 'RESIZE_GROUP', groupId, width, height } })
+  },
   onMoveNodeToGroupIndex(nodeId, groupId, index) {
     postToWorker({ type: 'INTENT', intent: { type: 'MOVE_NODE_TO_GROUP_INDEX', nodeId, groupId, index } })
   },

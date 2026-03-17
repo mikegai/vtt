@@ -14,6 +14,7 @@ let worldState: CanonicalState | null = null
 let localState: WorkerLocalState = {
   hoveredSegmentId: null,
   groupPositions: {},
+  groupSizeOverrides: {},
   nodeGroupOverrides: {},
   nodePositions: {},
   freeSegmentPositions: {},
@@ -463,6 +464,21 @@ const applyIntent = (intent: WorkerIntent): void => {
       groupPositions: {
         ...localState.groupPositions,
         [intent.groupId]: { x: intent.x, y: intent.y },
+      },
+    }
+    recompute()
+    return
+  }
+
+  if (intent.type === 'RESIZE_GROUP') {
+    localState = {
+      ...localState,
+      groupSizeOverrides: {
+        ...localState.groupSizeOverrides,
+        [intent.groupId]: {
+          width: Math.max(1, intent.width),
+          height: Math.max(1, intent.height),
+        },
       },
     }
     recompute()

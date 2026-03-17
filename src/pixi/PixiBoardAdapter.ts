@@ -12,6 +12,15 @@ type GroupDragData = {
   readonly anchorOffset: { x: number; y: number }
 }
 
+type GroupResizeDragData = {
+  readonly groupId: string
+  readonly startPointerWorld: { x: number; y: number }
+  readonly startWidth: number
+  readonly startHeight: number
+  readonly resizeX: boolean
+  readonly resizeY: boolean
+}
+
 type NodeReorderDragData = {
   readonly nodeIds: string[]
   readonly nodeContainers: Container[]
@@ -37,6 +46,7 @@ type ActiveDrag =
   | { type: 'pendingSegment'; segment: SceneSegmentVM; nodeId: string; startClientX: number; startClientY: number; addToSelection: boolean }
   | { type: 'segment'; state: SegmentDragState }
   | { type: 'group'; state: GroupDragData }
+  | { type: 'groupResize'; state: GroupResizeDragData }
   | { type: 'nodeReorder'; state: NodeReorderDragData }
   | { type: 'label'; state: LabelDragData }
   | { type: 'marquee'; startX: number; startY: number; endX: number; endY: number }
@@ -44,6 +54,7 @@ type ActiveDrag =
 type AdapterHandlers = {
   onHoverSegment(segmentId: string | null): void
   onMoveGroup?(groupId: string, x: number, y: number): void
+  onResizeGroup?(groupId: string, width: number, height: number): void
   onMoveNodeToGroupIndex?(nodeId: string, groupId: string, index: number): void
   onNestNodeUnder?(nodeId: string, parentNodeId: string): void
   onMoveNodeToRoot?(nodeId: string, x: number, y: number): void
@@ -1139,6 +1150,7 @@ export class PixiBoardAdapter {
             this.endDrag()
             return
           case 'group':
+          case 'groupResize':
             this.endDrag()
             return
           case 'marquee': {
@@ -1177,6 +1189,9 @@ export class PixiBoardAdapter {
           return
         case 'group':
           this.updateGroupDrag(event.clientX, event.clientY)
+          return
+        case 'groupResize':
+          this.updateGroupResizeDrag(event.clientX, event.clientY)
           return
         case 'marquee': {
           const { x, y } = canvasCoords(event)
@@ -1503,10 +1518,11 @@ export class PixiBoardAdapter {
         __segmentContext?: SegmentContext
         __dragHandle?: boolean
         __groupHandle?: boolean
+        __groupResizeHandle?: boolean
         __labelHandleId?: string
         __labelId?: string
       }
-      if (c.__segmentContext || c.__dragHandle || c.__groupHandle || c.__labelHandleId || c.__labelId) return true
+      if (c.__segmentContext || c.__dragHandle || c.__groupHandle || c.__groupResizeHandle || c.__labelHandleId || c.__labelId) return true
       cur = cur.parent
     }
     return false
@@ -1576,6 +1592,70 @@ export class PixiBoardAdapter {
       groupView.root.position.set(nextX, nextY)
     }
     this.handlers.onMoveGroup(drag.groupId, nextX, nextY)
+  }
+
+  private applyLocalGroupSize(groupId: string, width: number, height: number): void {
+    if (!this.currentScene?.groups?.[groupId]) return
+    const mutableGroup = this.currentScene.groups[groupId] as SceneGroupVM & { width: number; height: number }
+    mutableGroup.width = width
+    mutableGroup.height = height
+    this.recomputeDisplayFlow(this.currentScene)
+    this.rebuildGroups(this.currentScene)
+  }
+
+  private startGroupResizeDrag(
+    groupId: string,
+    resizeX: boolean,
+    resizeY: boolean,
+    clientX: number,
+    clientY: number,
+  ): void {
+    if (!this.currentScene || !this.handlers.onResizeGroup) return
+    const group = this.currentScene.groups?.[groupId]
+    if (!group) return
+    let startWidth = this.getGroupDisplayDimensions(group).width
+    let startHeight = this.getGroupDisplayDimensions(group).height
+    if (!this.isGroupExpanded(groupId)) {
+      const collapsedDims = this.getGroupCollapsedDimensions(group)
+      startWidth = collapsedDims.width
+      startHeight = collapsedDims.height
+      this.setGroupExpanded(groupId, true)
+      this.applyLocalGroupSize(groupId, startWidth, startHeight)
+      this.handlers.onResizeGroup(groupId, startWidth, startHeight)
+    }
+    const startPointerWorld = this.screenToWorld(clientX, clientY)
+    this.activeDrag = {
+      type: 'groupResize',
+      state: {
+        groupId,
+        startPointerWorld,
+        startWidth,
+        startHeight,
+        resizeX,
+        resizeY,
+      },
+    }
+    this.lastPointerPosition = { clientX, clientY }
+    this.startAutoPanLoop()
+  }
+
+  private updateGroupResizeDrag(clientX: number, clientY: number): void {
+    if (this.activeDrag.type !== 'groupResize' || !this.currentScene || !this.handlers.onResizeGroup) return
+    const drag = this.activeDrag.state
+    const group = this.currentScene.groups?.[drag.groupId]
+    if (!group) return
+    const world = this.screenToWorld(clientX, clientY)
+    const deltaX = world.x - drag.startPointerWorld.x
+    const deltaY = world.y - drag.startPointerWorld.y
+    const contentMin = this.getGroupContentMinDimensions(group)
+    const nextWidth = drag.resizeX
+      ? Math.max(contentMin.width, drag.startWidth + deltaX)
+      : drag.startWidth
+    const nextHeight = drag.resizeY
+      ? Math.max(contentMin.height, drag.startHeight + deltaY)
+      : drag.startHeight
+    this.applyLocalGroupSize(drag.groupId, nextWidth, nextHeight)
+    this.handlers.onResizeGroup(drag.groupId, nextWidth, nextHeight)
   }
 
   private screenToWorld(clientX: number, clientY: number): { x: number; y: number } {
@@ -2754,6 +2834,38 @@ export class PixiBoardAdapter {
     }
     root.addChild(handle)
 
+    const addResizeHandle = (
+      x: number,
+      y: number,
+      w: number,
+      h: number,
+      cursor: string,
+      resizeX: boolean,
+      resizeY: boolean,
+    ): void => {
+      const resizeHandle = new Graphics()
+      resizeHandle.eventMode = 'static'
+      resizeHandle.cursor = cursor
+      ;(resizeHandle as Container & { __groupResizeHandle?: boolean }).__groupResizeHandle = true
+      resizeHandle.roundRect(x, y, w, h, 6)
+      // Keep resize affordances interactive but fully invisible.
+      resizeHandle.fill({ color: 0xffffff, alpha: 0.001 })
+      resizeHandle.on('pointerdown', (event: any) => {
+        if (event.button !== 0 || this.activeDrag.type !== 'idle') return
+        const canvasRect = this.app.canvas.getBoundingClientRect()
+        const clientX = typeof event.clientX === 'number' ? event.clientX : event.global.x + canvasRect.left
+        const clientY = typeof event.clientY === 'number' ? event.clientY : event.global.y + canvasRect.top
+        this.startGroupResizeDrag(group.id, resizeX, resizeY, clientX, clientY)
+        event.stopPropagation()
+      })
+      root.addChild(resizeHandle)
+    }
+
+    const edgeThickness = 10
+    addResizeHandle(displayWidth - edgeThickness, TOP_BAND_H, edgeThickness, Math.max(24, displayHeight - TOP_BAND_H), 'ew-resize', true, false)
+    addResizeHandle(18, displayHeight - edgeThickness, Math.max(48, displayWidth - 18), edgeThickness, 'ns-resize', false, true)
+    addResizeHandle(displayWidth - 14, displayHeight - 14, 14, 14, 'nwse-resize', true, true)
+
     const isExpanded = this.isGroupExpanded(group.id)
     const groupTitleMidY = TOP_BAND_H / 2
     const addExpandCaret = (midY: number): void => {
@@ -3512,7 +3624,7 @@ export class PixiBoardAdapter {
         yOffset += dims.height - node.height
       }
       if (this.isGroupExpanded(group.id)) {
-        this.groupDisplayHeights.set(group.id, Math.max(40, group.height + yOffset))
+        this.groupDisplayHeights.set(group.id, group.height)
       } else {
         const collapsed = this.getGroupCollapsedDimensions(group)
         this.groupDisplayHeights.set(group.id, collapsed.height)
@@ -3583,6 +3695,61 @@ export class PixiBoardAdapter {
     this.startSpringTicker()
   }
 
+  private getGroupContentMinDimensions(group: SceneGroupVM): { width: number; height: number } {
+    if (!this.currentScene) return { width: group.width, height: group.height }
+    const nodeIdsInGroup = new Set(group.nodeIds)
+    const childrenByParent = new Map<string, string[]>()
+    for (const nodeId of group.nodeIds) {
+      const node = this.currentScene.nodes[nodeId]
+      const parentId = node?.parentNodeId
+      if (!parentId || !nodeIdsInGroup.has(parentId)) continue
+      const siblings = childrenByParent.get(parentId) ?? []
+      siblings.push(nodeId)
+      childrenByParent.set(parentId, siblings)
+    }
+    const orderedRoots = group.nodeIds.filter((nodeId) => {
+      const parentId = this.currentScene!.nodes[nodeId]?.parentNodeId
+      return !parentId || !nodeIdsInGroup.has(parentId)
+    })
+    if (orderedRoots.length > 0) {
+      let maxNodeW = 0
+      let cursorY = group.y + GROUP_PADDING_TOP
+      const layoutSubtree = (nodeId: string, depth: number): void => {
+        const node = this.currentScene!.nodes[nodeId]
+        if (!node) return
+        const dims = this.getNodeDisplayDimensions(node)
+        const indentPx = depth * NODE_INDENT
+        maxNodeW = Math.max(maxNodeW, dims.width + indentPx)
+        cursorY += dims.height + NODE_ROW_GAP
+        const children = childrenByParent.get(nodeId) ?? []
+        children.forEach((childId) => layoutSubtree(childId, depth + 1))
+      }
+      orderedRoots.forEach((rootId) => layoutSubtree(rootId, 0))
+      return {
+        width: maxNodeW + GROUP_PADDING_X * 2,
+        height: cursorY - NODE_ROW_GAP - group.y + GROUP_PADDING_BOTTOM,
+      }
+    }
+    if (group.freeSegmentIds.length > 0) {
+      let maxX = 0
+      let maxY = 0
+      for (const segmentId of group.freeSegmentIds) {
+        const free = this.currentScene.freeSegments[segmentId]
+        if (!free) continue
+        const bounds = segmentBoundsInNodeLocal(free.segment)
+        const right = free.x + bounds.x - SLOT_START_X + bounds.w
+        const bottom = free.y + bounds.y - TOP_BAND_H + bounds.h
+        maxX = Math.max(maxX, right)
+        maxY = Math.max(maxY, bottom)
+      }
+      return {
+        width: Math.max(EMPTY_GROUP_MIN_WIDTH, maxX + GROUP_PADDING_X),
+        height: Math.max(EMPTY_GROUP_MIN_HEIGHT, maxY + GROUP_PADDING_BOTTOM),
+      }
+    }
+    return { width: EMPTY_GROUP_MIN_WIDTH, height: EMPTY_GROUP_MIN_HEIGHT }
+  }
+
   private getGroupCollapsedDimensions(group: SceneGroupVM): { width: number; height: number } {
     if (!this.currentScene) return { width: group.width, height: group.height }
     const nodeIdsInGroup = new Set(group.nodeIds)
@@ -3618,7 +3785,21 @@ export class PixiBoardAdapter {
     const hasNodes = orderedRoots.length > 0
     if (!hasNodes) {
       if (group.freeSegmentIds.length > 0) {
-        return { width: group.width, height: group.height }
+        let maxX = 0
+        let maxY = 0
+        for (const segmentId of group.freeSegmentIds) {
+          const free = this.currentScene.freeSegments[segmentId]
+          if (!free) continue
+          const bounds = segmentBoundsInNodeLocal(free.segment)
+          const right = free.x + bounds.x - SLOT_START_X + bounds.w
+          const bottom = free.y + bounds.y - TOP_BAND_H + bounds.h
+          maxX = Math.max(maxX, right)
+          maxY = Math.max(maxY, bottom)
+        }
+        return {
+          width: Math.max(EMPTY_GROUP_MIN_WIDTH, maxX + GROUP_PADDING_X),
+          height: Math.max(EMPTY_GROUP_MIN_HEIGHT, maxY + GROUP_PADDING_BOTTOM),
+        }
       }
       return { width: EMPTY_GROUP_MIN_WIDTH, height: EMPTY_GROUP_MIN_HEIGHT }
     }
@@ -3629,9 +3810,13 @@ export class PixiBoardAdapter {
 
   private getGroupDisplayDimensions(group: SceneGroupVM): { width: number; height: number } {
     if (this.isGroupExpanded(group.id)) {
+      const contentMin = this.getGroupContentMinDimensions(group)
       return {
-        width: group.width,
-        height: this.groupDisplayHeights.get(group.id) ?? group.height,
+        width: Math.max(group.width, contentMin.width),
+        height: Math.max(
+          this.groupDisplayHeights.get(group.id) ?? group.height,
+          contentMin.height,
+        ),
       }
     }
     return this.getGroupCollapsedDimensions(group)
