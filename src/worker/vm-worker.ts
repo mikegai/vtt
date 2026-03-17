@@ -909,22 +909,6 @@ const applyIntent = (intent: WorkerIntent): void => {
       const groupCanAcceptSegments =
         !!targetGroup && deriveGroupMode(targetGroup) !== 'nodes'
       if (source) {
-        const droppedGroupId = droppedGroupIdForActor(source.actorId)
-        if (!worldState.carryGroups[droppedGroupId]) {
-          worldState = {
-            ...worldState,
-            carryGroups: {
-              ...worldState.carryGroups,
-              [droppedGroupId]: {
-                id: droppedGroupId,
-                ownerActorId: source.actorId,
-                name: 'Ground',
-                dropped: true,
-              },
-            },
-          }
-        }
-
         for (const segmentId of segmentIds) {
           const sourceNodeId = sourceNodeIds[segmentId]
           if (!sourceNodeId) continue
@@ -932,10 +916,12 @@ const applyIntent = (intent: WorkerIntent): void => {
           const entryId = segmentIdToEntryId(segmentId)
           const entry: InventoryEntry | undefined = worldState.inventoryEntries[entryId]
           if (!entry) continue
+          const segmentDroppedGroupId = droppedGroupIdForActor(parsedSource.actorId)
+          worldState = ensureDroppedGroup(worldState, parsedSource.actorId)
           const movedEntry: InventoryEntry = {
             ...entry,
             actorId: parsedSource.actorId,
-            carryGroupId: droppedGroupId,
+            carryGroupId: segmentDroppedGroupId,
             zone: 'dropped',
             state: { ...(entry.state ?? {}), dropped: true },
           }
