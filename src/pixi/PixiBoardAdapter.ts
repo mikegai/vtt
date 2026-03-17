@@ -2,6 +2,7 @@ import { Application, Assets, BitmapText, Color, Container, Graphics, Point, Rec
 import { createSpring1D, createSpring2D, setSpring1DTarget, setSpringTarget, updateSpring1D, updateSpring2D } from './spring'
 import type { SceneFreeSegmentVM, SceneGroupVM, SceneLabelVM, SceneNodeVM, ScenePatch, SceneVM, SceneSegmentVM } from '../worker/protocol'
 import { deriveGroupMode } from '../worker/group-mode'
+import { groupContiguousSameType } from './group-contiguous-same-type'
 
 /** Stored on segment blocks for context-menu hit testing. */
 type SegmentContext = { segmentId: string; nodeId: string }
@@ -704,25 +705,6 @@ const occupiedSixthsFromSegments = (
     }
   })
   return occupied
-}
-
-/** Group contiguous segments of same itemDefId. Excludes overflow and drop preview. */
-const groupContiguousSameType = (segments: readonly SceneSegmentVM[]): SceneSegmentVM[][] => {
-  const eligible = segments
-    .filter((s) => !s.isOverflow && !s.isDropPreview)
-    .slice()
-    .sort((a, b) => a.startSixth - b.startSixth)
-  const runs: SceneSegmentVM[][] = []
-  for (const seg of eligible) {
-    const last = runs[runs.length - 1]
-    const prevEnd = last ? last[last.length - 1].startSixth + last[last.length - 1].sizeSixths : -1
-    if (last && last[0].itemDefId === seg.itemDefId && prevEnd === seg.startSixth) {
-      last.push(seg)
-    } else {
-      runs.push([seg])
-    }
-  }
-  return runs
 }
 
 const collapsedVisibleSlotCount = (

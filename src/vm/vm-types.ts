@@ -24,6 +24,8 @@ export type SegmentVM = {
   readonly isOverflow: boolean
   readonly labels: LabelLadder
   readonly tooltip: TooltipVM
+  /** When true, contiguous same-type segments may be visually merged. Fallback: sizeSixths <= 1. */
+  readonly isFungibleVisual?: boolean
 }
 
 export type StoneSlotVM = {

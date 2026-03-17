@@ -27,6 +27,8 @@ export type ItemDefinition = {
   readonly armorClass?: number
   /** Price in gp (1 pp = 10 gp = 100 sp = 1000 cp). Convert for display only. */
   readonly priceInGp?: number
+  /** When true, contiguous same-type segments may be visually merged. Fallback: sizeSixths <= 1. */
+  readonly isFungibleVisual?: boolean
 }
 
 export type InventoryEntry = {

@@ -20,6 +20,8 @@ export type SceneSegmentVM = {
     readonly zoneText: string
     readonly quantityText: string
   }
+  /** When true, contiguous same-type segments may be visually merged. Fallback: sizeSixths <= 1. */
+  readonly isFungibleVisual?: boolean
 }
 
 export type SceneNodeVM = {

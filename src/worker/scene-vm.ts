@@ -263,6 +263,7 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
             category: segment.category,
             wield: segment.state?.wield,
             tooltip: segment.tooltip,
+            ...(segment.isFungibleVisual != null && { isFungibleVisual: segment.isFungibleVisual }),
           },
         }
         if (ownerGroupId) {
@@ -325,6 +326,7 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
         category: segment.category,
         wield: segment.state?.wield,
         tooltip: segment.tooltip,
+        ...(segment.isFungibleVisual != null && { isFungibleVisual: segment.isFungibleVisual }),
       })),
     }
 

@@ -172,6 +172,7 @@ const toSegmentVM = (
       encumbranceText: stoneText,
       zoneText: zoneLabel,
     },
+    ...(definition.isFungibleVisual != null && { isFungibleVisual: definition.isFungibleVisual }),
   }
 }
 
