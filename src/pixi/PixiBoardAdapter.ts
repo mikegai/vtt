@@ -1003,6 +1003,10 @@ export class PixiBoardAdapter {
   private segmentDragHoveredGroupId: string | null = null
   private pendingRebuild = false
   private marqueeGraphics: Graphics | null = null
+  /** During marquee drag: segment IDs that would be selected (live preview). */
+  private marqueePreviewSegmentIds: Set<string> | null = null
+  /** During marquee drag: whether add-to-selection modifier is held (for preview merge). */
+  private marqueePreviewAddToSelection = false
   private minVisibleLabelPx = DEFAULT_MIN_VISIBLE_PX
   private readonly maxVisibleLabelPx = DEFAULT_MAX_VISIBLE_PX
   private fontsLoaded = false
@@ -1204,6 +1208,7 @@ export class PixiBoardAdapter {
           this.activeDrag.endX = x
           this.activeDrag.endY = y
           this.drawMarquee()
+          this.updateMarqueePreview(event.shiftKey || event.ctrlKey || event.metaKey)
           return
         }
         case 'pendingSegment': {
@@ -1317,6 +1322,7 @@ export class PixiBoardAdapter {
             this.activeDrag.endX = canvasX
             this.activeDrag.endY = canvasY
             this.drawMarquee()
+            this.updateMarqueePreview(this.marqueePreviewAddToSelection)
             break
           }
         }
@@ -1336,7 +1342,19 @@ export class PixiBoardAdapter {
   private updateSelectionOverlay(): void {
     this.selectionOverlayLayer.removeChildren()
     if (!this.currentScene) return
-    const selectedIds = new Set(this.currentScene.selectedSegmentIds ?? [])
+    let selectedIds: Set<string>
+    if (this.marqueePreviewSegmentIds != null) {
+      if (this.marqueePreviewAddToSelection) {
+        selectedIds = new Set([
+          ...(this.currentScene.selectedSegmentIds ?? []),
+          ...this.marqueePreviewSegmentIds,
+        ])
+      } else {
+        selectedIds = this.marqueePreviewSegmentIds
+      }
+    } else {
+      selectedIds = new Set(this.currentScene.selectedSegmentIds ?? [])
+    }
     if (selectedIds.size === 0) return
     const PAD = 0.2
     const STROKE = 0.8
@@ -1410,17 +1428,13 @@ export class PixiBoardAdapter {
     this.marqueeGraphics.fill({ color: 0x5cadee, alpha: 0.12 })
   }
 
-  private finishMarquee(addToSelection: boolean): void {
-    if (this.activeDrag.type !== 'marquee' || !this.currentScene || !this.handlers.onMarqueeSelect) return
-    const { startX, startY, endX, endY } = this.activeDrag
-    const x1 = Math.min(startX, endX)
-    const y1 = Math.min(startY, endY)
-    const x2 = Math.max(startX, endX)
-    const y2 = Math.max(startY, endY)
-    const minW = (x1 - this.pan.x) / this.zoom
-    const maxW = (x2 - this.pan.x) / this.zoom
-    const minH = (y1 - this.pan.y) / this.zoom
-    const maxH = (y2 - this.pan.y) / this.zoom
+  /** Returns segment IDs that intersect the marquee rect (screen coords). */
+  private computeSegmentsInMarqueeRect(x1: number, y1: number, x2: number, y2: number): string[] {
+    if (!this.currentScene) return []
+    const minW = (Math.min(x1, x2) - this.pan.x) / this.zoom
+    const maxW = (Math.max(x1, x2) - this.pan.x) / this.zoom
+    const minH = (Math.min(y1, y2) - this.pan.y) / this.zoom
+    const maxH = (Math.max(y1, y2) - this.pan.y) / this.zoom
     const segmentIds: string[] = []
     for (const node of Object.values(this.currentScene.nodes)) {
       for (const segment of node.segments) {
@@ -1448,7 +1462,50 @@ export class PixiBoardAdapter {
         segmentIds.push(free.segment.id)
       }
     }
+    return segmentIds
+  }
+
+  private updateMarqueePreview(addToSelection: boolean): void {
+    if (this.activeDrag.type !== 'marquee') return
+    const { startX, startY, endX, endY } = this.activeDrag
+    const w = Math.abs(endX - startX)
+    const h = Math.abs(endY - startY)
+    if (w < 2 && h < 2) {
+      this.marqueePreviewSegmentIds = null
+      this.marqueePreviewAddToSelection = false
+    } else {
+      const ids = this.computeSegmentsInMarqueeRect(startX, startY, endX, endY)
+      this.marqueePreviewSegmentIds = new Set(ids)
+      this.marqueePreviewAddToSelection = addToSelection
+    }
+    this.updateSelectionOverlay()
+  }
+
+  private clearMarqueePreview(): void {
+    this.marqueePreviewSegmentIds = null
+    this.marqueePreviewAddToSelection = false
+    this.updateSelectionOverlay()
+  }
+
+  private finishMarquee(addToSelection: boolean): void {
+    if (this.activeDrag.type !== 'marquee' || !this.currentScene || !this.handlers.onMarqueeSelect) return
+    const { startX, startY, endX, endY } = this.activeDrag
+    const segmentIds = this.computeSegmentsInMarqueeRect(startX, startY, endX, endY)
+    this.clearMarqueePreview()
     this.handlers.onMarqueeSelect(segmentIds, addToSelection)
+  }
+
+  /** Cancel marquee drag (e.g. on Escape). Clears preview without committing selection. */
+  cancelMarquee(): void {
+    if (this.activeDrag.type !== 'marquee') return
+    this.activeDrag = { type: 'idle' }
+    this.stopAutoPanLoop()
+    this.clearMarqueePreview()
+    this.drawMarquee()
+  }
+
+  isMarqueeActive(): boolean {
+    return this.activeDrag.type === 'marquee'
   }
 
   private showTooltip(segment: SceneSegmentVM, globalX: number, globalY: number): void {

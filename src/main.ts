@@ -1118,9 +1118,14 @@ toolTextBtnEl.addEventListener('click', () => {
 })
 
 window.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape' && activeCanvasTool === 'text') {
-    activeCanvasTool = 'select'
-    renderCanvasToolUI()
+  if (event.key === 'Escape') {
+    if (pixiAdapter.isMarqueeActive()) {
+      event.preventDefault()
+      pixiAdapter.cancelMarquee()
+    } else if (activeCanvasTool === 'text') {
+      activeCanvasTool = 'select'
+      renderCanvasToolUI()
+    }
   }
   if ((event.key === 'Delete' || event.key === 'Backspace') && currentScene?.selectedSegmentIds?.length) {
     const active = document.activeElement
