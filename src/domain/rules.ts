@@ -3,11 +3,20 @@ import { BASE_CAPACITY_SIXTHS, SIXTHS_PER_STONE, type Actor, type ItemDefinition
 export type SpeedBand = 'green' | 'yellow' | 'orange' | 'red'
 
 export type SpeedProfile = {
-  readonly explorationFeet: 120 | 90 | 60 | 30
-  readonly combatFeet: 40 | 30 | 20 | 10
-  readonly runningFeet: 120 | 90 | 60 | 30
-  readonly milesPerDay: 24 | 18 | 12 | 6
+  readonly explorationFeet: number
+  readonly combatFeet: number
+  readonly runningFeet: number
+  readonly milesPerDay: number
   readonly band: SpeedBand
+}
+
+export type BaseSpeedProfile = Omit<SpeedProfile, 'band'>
+
+export const defaultBaseSpeedProfile: BaseSpeedProfile = {
+  explorationFeet: 120,
+  combatFeet: 40,
+  runningFeet: 120,
+  milesPerDay: 24,
 }
 
 export const ACCESSIBLE_MISC_LIMIT_SIXTHS = SIXTHS_PER_STONE
@@ -62,6 +71,32 @@ export const speedBandForSixths = (encumbranceSixths: number, hasLoadBearing: bo
 export const speedProfileForSixths = (encumbranceSixths: number, hasLoadBearing: boolean): SpeedProfile => {
   const band = speedBandForSixths(encumbranceSixths, hasLoadBearing)
   return { ...speedTable[band], band }
+}
+
+/** For animals/vehicles: green at ≤50% capacity, orange above. */
+export const speedBandForAnimalOrVehicle = (
+  encumbranceSixths: number,
+  capacitySixths: number,
+): SpeedBand =>
+  encumbranceSixths <= capacitySixths / 2 ? 'green' : 'orange'
+
+/** For animals/vehicles: 100% base speed at ≤50% capacity, 50% base speed above. */
+export const speedProfileForAnimalOrVehicle = (
+  encumbranceSixths: number,
+  capacitySixths: number,
+  baseProfile: BaseSpeedProfile,
+): SpeedProfile => {
+  const band = speedBandForAnimalOrVehicle(encumbranceSixths, capacitySixths)
+  if (band === 'green') {
+    return { ...baseProfile, band }
+  }
+  return {
+    explorationFeet: Math.round(baseProfile.explorationFeet / 2),
+    combatFeet: Math.round(baseProfile.combatFeet / 2),
+    runningFeet: Math.round(baseProfile.runningFeet / 2),
+    milesPerDay: Math.round(baseProfile.milesPerDay / 2),
+    band: 'orange',
+  }
 }
 
 /** Every 7 iron rations, 2 pack into one slot. Effective encumbrance = n - floor(n/7). */

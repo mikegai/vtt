@@ -5,9 +5,12 @@ import {
   capacitySixthsForAnimal,
   capacitySixthsForStrengthMod,
   coinsToSixths,
+  defaultBaseSpeedProfile,
   encumbranceCostSixths,
   ironRationEffectiveSixths,
+  speedBandForAnimalOrVehicle,
   speedBandForSixths,
+  speedProfileForAnimalOrVehicle,
   stoneToSixths,
 } from '../domain/rules'
 import type { Actor, ItemDefinition } from '../domain/types'
@@ -81,4 +84,38 @@ describe('ACKS rules', () => {
     expect(ironRationEffectiveSixths(15)).toBe(13)
   })
 
+  describe('animal/vehicle encumbrance (50% breakpoint)', () => {
+    it('speedBandForAnimalOrVehicle: green at ≤50% capacity, orange above', () => {
+      const cap60 = stoneToSixths(60)
+      expect(speedBandForAnimalOrVehicle(0, cap60)).toBe('green')
+      expect(speedBandForAnimalOrVehicle(stoneToSixths(30), cap60)).toBe('green')
+      expect(speedBandForAnimalOrVehicle(stoneToSixths(30) + 1, cap60)).toBe('orange')
+      expect(speedBandForAnimalOrVehicle(cap60, cap60)).toBe('orange')
+    })
+
+    it('speedProfileForAnimalOrVehicle: full base at ≤50%, halved above', () => {
+      const cap60 = stoneToSixths(60)
+      const at25 = speedProfileForAnimalOrVehicle(stoneToSixths(15), cap60, defaultBaseSpeedProfile)
+      expect(at25.band).toBe('green')
+      expect(at25.explorationFeet).toBe(120)
+      expect(at25.combatFeet).toBe(40)
+      expect(at25.milesPerDay).toBe(24)
+
+      const at75 = speedProfileForAnimalOrVehicle(stoneToSixths(45), cap60, defaultBaseSpeedProfile)
+      expect(at75.band).toBe('orange')
+      expect(at75.explorationFeet).toBe(60)
+      expect(at75.combatFeet).toBe(20)
+      expect(at75.milesPerDay).toBe(12)
+    })
+
+    it('speedProfileForAnimalOrVehicle: custom base profile halves correctly', () => {
+      const cap50 = stoneToSixths(50)
+      const muleBase = { explorationFeet: 90, combatFeet: 30, runningFeet: 90, milesPerDay: 18 }
+      const encumbered = speedProfileForAnimalOrVehicle(stoneToSixths(30), cap50, muleBase)
+      expect(encumbered.band).toBe('orange')
+      expect(encumbered.explorationFeet).toBe(45)
+      expect(encumbered.combatFeet).toBe(15)
+      expect(encumbered.milesPerDay).toBe(9)
+    })
+  })
 })

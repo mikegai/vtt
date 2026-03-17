@@ -3,8 +3,10 @@ import { buildLabelLadder } from '../domain/labels'
 import { packDeterministic, type PackInput } from '../domain/packing'
 import {
   capacitySixthsForActor,
+  defaultBaseSpeedProfile,
   encumbranceCostSixths,
   formatSixthsAsStone,
+  speedProfileForAnimalOrVehicle,
   speedProfileForSixths,
 } from '../domain/rules'
 import { BASE_CAPACITY_SIXTHS, SIXTHS_PER_STONE, type Actor, type CanonicalState, type InventoryEntry, type ItemDefinition, type WieldGrip } from '../domain/types'
@@ -201,7 +203,14 @@ const buildRow = (
     .map((input) => encumbranceCostSixths(input.definition, input.entry.quantity))
     .reduce((sum, value) => sum + value, 0)
 
-  const speed = speedProfileForSixths(encumbranceSixths, actor.stats.hasLoadBearing)
+  const speed =
+    (actor.kind === 'animal' || actor.kind === 'vehicle') && actor.capacityStone != null
+      ? speedProfileForAnimalOrVehicle(
+          encumbranceSixths,
+          capacitySixths,
+          actor.baseSpeedProfile ?? defaultBaseSpeedProfile,
+        )
+      : speedProfileForSixths(encumbranceSixths, actor.stats.hasLoadBearing)
   const overflowSixths = segments.filter((segment) => segment.isOverflow).reduce((sum, segment) => sum + segment.sizeSixths, 0)
 
   return {

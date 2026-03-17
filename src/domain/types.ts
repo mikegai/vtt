@@ -55,6 +55,13 @@ export type Actor = {
   readonly ownerActorId?: string
   /** For animals: total capacity in stone (e.g. mule 50, medium riding horse 60). */
   readonly capacityStone?: number
+  /** For animals/vehicles: base speed when unencumbered (100% at ≤50% capacity, 50% when over). */
+  readonly baseSpeedProfile?: {
+    readonly explorationFeet: number
+    readonly combatFeet: number
+    readonly runningFeet: number
+    readonly milesPerDay: number
+  }
   /** Entry id wielded in left hand. Mutually exclusive with right; both can point to same 2-handed item. */
   readonly leftWieldingEntryId?: string
   /** Entry id wielded in right hand. A 2-handed item loses both if either hand is reassigned. */

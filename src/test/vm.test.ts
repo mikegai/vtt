@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest'
+import { stoneToSixths } from '../domain/rules'
+import type { CanonicalState } from '../domain/types'
 import { sampleState } from '../sample-data'
 import { buildBoardVM } from '../vm/vm'
 
@@ -75,4 +77,38 @@ describe('board view model', () => {
     expect(ration14.filter((s) => s.tooltip.title === '2 iron rations').length).toBe(2)
   })
 
+  it('animal row uses 50% rule: green band and base speed at ≤50% capacity', () => {
+    const board = buildBoardVM(sampleState)
+    const templarRow = board.rows.find((r) => r.actorId === 'templar')
+    const horseRow = templarRow!.childRows.find((r) => r.actorId === 'templarHorse')
+    expect(horseRow).toBeDefined()
+    // Horse has 60 stone capacity; saddle(4)+saddlebag(3)+7 rations(7)=14 stone ≈23% → green
+    expect(horseRow!.speed.band).toBe('green')
+    expect(horseRow!.speed.explorationFeet).toBe(120)
+    expect(horseRow!.speed.milesPerDay).toBe(24)
+  })
+
+  it('animal row uses 50% rule: orange band and halved speed over 50% capacity', () => {
+    const entries = { ...sampleState.inventoryEntries }
+    const horseEntryIds = Object.keys(entries).filter((id) => entries[id].actorId === 'templarHorse')
+    horseEntryIds.forEach((id) => delete entries[id])
+    entries.templarHorseHeavyLoad = {
+      id: 'templarHorseHeavyLoad',
+      actorId: 'templarHorse',
+      itemDefId: 'laborersTools',
+      quantity: 31,
+      zone: 'stowed',
+    }
+    const stateWithHeavyHorse: CanonicalState = { ...sampleState, inventoryEntries: entries }
+    const board = buildBoardVM(stateWithHeavyHorse)
+    const templarRow = board.rows.find((r) => r.actorId === 'templar')
+    const horseRow = templarRow!.childRows.find((r) => r.actorId === 'templarHorse')
+    expect(horseRow).toBeDefined()
+    // Horse 60 stone: 31 laborers tools (6 sixths each) = 186 sixths = 31 stone > 50% → orange
+    expect(horseRow!.encumbranceSixths).toBe(stoneToSixths(31))
+    expect(horseRow!.encumbranceSixths).toBeGreaterThan(horseRow!.capacitySixths / 2)
+    expect(horseRow!.speed.band).toBe('orange')
+    expect(horseRow!.speed.explorationFeet).toBe(60)
+    expect(horseRow!.speed.milesPerDay).toBe(12)
+  })
 })

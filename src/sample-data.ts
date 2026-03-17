@@ -45,6 +45,7 @@ export const sampleState: CanonicalState = {
       active: true,
       ownerActorId: 'templar',
       capacityStone: 60,
+      baseSpeedProfile: { explorationFeet: 120, combatFeet: 40, runningFeet: 120, milesPerDay: 24 },
     },
     thug: {
       id: 'thug',
@@ -89,6 +90,7 @@ export const sampleState: CanonicalState = {
       active: true,
       ownerActorId: 'cataphract',
       capacityStone: 60,
+      baseSpeedProfile: { explorationFeet: 120, combatFeet: 40, runningFeet: 120, milesPerDay: 24 },
     },
   },
   movementGroups: {
