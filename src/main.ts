@@ -284,6 +284,7 @@ const showContextMenu = (
     const submenuId = 'ctx-wield-sub'
     html += `<div class="context-menu-submenu-wrap"><div class="context-menu-submenu-trigger" data-submenu="${submenuId}">Wield</div><div id="${submenuId}" class="context-menu-submenu">${wieldItems.join('')}</div></div>`
   }
+  html += `<button class="context-menu-item" data-action="duplicate" type="button">Duplicate</button>`
   html += `<button class="context-menu-item context-menu-item-danger" data-action="delete" type="button">Delete</button>`
 
   if (!html) return
@@ -340,6 +341,11 @@ const showContextMenu = (
         postToWorker({
           type: 'INTENT',
           intent: { type: 'UNWIELD', segmentId },
+        })
+      } else if (action === 'duplicate') {
+        postToWorker({
+          type: 'INTENT',
+          intent: { type: 'DUPLICATE_ENTRY', segmentIds: effectiveSegmentIds },
         })
       } else if (action === 'delete') {
         postToWorker({

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { sampleState } from '../sample-data'
 import { addInventoryNodeToState } from '../worker/inventory-node'
+import { applyDropIntentToState } from '../vm/drop-intent'
 import type { WorkerLocalState } from '../worker/scene-vm'
 
 const makeLocalState = (overrides: Partial<WorkerLocalState> = {}): WorkerLocalState =>
@@ -69,5 +70,26 @@ describe('addInventoryNodeToState', () => {
     expect(result.localState.nodeGroupOverrides[result.newActorId]).toBe('custom-group:test')
     expect(result.localState.groupNodeOrders['custom-group:test']).toEqual(['cutthroat', result.newActorId])
     expect(result.localState.nodePositions[result.newActorId]).toBeUndefined()
+  })
+
+  it('uses a node id shape that remains valid drop target actor id', () => {
+    const localState = makeLocalState()
+    const created = addInventoryNodeToState({
+      worldState: sampleState,
+      localState,
+      x: 100,
+      y: 200,
+      groupId: null,
+      now: () => 1234,
+      random: () => 0.5,
+    })
+
+    const moved = applyDropIntentToState(created.worldState, {
+      segmentIds: ['cutthroatHandAxe'],
+      sourceNodeIds: { cutthroatHandAxe: 'cutthroat' },
+      targetNodeId: created.newActorId,
+    })
+
+    expect(moved.inventoryEntries.cutthroatHandAxe?.actorId).toBe(created.newActorId)
   })
 })

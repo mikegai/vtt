@@ -28,11 +28,11 @@ const defaultMovementGroupId = (state: CanonicalState): string => {
 const createInventoryActorId = (state: CanonicalState, now: () => number, random: () => number): string => {
   let attempt = 0
   while (attempt < 1000) {
-    const id = `inventory:${now().toString(36)}:${Math.floor(random() * 1_000_000).toString(36)}${attempt > 0 ? `:${attempt}` : ''}`
+    const id = `inventory_${now().toString(36)}_${Math.floor(random() * 1_000_000).toString(36)}${attempt > 0 ? `_${attempt}` : ''}`
     if (!state.actors[id]) return id
     attempt += 1
   }
-  return `inventory:${now().toString(36)}:${Math.floor(random() * 1_000_000).toString(36)}:fallback`
+  return `inventory_${now().toString(36)}_${Math.floor(random() * 1_000_000).toString(36)}_fallback`
 }
 
 const nextInventoryName = (state: CanonicalState): string => {

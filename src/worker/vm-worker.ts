@@ -1179,6 +1179,73 @@ const applyIntent = (intent: WorkerIntent): void => {
     return
   }
 
+  if (intent.type === 'DUPLICATE_ENTRY') {
+    if (!worldState) return
+    const scene = buildSceneVM(worldState, localState)
+    const newSegmentIds: string[] = []
+    for (const segmentId of intent.segmentIds) {
+      const entryId = segmentIdToEntryId(segmentId)
+      const entry = worldState.inventoryEntries[entryId]
+      if (!entry) continue
+      const itemDef = worldState.itemDefinitions[entry.itemDefId]
+      if (!itemDef) continue
+
+      const newEntryId = createInventoryEntryId(worldState, entry.itemDefId)
+      const isDropped = !!entry.carryGroupId || entry.zone === 'dropped' || !!entry.state?.dropped
+      const freeSeg = scene.freeSegments?.[segmentId]
+
+      const nextEntry: InventoryEntry = {
+        id: newEntryId,
+        actorId: entry.actorId,
+        itemDefId: entry.itemDefId,
+        quantity: 1,
+        zone: isDropped ? 'dropped' : entry.zone,
+        carryGroupId: isDropped ? entry.carryGroupId : undefined,
+        state: isDropped ? { dropped: true } : undefined,
+      }
+      worldState = {
+        ...worldState,
+        inventoryEntries: {
+          ...worldState.inventoryEntries,
+          [newEntryId]: nextEntry,
+        },
+      }
+      newSegmentIds.push(newEntryId)
+
+      if (isDropped && freeSeg) {
+        const offsetX = 40
+        const offsetY = 60
+        const srcX = freeSeg.x
+        const srcY = freeSeg.y
+        const newPos = { x: srcX + offsetX, y: srcY + offsetY }
+        if (freeSeg.groupId) {
+          const groupPos = localState.groupFreeSegmentPositions[freeSeg.groupId] ?? {}
+          localState = {
+            ...localState,
+            groupFreeSegmentPositions: {
+              ...localState.groupFreeSegmentPositions,
+              [freeSeg.groupId]: { ...groupPos, [newEntryId]: newPos },
+            },
+          }
+        } else {
+          localState = {
+            ...localState,
+            freeSegmentPositions: {
+              ...localState.freeSegmentPositions,
+              [newEntryId]: newPos,
+            },
+          }
+        }
+      }
+    }
+    localState = {
+      ...localState,
+      selectedSegmentIds: newSegmentIds,
+    }
+    recompute()
+    return
+  }
+
   if (intent.type === 'DELETE_ENTRY') {
     if (!worldState) return
     const entryIdsToRemove = new Set<string>()
