@@ -282,6 +282,26 @@ const measureTextWidth = (text: string, fontSize: number): number => {
   return measured
 }
 
+/** Days of rations in a group spanning [groupStartSixth, groupStartSixth + count). */
+const rationDaysInGroup = (
+  run: readonly SceneSegmentVM[],
+  groupStartSixth: number,
+  count: number,
+): number => {
+  if (run[0]?.itemDefId !== 'ironRationsDay') return 0
+  const groupEnd = groupStartSixth + count
+  let days = 0
+  for (const seg of run) {
+    const segEnd = seg.startSixth + seg.sizeSixths
+    const overlapStart = Math.max(seg.startSixth, groupStartSixth)
+    const overlapEnd = Math.min(segEnd, groupEnd)
+    const overlapSixths = Math.max(0, overlapEnd - overlapStart)
+    const daysPerSixth = seg.tooltip.title.toLowerCase().includes('2 daily') ? 4 : 1
+    days += overlapSixths * daysPerSixth
+  }
+  return days
+}
+
 /** Simple pluralizer for item names. Pluralizes only the last word. */
 const pluralize = (name: string): string => {
   const trimmed = name.trim()
@@ -996,6 +1016,25 @@ const drawRunVisuals = (
       }
     })
 
+    for (let i = 0; i < run.length - 1; i += 1) {
+      const boundarySixth = run[i].startSixth + run[i].sizeSixths
+      const div = new Graphics()
+      div.eventMode = 'none'
+      if (boundarySixth % 6 === 0) {
+        const stone = boundarySixth / 6
+        const x = baseX + stoneToX(stone - 1) + STONE_W
+        const y = baseY + stoneToY(stone - 1)
+        drawDashedLine(div, x, y, x, y + STONE_H, strokeColor, 0.85)
+      } else {
+        const stone = Math.floor(boundarySixth / 6)
+        const row = boundarySixth % 6
+        const x = baseX + stoneToX(stone)
+        const y = baseY + stoneToY(stone) + row * CELL_H
+        drawDashedLine(div, x, y, x + STONE_W, y, strokeColor, 0.85)
+      }
+      container.addChild(div)
+    }
+
     const lb = labelBounds ?? { x: baseX, y: baseY, w: STONE_W, h: STONE_H }
     const centerX = lb.x + lb.w / 2
     const centerY = lb.y + lb.h / 2
@@ -1026,25 +1065,6 @@ const drawRunVisuals = (
     container.addChild(clip)
     txt.mask = clip
     container.addChild(txt)
-
-    for (let i = 0; i < run.length - 1; i += 1) {
-      const boundarySixth = run[i].startSixth + run[i].sizeSixths
-      const div = new Graphics()
-      div.eventMode = 'none'
-      if (boundarySixth % 6 === 0) {
-        const stone = boundarySixth / 6
-        const x = baseX + stoneToX(stone - 1) + STONE_W
-        const y = baseY + stoneToY(stone - 1)
-        drawDashedLine(div, x, y, x, y + STONE_H, strokeColor, 0.85)
-      } else {
-        const stone = Math.floor(boundarySixth / 6)
-        const row = boundarySixth % 6
-        const x = baseX + stoneToX(stone)
-        const y = baseY + stoneToY(stone) + row * CELL_H
-        drawDashedLine(div, x, y, x + STONE_W, y, strokeColor, 0.85)
-      }
-      container.addChild(div)
-    }
   } else {
     const groups = groupSixthsByStone(startSixth, sizeSixths)
     const PAD = 1.2
@@ -1084,16 +1104,38 @@ const drawRunVisuals = (
         { tl: top ? 4 : 0, tr: top ? 4 : 0, br: bottom ? 4 : 0, bl: bottom ? 4 : 0 },
       )
       container.addChild(rect)
-      // labels are drawn per-part below
     })
+    for (let i = 0; i < run.length - 1; i += 1) {
+      const boundarySixth = run[i].startSixth + run[i].sizeSixths
+      const div = new Graphics()
+      div.eventMode = 'none'
+      if (boundarySixth % 6 === 0) {
+        const stone = boundarySixth / 6
+        const x = baseX + stoneToX(stone - 1) + STONE_W
+        const y = baseY + stoneToY(stone - 1)
+        drawDashedLine(div, x, y, x, y + STONE_H, strokeColor, 0.85)
+      } else {
+        const stone = Math.floor(boundarySixth / 6)
+        const row = boundarySixth % 6
+        const x = baseX + stoneToX(stone)
+        const y = baseY + stoneToY(stone) + row * CELL_H
+        drawDashedLine(div, x, y, x + STONE_W, y, strokeColor, 0.85)
+      }
+      container.addChild(div)
+    }
     const baseName = run[0]?.fullLabel ?? run[0]?.tooltip.title ?? '?'
+    const isRations = run[0]?.itemDefId === 'ironRationsDay'
     groups.forEach((group) => {
       const x = baseX + stoneToX(group.stone)
       const y = baseY + stoneToY(group.stone) + group.startRow * CELL_H
       const w = STONE_W
       const h = group.count * CELL_H
-      const partQty = Math.max(1, group.count)
-      const partName = partQty === 1 ? baseName : pluralize(baseName)
+      const groupStartSixth = group.stone * 6 + group.startRow
+      const days = isRations ? rationDaysInGroup(run, groupStartSixth, group.count) : 0
+      const partQty = isRations && days > 0 ? days : Math.max(1, group.count)
+      const partName = isRations && days > 0
+        ? (days === 1 ? 'daily iron ration' : 'daily iron rations')
+        : (partQty === 1 ? baseName : pluralize(baseName))
       const partLabel = `${partQty} ${partName}`
       const steps = [partLabel, compactToken(partLabel, 4), compactToken(partLabel, 3), compactToken(partLabel, 2), compactToken(partLabel, 1)]
       const fit = selectLabelFitForSteps(
@@ -1123,25 +1165,6 @@ const drawRunVisuals = (
       txt.mask = clip
       container.addChild(txt)
     })
-
-    for (let i = 0; i < run.length - 1; i += 1) {
-      const boundarySixth = run[i].startSixth + run[i].sizeSixths
-      const div = new Graphics()
-      div.eventMode = 'none'
-      if (boundarySixth % 6 === 0) {
-        const stone = boundarySixth / 6
-        const x = baseX + stoneToX(stone - 1) + STONE_W
-        const y = baseY + stoneToY(stone - 1)
-        drawDashedLine(div, x, y, x, y + STONE_H, strokeColor, 0.85)
-      } else {
-        const stone = Math.floor(boundarySixth / 6)
-        const row = boundarySixth % 6
-        const x = baseX + stoneToX(stone)
-        const y = baseY + stoneToY(stone) + row * CELL_H
-        drawDashedLine(div, x, y, x + STONE_W, y, strokeColor, 0.85)
-      }
-      container.addChild(div)
-    }
   }
 }
 
