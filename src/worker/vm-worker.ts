@@ -508,6 +508,58 @@ const applyIntent = (intent: WorkerIntent): void => {
     return
   }
 
+  if (intent.type === 'DELETE_GROUP') {
+    const groupId = intent.groupId
+    if (!groupId.startsWith('custom-group:')) {
+      recompute()
+      return
+    }
+    const scene = buildSceneVM(worldState ?? { actors: {}, itemDefinitions: {}, inventoryEntries: {}, carryGroups: {}, movementGroups: {} }, localState)
+    const group = scene.groups?.[groupId]
+    if (!group) {
+      recompute()
+      return
+    }
+    const groupPos = localState.groupPositions[groupId] ?? { x: 0, y: 0 }
+    const nextNodeGroupOverrides = { ...localState.nodeGroupOverrides }
+    const nextNodePositions = { ...localState.nodePositions }
+    group.nodeIds.forEach((nodeId, i) => {
+      nextNodeGroupOverrides[nodeId] = null
+      nextNodePositions[nodeId] = { x: groupPos.x + 40, y: groupPos.y + 60 + i * 80 }
+    })
+    const nextFreeSegmentPositions = { ...localState.freeSegmentPositions }
+    const groupSegPositions = localState.groupFreeSegmentPositions[groupId] ?? {}
+    for (const [segmentId, pos] of Object.entries(groupSegPositions)) {
+      nextFreeSegmentPositions[segmentId] = { x: groupPos.x + pos.x, y: groupPos.y + pos.y }
+    }
+    const nextGroupFreeSegmentPositions = { ...localState.groupFreeSegmentPositions }
+    delete nextGroupFreeSegmentPositions[groupId]
+    const nextGroupNodeOrders = { ...localState.groupNodeOrders }
+    delete nextGroupNodeOrders[groupId]
+    const nextCustomGroups = { ...localState.customGroups }
+    delete nextCustomGroups[groupId]
+    const nextGroupPositions = { ...localState.groupPositions }
+    delete nextGroupPositions[groupId]
+    const nextGroupSizeOverrides = { ...localState.groupSizeOverrides }
+    delete nextGroupSizeOverrides[groupId]
+    const nextGroupTitleOverrides = { ...localState.groupTitleOverrides }
+    delete nextGroupTitleOverrides[groupId]
+    localState = {
+      ...localState,
+      nodeGroupOverrides: nextNodeGroupOverrides,
+      nodePositions: nextNodePositions,
+      freeSegmentPositions: nextFreeSegmentPositions,
+      groupFreeSegmentPositions: nextGroupFreeSegmentPositions,
+      groupNodeOrders: nextGroupNodeOrders,
+      customGroups: nextCustomGroups,
+      groupPositions: nextGroupPositions,
+      groupSizeOverrides: nextGroupSizeOverrides,
+      groupTitleOverrides: nextGroupTitleOverrides,
+    }
+    recompute()
+    return
+  }
+
   if (intent.type === 'ADD_INVENTORY_NODE') {
     if (!worldState) {
       recompute()

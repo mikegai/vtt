@@ -368,6 +368,42 @@ const showContextMenu = (
   }, 0)
 }
 
+const showGroupContextMenu = (groupId: string, clientX: number, clientY: number): void => {
+  closeContextMenu()
+
+  contextMenuEl.innerHTML = [
+    `<button class="context-menu-item context-menu-item-danger" data-action="delete-group" type="button">Delete Group</button>`,
+  ].join('')
+  contextMenuEl.hidden = false
+
+  const padding = 8
+  const maxX = window.innerWidth - contextMenuEl.offsetWidth - padding
+  const maxY = window.innerHeight - contextMenuEl.offsetHeight - padding
+  contextMenuEl.style.left = `${Math.min(clientX, maxX)}px`
+  contextMenuEl.style.top = `${Math.min(clientY, maxY)}px`
+
+  contextMenuEl.querySelectorAll('.context-menu-item').forEach((btn) => {
+    const b = btn as HTMLButtonElement
+    b.addEventListener('click', (e) => {
+      e.stopPropagation()
+      if (b.dataset.action === 'delete-group') {
+        postToWorker({ type: 'INTENT', intent: { type: 'DELETE_GROUP', groupId } })
+      }
+      setTimeout(closeContextMenu, 0)
+    })
+  })
+
+  setTimeout(() => {
+    activeContextMenuClose = (event: Event): void => {
+      const target = event.target
+      if (target instanceof Node && contextMenuEl.contains(target)) return
+      closeContextMenu()
+    }
+    document.addEventListener('click', activeContextMenuClose)
+    document.addEventListener('contextmenu', activeContextMenuClose)
+  }, 0)
+}
+
 const showNodeContextMenu = (nodeId: string, clientX: number, clientY: number): void => {
   closeContextMenu()
 
@@ -687,6 +723,9 @@ const pixiAdapter = new PixiBoardAdapter(canvasHost, {
   },
   onNodeContextMenu(nodeId, clientX, clientY) {
     showNodeContextMenu(nodeId, clientX, clientY)
+  },
+  onGroupContextMenu(groupId, clientX, clientY) {
+    showGroupContextMenu(groupId, clientX, clientY)
   },
   onCanvasContextMenu(worldX, worldY, clientX, clientY) {
     const groupId = pixiAdapter.getGroupIdAtPoint(worldX, worldY)

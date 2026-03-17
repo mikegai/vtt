@@ -49,7 +49,7 @@ type ActiveDrag =
   | { type: 'groupResize'; state: GroupResizeDragData }
   | { type: 'nodeReorder'; state: NodeReorderDragData }
   | { type: 'label'; state: LabelDragData }
-  | { type: 'marquee'; startX: number; startY: number; endX: number; endY: number }
+  | { type: 'marquee'; startWorldX: number; startWorldY: number; endX: number; endY: number }
 
 type AdapterHandlers = {
   onHoverSegment(segmentId: string | null): void
@@ -70,6 +70,7 @@ type AdapterHandlers = {
   ): void
   onContextMenu(segmentId: string, nodeId: string, clientX: number, clientY: number): void
   onNodeContextMenu?(nodeId: string, clientX: number, clientY: number): void
+  onGroupContextMenu?(groupId: string, clientX: number, clientY: number): void
   onCanvasContextMenu?(worldX: number, worldY: number, clientX: number, clientY: number): void
   onSegmentClick?(segmentId: string, nodeId: string, addToSelection: boolean): void
   onSegmentDoubleClick?(segmentId: string, itemDefId: string, nodeId: string): void
@@ -1076,6 +1077,11 @@ export class PixiBoardAdapter {
         this.handlers.onNodeContextMenu?.(nodeId, event.clientX, event.clientY)
         return
       }
+      const groupId = this.hitTestGroupContext(event.clientX, event.clientY)
+      if (groupId && groupId.startsWith('custom-group:')) {
+        this.handlers.onGroupContextMenu?.(groupId, event.clientX, event.clientY)
+        return
+      }
       const world = this.screenToWorld(event.clientX, event.clientY)
       this.handlers.onCanvasContextMenu?.(world.x, world.y, event.clientX, event.clientY)
     })
@@ -1137,7 +1143,9 @@ export class PixiBoardAdapter {
         }
         if (!hitInteractive && this.handlers.onMarqueeSelect) {
           const { x, y } = canvasCoords(event)
-          this.activeDrag = { type: 'marquee', startX: x, startY: y, endX: x, endY: y }
+          const startWorldX = (x - this.pan.x) / this.zoom
+          const startWorldY = (y - this.pan.y) / this.zoom
+          this.activeDrag = { type: 'marquee', startWorldX, startWorldY, endX: x, endY: y }
           this.lastPointerPosition = { clientX: event.clientX, clientY: event.clientY }
           this.startAutoPanLoop()
           this.drawMarquee()
@@ -1417,7 +1425,9 @@ export class PixiBoardAdapter {
     if (!this.marqueeGraphics) return
     this.marqueeGraphics.clear()
     if (this.activeDrag.type !== 'marquee') return
-    const { startX, startY, endX, endY } = this.activeDrag
+    const { startWorldX, startWorldY, endX, endY } = this.activeDrag
+    const startX = startWorldX * this.zoom + this.pan.x
+    const startY = startWorldY * this.zoom + this.pan.y
     const x = Math.min(startX, endX)
     const y = Math.min(startY, endY)
     const w = Math.abs(endX - startX)
@@ -1467,7 +1477,9 @@ export class PixiBoardAdapter {
 
   private updateMarqueePreview(addToSelection: boolean): void {
     if (this.activeDrag.type !== 'marquee') return
-    const { startX, startY, endX, endY } = this.activeDrag
+    const { startWorldX, startWorldY, endX, endY } = this.activeDrag
+    const startX = startWorldX * this.zoom + this.pan.x
+    const startY = startWorldY * this.zoom + this.pan.y
     const w = Math.abs(endX - startX)
     const h = Math.abs(endY - startY)
     if (w < 2 && h < 2) {
@@ -1489,7 +1501,9 @@ export class PixiBoardAdapter {
 
   private finishMarquee(addToSelection: boolean): void {
     if (this.activeDrag.type !== 'marquee' || !this.currentScene || !this.handlers.onMarqueeSelect) return
-    const { startX, startY, endX, endY } = this.activeDrag
+    const { startWorldX, startWorldY, endX, endY } = this.activeDrag
+    const startX = startWorldX * this.zoom + this.pan.x
+    const startY = startWorldY * this.zoom + this.pan.y
     const segmentIds = this.computeSegmentsInMarqueeRect(startX, startY, endX, endY)
     this.clearMarqueePreview()
     this.handlers.onMarqueeSelect(segmentIds, addToSelection)
@@ -1548,6 +1562,24 @@ export class PixiBoardAdapter {
     stonesPerRow = v
     textFitCache.clear()
     // Worker will send new scene with updated node dimensions; applyInit will rebuild
+  }
+
+  /** Hit-test at client coords; returns groupId if over a group (but not a segment or node). */
+  private hitTestGroupContext(clientX: number, clientY: number): string | null {
+    const events = (this.app.renderer as { events?: { mapPositionToPoint: (p: Point, x: number, y: number) => void; rootBoundary?: { hitTest: (x: number, y: number) => Container } } }).events
+    if (!events?.rootBoundary) return null
+    const pt = new Point()
+    events.mapPositionToPoint(pt, clientX, clientY)
+    const hit = events.rootBoundary.hitTest(pt.x, pt.y)
+    if (!hit) return null
+    let cur: Container | null = hit
+    while (cur) {
+      const c = cur as Container & { __segmentContext?: SegmentContext; __nodeId?: string; __groupHandleId?: string }
+      if (c.__segmentContext || c.__nodeId) return null
+      if (typeof c.__groupHandleId === 'string' && c.__groupHandleId.length > 0) return c.__groupHandleId
+      cur = cur.parent
+    }
+    return null
   }
 
   /** Hit-test at client coords; returns nodeId if over a node (header/body) but not a segment. */
@@ -2890,6 +2922,7 @@ export class PixiBoardAdapter {
   private createGroup(group: SceneGroupVM): GroupView {
     const root = new Container()
     root.position.set(group.x, group.y)
+    ;(root as Container & { __groupHandleId?: string }).__groupHandleId = group.id
     const dims = this.getGroupDisplayDimensions(group)
     const displayWidth = dims.width
     const displayHeight = dims.height
