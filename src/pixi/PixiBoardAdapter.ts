@@ -1874,18 +1874,22 @@ export class PixiBoardAdapter {
     const boxBounds: { left: number; top: number; right: number; bottom: number }[] = []
     for (const [groupId, group] of Object.entries(this.currentScene.groups ?? {})) {
       if (!selectedGroupIds.has(groupId)) continue
+      const liveGroupPos = this.groupViews.get(groupId)?.root.position
+      const groupX = liveGroupPos?.x ?? group.x
+      const groupY = liveGroupPos?.y ?? group.y
       const dims = this.getGroupDisplayDimensions(group)
       const g = new Graphics()
       g.eventMode = 'none'
-      g.roundRect(group.x, group.y, dims.width, dims.height, 12)
+      g.roundRect(groupX, groupY, dims.width, dims.height, 12)
       g.stroke({ width: 2, color: 0xc8e4ff, alpha: 0.72 })
       this.selectionOverlayLayer.addChild(g)
-      boxBounds.push({ left: group.x, top: group.y, right: group.x + dims.width, bottom: group.y + dims.height })
+      boxBounds.push({ left: groupX, top: groupY, right: groupX + dims.width, bottom: groupY + dims.height })
     }
     for (const nodeId of selectedNodeIds) {
       const node = this.currentScene.nodes[nodeId]
       if (!node) continue
-      const pos = this.getNodeDisplayPosition(node)
+      const liveNodePos = this.nodeViews.get(nodeId)?.root.position
+      const pos = liveNodePos ? { x: liveNodePos.x, y: liveNodePos.y } : this.getNodeDisplayPosition(node)
       const dims = this.getNodeDisplayDimensions(node)
       const g = new Graphics()
       g.eventMode = 'none'
@@ -1902,7 +1906,8 @@ export class PixiBoardAdapter {
         const segView = view.segmentViews.get(segment.id)
         const bounds = segmentBoundsInNodeLocal(segment, node.slotCols)
         const pos = segmentPositionInNode(segment, node.slotCols)
-        const nodePos = this.getNodeDisplayPosition(node)
+        const liveNodePos = this.nodeViews.get(node.id)?.root.position
+        const nodePos = liveNodePos ? { x: liveNodePos.x, y: liveNodePos.y } : this.getNodeDisplayPosition(node)
         const worldX = nodePos.x + (segView ? segView.container.position.x : pos.x) + bounds.x - pos.x
         const worldY = nodePos.y + (segView ? segView.container.position.y : pos.y) + bounds.y - pos.y
         const left = worldX - PAD
@@ -2316,6 +2321,7 @@ export class PixiBoardAdapter {
     if (groupView) {
       groupView.root.position.set(nextX, nextY)
     }
+    this.updateSelectionOverlay()
     this.handlers.onMoveGroup(drag.groupId, nextX, nextY)
   }
 
@@ -3761,14 +3767,23 @@ export class PixiBoardAdapter {
       if (event.button !== 0 || this.activeDrag.type !== 'idle' || !this.currentScene) return
       this.handlers.onHoverSegment(null)
       this.hideTooltip()
-      const nodeIds: string[] = [nodeId]
-      for (const n of Object.values(this.currentScene.nodes)) {
-        if (n.parentNodeId === nodeId) nodeIds.push(n.id)
+      const selectedNodeIds = this.currentScene.selectedNodeIds ?? []
+      const useMultiSelect = selectedNodeIds.includes(nodeId)
+      const operationNodeIds = useMultiSelect ? [...selectedNodeIds] : [nodeId]
+      const nodeIds: string[] = []
+      for (const nid of operationNodeIds) {
+        nodeIds.push(nid)
+        for (const n of Object.values(this.currentScene.nodes)) {
+          if (n.parentNodeId === nid && !nodeIds.includes(n.id)) nodeIds.push(n.id)
+        }
       }
+      const primaryNodeId = operationNodeIds.includes(nodeId) ? nodeId : operationNodeIds[0]
+      const primaryView = this.nodeViews.get(primaryNodeId)
+      const container = primaryView?.root ?? nodeContainer
       const canvasRect = this.app.canvas.getBoundingClientRect()
       const clientX = typeof event.clientX === 'number' ? event.clientX : event.global.x + canvasRect.left
       const clientY = typeof event.clientY === 'number' ? event.clientY : event.global.y + canvasRect.top
-      this.startNodeReorderDragForNodeIds(nodeIds, [nodeId], nodeId, nodeContainer, handleView, clientX, clientY)
+      this.startNodeReorderDragForNodeIds(nodeIds, operationNodeIds, primaryNodeId, container, handleView, clientX, clientY)
       event.stopPropagation()
     })
     handleView.on('pointerup', () => {
@@ -4173,6 +4188,7 @@ export class PixiBoardAdapter {
       const ip = drag.initialPositions[i]
       c.position.set(ip.x + dx, ip.y + dy)
     }
+    this.updateSelectionOverlay()
     const primaryNode = this.currentScene.nodes[drag.nodeIds[0]]
     const primaryDims = primaryNode ? this.getNodeDisplayDimensions(primaryNode) : null
     const probeX = primaryDims ? x + primaryDims.width / 2 : world.x
@@ -4243,6 +4259,7 @@ export class PixiBoardAdapter {
     this.groupDropIndicator.clear()
     this.skipNodeAnimationOnce.clear()
     const operationNodeIds = drag.operationNodeIds.length > 0 ? drag.operationNodeIds : [drag.nodeIds[0]]
+    drag.nodeIds.forEach((nodeId) => this.skipNodeAnimationOnce.add(nodeId))
     const isSingleOp = operationNodeIds.length === 1
     const isNoOp = !isSingleOp
       ? false
@@ -4275,12 +4292,10 @@ export class PixiBoardAdapter {
         }
       }
     } else if (drag.targetContainNodeId && this.handlers.onDropNodeIntoNode) {
-      drag.nodeIds.forEach((nodeId) => this.skipNodeAnimationOnce.add(nodeId))
       operationNodeIds
         .filter((nodeId) => nodeId !== drag.targetContainNodeId)
         .forEach((nodeId) => this.handlers.onDropNodeIntoNode?.(nodeId, drag.targetContainNodeId!))
     } else if (drag.targetNestParentNodeId && this.handlers.onNestNodeUnder) {
-      drag.nodeIds.forEach((nodeId) => this.skipNodeAnimationOnce.add(nodeId))
       console.info('[pixi node] dispatch onNestNodeUnder', {
         nodeIds: operationNodeIds,
         parentNodeId: drag.targetNestParentNodeId,
@@ -4289,14 +4304,12 @@ export class PixiBoardAdapter {
         .filter((nodeId) => nodeId !== drag.targetNestParentNodeId)
         .forEach((nodeId) => this.handlers.onNestNodeUnder?.(nodeId, drag.targetNestParentNodeId!))
     } else if (drag.targetGroupId && drag.targetIndex < 0 && this.handlers.onMoveNodeInGroup && finalClientX != null && finalClientY != null) {
-      drag.nodeIds.forEach((nodeId) => this.skipNodeAnimationOnce.add(nodeId))
       operationNodeIds.forEach((nodeId) => {
         const view = this.nodeViews.get(nodeId)
         if (!view) return
         this.handlers.onMoveNodeInGroup?.(nodeId, drag.targetGroupId!, view.root.position.x, view.root.position.y)
       })
     } else if (drag.targetGroupId && this.handlers.onMoveNodeToGroupIndex) {
-      drag.nodeIds.forEach((nodeId) => this.skipNodeAnimationOnce.add(nodeId))
       console.info('[pixi node] dispatch onMoveNodeToGroupIndex', {
         nodeIds: operationNodeIds,
         groupId: drag.targetGroupId,
@@ -4306,7 +4319,6 @@ export class PixiBoardAdapter {
         this.handlers.onMoveNodeToGroupIndex?.(nodeId, drag.targetGroupId!, drag.targetIndex + idx)
       })
     } else if (finalClientX != null && finalClientY != null && this.handlers.onMoveNodeToRoot) {
-      drag.nodeIds.forEach((nodeId) => this.skipNodeAnimationOnce.add(nodeId))
       console.info('[pixi node] dispatch onMoveNodeToRoot', {
         nodeIds: operationNodeIds,
       })
