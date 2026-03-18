@@ -4,6 +4,7 @@ import type { SceneFreeSegmentVM, SceneGroupVM, SceneLabelVM, SceneNodeVM, Scene
 import { resolveNodeGroupDropMode } from './node-drop-mode'
 import { canShowNodeResizeHandles } from './node-resize-availability'
 import { groupContiguousSameType } from './group-contiguous-same-type'
+import { resolveDragStartFromSegment } from './drag-start-resolution'
 
 /** Stored on segment blocks for context-menu hit testing. */
 type SegmentContext = { segmentId: string; nodeId: string }
@@ -34,6 +35,7 @@ type NodeResizeDragData = {
 
 type NodeReorderDragData = {
   readonly nodeIds: string[]
+  readonly operationNodeIds: string[]
   readonly nodeContainers: Container[]
   readonly initialPositions: { x: number; y: number }[]
   readonly handleView: Container
@@ -2862,15 +2864,111 @@ export class PixiBoardAdapter {
     }
   }
 
+  private startGroupDragById(groupId: string, clientX: number, clientY: number): boolean {
+    if (!this.currentScene || !this.handlers.onMoveGroup) return false
+    const group = this.currentScene.groups?.[groupId] ?? null
+    if (!group) return false
+    const world = this.screenToWorld(clientX, clientY)
+    this.activeDrag = {
+      type: 'group',
+      state: {
+        groupId: group.id,
+        anchorOffset: { x: world.x - group.x, y: world.y - group.y },
+      },
+    }
+    this.lastPointerPosition = { clientX, clientY }
+    this.startAutoPanLoop()
+    return true
+  }
+
+  private startNodeReorderDragForNodeIds(
+    visualNodeIds: readonly string[],
+    operationNodeIds: readonly string[],
+    primaryNodeId: string,
+    primaryNodeContainer: Container,
+    handleView: Container,
+    clientX: number,
+    clientY: number,
+  ): boolean {
+    if (!this.currentScene || visualNodeIds.length === 0) return false
+    const dedupedVisualIds = [...new Set(visualNodeIds)]
+    const nodeContainers: Container[] = []
+    const resolvedNodeIds: string[] = []
+    for (const nid of dedupedVisualIds) {
+      const v = this.nodeViews.get(nid)
+      if (!v) continue
+      resolvedNodeIds.push(nid)
+      nodeContainers.push(v.root)
+    }
+    if (nodeContainers.length === 0) return false
+    const initialPositions = nodeContainers.map((c) => ({ x: c.position.x, y: c.position.y }))
+    const point = this.screenToWorld(clientX, clientY)
+    const anchorOffset = {
+      x: point.x - primaryNodeContainer.position.x,
+      y: point.y - primaryNodeContainer.position.y,
+    }
+    const primaryNode = this.currentScene.nodes[primaryNodeId]
+    const originalGroupId = primaryNode?.groupId ?? null
+    const originalIndex = (() => {
+      const gid = primaryNode?.groupId
+      if (!gid || !this.currentScene?.groups?.[gid]) return 0
+      const idx = this.currentScene.groups[gid].nodeIds.indexOf(primaryNodeId)
+      return idx >= 0 ? idx : 0
+    })()
+    const originalNestParentId = primaryNode?.parentNodeId ?? null
+    this.activeDrag = {
+      type: 'nodeReorder',
+      state: {
+        nodeIds: resolvedNodeIds,
+        operationNodeIds: [...new Set(operationNodeIds)],
+        nodeContainers,
+        initialPositions,
+        handleView,
+        anchorOffset,
+        originalGroupId,
+        originalIndex,
+        originalNestParentId,
+        targetGroupId: null,
+        targetIndex: 0,
+        targetNestParentNodeId: null,
+        targetContainNodeId: null,
+      },
+    }
+    this.lastPointerPosition = { clientX, clientY }
+    this.startAutoPanLoop()
+    handleView.cursor = 'grabbing'
+    return true
+  }
+
   private beginSegmentDrag(segment: SceneSegmentVM, sourceNodeId: string, clientX: number, clientY: number): void {
     if (this.activeDrag.type !== 'idle' && this.activeDrag.type !== 'pendingSegment') return
+    if (!this.currentScene) return
+    const sourceNode = this.currentScene.nodes[sourceNodeId]
+    const sourceGroupId = sourceNode?.groupId ?? null
+    const dragResolution = resolveDragStartFromSegment(
+      sourceNodeId,
+      sourceGroupId,
+      this.currentScene.selectedNodeIds ?? [],
+      this.currentScene.selectedGroupIds ?? [],
+    )
+    if (dragResolution.type === 'group') {
+      if (this.startGroupDragById(dragResolution.groupId, clientX, clientY)) return
+    }
+    if (dragResolution.type === 'node') {
+      const selectedNodeIds = this.currentScene.selectedNodeIds ?? []
+      const operationNodeIds = selectedNodeIds.length > 0 ? selectedNodeIds : [sourceNodeId]
+      const primaryNodeId = operationNodeIds.includes(sourceNodeId) ? sourceNodeId : operationNodeIds[0]
+      const primaryView = this.nodeViews.get(primaryNodeId)
+      if (primaryView) {
+        if (this.startNodeReorderDragForNodeIds(operationNodeIds, operationNodeIds, primaryNodeId, primaryView.root, primaryView.root, clientX, clientY)) return
+      }
+    }
     const selectedIds = this.currentScene?.selectedSegmentIds ?? []
     const segmentIds = selectedIds.includes(segment.id) && selectedIds.length > 1
       ? [...selectedIds]
       : [segment.id]
     const segmentById = new Map<string, SceneSegmentVM>()
     const sourceNodeIds: Record<string, string> = {}
-    if (!this.currentScene) return
     for (const node of Object.values(this.currentScene.nodes)) {
       for (const seg of node.segments) {
         if (segmentIds.includes(seg.id)) {
@@ -3667,57 +3765,10 @@ export class PixiBoardAdapter {
       for (const n of Object.values(this.currentScene.nodes)) {
         if (n.parentNodeId === nodeId) nodeIds.push(n.id)
       }
-      const nodeContainers: Container[] = []
-      for (const nid of nodeIds) {
-        const v = this.nodeViews.get(nid)
-        if (v) nodeContainers.push(v.root)
-      }
-      if (nodeContainers.length === 0) return
-      const initialPositions = nodeContainers.map((c) => ({ x: c.position.x, y: c.position.y }))
       const canvasRect = this.app.canvas.getBoundingClientRect()
       const clientX = typeof event.clientX === 'number' ? event.clientX : event.global.x + canvasRect.left
       const clientY = typeof event.clientY === 'number' ? event.clientY : event.global.y + canvasRect.top
-      const point = this.screenToWorld(clientX, clientY)
-      const anchorOffset = {
-        x: point.x - nodeContainer.position.x,
-        y: point.y - nodeContainer.position.y,
-      }
-      const primaryNode = this.currentScene.nodes[nodeId]
-      const originalGroupId = primaryNode?.groupId ?? null
-      const originalIndex = (() => {
-        const gid = primaryNode?.groupId
-        if (!gid || !this.currentScene?.groups?.[gid]) return 0
-        const idx = this.currentScene.groups[gid].nodeIds.indexOf(nodeId)
-        return idx >= 0 ? idx : 0
-      })()
-      const originalNestParentId = primaryNode?.parentNodeId ?? null
-      this.activeDrag = {
-        type: 'nodeReorder',
-        state: {
-          nodeIds,
-          nodeContainers,
-          initialPositions,
-          handleView,
-          anchorOffset,
-          originalGroupId,
-          originalIndex,
-          originalNestParentId,
-          targetGroupId: null,
-          targetIndex: 0,
-          targetNestParentNodeId: null,
-          targetContainNodeId: null,
-        },
-      }
-      this.lastPointerPosition = { clientX, clientY }
-      this.startAutoPanLoop()
-      handleView.cursor = 'grabbing'
-      console.info('[pixi node] drag start', {
-        nodeId,
-        nodeIds,
-        originalGroupId,
-        originalIndex,
-        originalNestParentId,
-      })
+      this.startNodeReorderDragForNodeIds(nodeIds, [nodeId], nodeId, nodeContainer, handleView, clientX, clientY)
       event.stopPropagation()
     })
     handleView.on('pointerup', () => {
@@ -4191,8 +4242,12 @@ export class PixiBoardAdapter {
     drag.handleView.cursor = 'grab'
     this.groupDropIndicator.clear()
     this.skipNodeAnimationOnce.clear()
-    const isNoOp = drag.targetContainNodeId
-      ? drag.targetContainNodeId === drag.nodeIds[0]
+    const operationNodeIds = drag.operationNodeIds.length > 0 ? drag.operationNodeIds : [drag.nodeIds[0]]
+    const isSingleOp = operationNodeIds.length === 1
+    const isNoOp = !isSingleOp
+      ? false
+      : drag.targetContainNodeId
+      ? drag.targetContainNodeId === operationNodeIds[0]
       : drag.targetNestParentNodeId
       ? drag.targetNestParentNodeId === drag.originalNestParentId
       : drag.targetGroupId != null
@@ -4221,40 +4276,45 @@ export class PixiBoardAdapter {
       }
     } else if (drag.targetContainNodeId && this.handlers.onDropNodeIntoNode) {
       drag.nodeIds.forEach((nodeId) => this.skipNodeAnimationOnce.add(nodeId))
-      this.handlers.onDropNodeIntoNode(drag.nodeIds[0], drag.targetContainNodeId)
+      operationNodeIds
+        .filter((nodeId) => nodeId !== drag.targetContainNodeId)
+        .forEach((nodeId) => this.handlers.onDropNodeIntoNode?.(nodeId, drag.targetContainNodeId!))
     } else if (drag.targetNestParentNodeId && this.handlers.onNestNodeUnder) {
       drag.nodeIds.forEach((nodeId) => this.skipNodeAnimationOnce.add(nodeId))
       console.info('[pixi node] dispatch onNestNodeUnder', {
-        nodeId: drag.nodeIds[0],
+        nodeIds: operationNodeIds,
         parentNodeId: drag.targetNestParentNodeId,
       })
-      this.handlers.onNestNodeUnder(drag.nodeIds[0], drag.targetNestParentNodeId)
+      operationNodeIds
+        .filter((nodeId) => nodeId !== drag.targetNestParentNodeId)
+        .forEach((nodeId) => this.handlers.onNestNodeUnder?.(nodeId, drag.targetNestParentNodeId!))
     } else if (drag.targetGroupId && drag.targetIndex < 0 && this.handlers.onMoveNodeInGroup && finalClientX != null && finalClientY != null) {
-      const world = this.screenToWorld(finalClientX, finalClientY)
       drag.nodeIds.forEach((nodeId) => this.skipNodeAnimationOnce.add(nodeId))
-      this.handlers.onMoveNodeInGroup(
-        drag.nodeIds[0],
-        drag.targetGroupId,
-        world.x - drag.anchorOffset.x,
-        world.y - drag.anchorOffset.y,
-      )
+      operationNodeIds.forEach((nodeId) => {
+        const view = this.nodeViews.get(nodeId)
+        if (!view) return
+        this.handlers.onMoveNodeInGroup?.(nodeId, drag.targetGroupId!, view.root.position.x, view.root.position.y)
+      })
     } else if (drag.targetGroupId && this.handlers.onMoveNodeToGroupIndex) {
       drag.nodeIds.forEach((nodeId) => this.skipNodeAnimationOnce.add(nodeId))
       console.info('[pixi node] dispatch onMoveNodeToGroupIndex', {
-        nodeId: drag.nodeIds[0],
+        nodeIds: operationNodeIds,
         groupId: drag.targetGroupId,
         index: drag.targetIndex,
       })
-      this.handlers.onMoveNodeToGroupIndex(drag.nodeIds[0], drag.targetGroupId, drag.targetIndex)
+      operationNodeIds.forEach((nodeId, idx) => {
+        this.handlers.onMoveNodeToGroupIndex?.(nodeId, drag.targetGroupId!, drag.targetIndex + idx)
+      })
     } else if (finalClientX != null && finalClientY != null && this.handlers.onMoveNodeToRoot) {
-      const world = this.screenToWorld(finalClientX, finalClientY)
       drag.nodeIds.forEach((nodeId) => this.skipNodeAnimationOnce.add(nodeId))
       console.info('[pixi node] dispatch onMoveNodeToRoot', {
-        nodeId: drag.nodeIds[0],
-        x: world.x - drag.anchorOffset.x,
-        y: world.y - drag.anchorOffset.y,
+        nodeIds: operationNodeIds,
       })
-      this.handlers.onMoveNodeToRoot(drag.nodeIds[0], world.x - drag.anchorOffset.x, world.y - drag.anchorOffset.y)
+      operationNodeIds.forEach((nodeId) => {
+        const view = this.nodeViews.get(nodeId)
+        if (!view) return
+        this.handlers.onMoveNodeToRoot?.(nodeId, view.root.position.x, view.root.position.y)
+      })
     }
     this.endDrag()
   }
