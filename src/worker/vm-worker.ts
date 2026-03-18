@@ -681,6 +681,9 @@ const applyIntent = (intent: WorkerIntent): void => {
     worldState = { ...worldState, actors: nextActors }
     const scene = buildSceneVM(worldState, localState)
     const subtreeNodeIds = collectSceneSubtreeNodeIds(scene, intent.nodeId)
+    const parentNode = scene.nodes[intent.parentNodeId]
+    const parentIsUngrouped = parentNode?.groupId == null
+
     const baseOrders: Record<string, readonly string[]> = {}
     for (const [gid, g] of Object.entries(scene.groups ?? {})) {
       baseOrders[gid] = [...g.nodeIds]
@@ -689,18 +692,28 @@ const applyIntent = (intent: WorkerIntent): void => {
     for (const [gid, order] of Object.entries(nextOrders)) {
       nextOrders[gid] = order.filter((id) => !subtreeNodeIds.includes(id))
     }
-    const targetGroupId = parentActor.movementGroupId
-    const target = [...(nextOrders[targetGroupId] ?? [])]
-    const parentIndex = target.indexOf(intent.parentNodeId)
-    const insertIndex = parentIndex >= 0 ? parentIndex + 1 : target.length
-    target.splice(insertIndex, 0, ...subtreeNodeIds)
-    nextOrders[targetGroupId] = target
+
     const nextOverrides = { ...localState.nodeGroupOverrides }
     const nextNodePositions = { ...localState.nodePositions }
     subtreeNodeIds.forEach((nodeId) => {
-      nextOverrides[nodeId] = parentActor.movementGroupId
       delete nextNodePositions[nodeId]
     })
+
+    if (parentIsUngrouped) {
+      subtreeNodeIds.forEach((nodeId) => {
+        nextOverrides[nodeId] = null
+      })
+    } else {
+      const targetGroupId = parentActor.movementGroupId
+      const target = [...(nextOrders[targetGroupId] ?? [])]
+      const parentIndex = target.indexOf(intent.parentNodeId)
+      const insertIndex = parentIndex >= 0 ? parentIndex + 1 : target.length
+      target.splice(insertIndex, 0, ...subtreeNodeIds)
+      nextOrders[targetGroupId] = target
+      subtreeNodeIds.forEach((nodeId) => {
+        nextOverrides[nodeId] = parentActor.movementGroupId
+      })
+    }
     localState = {
       ...localState,
       nodeGroupOverrides: nextOverrides,
