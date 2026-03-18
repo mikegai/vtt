@@ -924,6 +924,7 @@ const drawBlendedSegmentRects = (
   maxVisibleLabelPx: number,
   dimmed: boolean,
   dimmedAlpha: number,
+  stonesPerRowOverride = stonesPerRow,
 ): { hitBounds: { x: number; y: number; w: number; h: number }; groupBounds: { x: number; y: number; w: number; h: number }[] } => {
   const groups = groupSixthsByStone(segment.startSixth, segment.sizeSixths)
   const PAD = 1.2
@@ -940,8 +941,8 @@ const drawBlendedSegmentRects = (
   const isDropPreview = segment.isDropPreview === true
 
   groups.forEach((group, index) => {
-    const x = baseX + stoneToX(group.stone)
-    const y = baseY + stoneToY(group.stone) + group.startRow * CELL_H
+    const x = baseX + stoneToX(group.stone, stonesPerRowOverride)
+    const y = baseY + stoneToY(group.stone, stonesPerRowOverride) + group.startRow * CELL_H
     const w = STONE_W
     const h = group.count * CELL_H
 
@@ -1186,14 +1187,14 @@ const drawRunVisuals = (
       div.eventMode = 'none'
       if (boundarySixth % 6 === 0) {
         const stone = boundarySixth / 6
-        const x = baseX + stoneToX(stone - 1) + STONE_W
-        const y = baseY + stoneToY(stone - 1)
+        const x = baseX + stoneToX(stone - 1, stonesPerRowOverride) + STONE_W
+        const y = baseY + stoneToY(stone - 1, stonesPerRowOverride)
         drawDashedLine(div, x, y, x, y + STONE_H, strokeColor, 0.85)
       } else {
         const stone = Math.floor(boundarySixth / 6)
         const row = boundarySixth % 6
-        const x = baseX + stoneToX(stone)
-        const y = baseY + stoneToY(stone) + row * CELL_H
+        const x = baseX + stoneToX(stone, stonesPerRowOverride)
+        const y = baseY + stoneToY(stone, stonesPerRowOverride) + row * CELL_H
         drawDashedLine(div, x, y, x + STONE_W, y, strokeColor, 0.85)
       }
       container.addChild(div)
@@ -1201,8 +1202,8 @@ const drawRunVisuals = (
     const baseName = run[0]?.fullLabel ?? run[0]?.tooltip.title ?? '?'
     const isRations = run[0]?.itemDefId === 'ironRationsDay'
     groups.forEach((group) => {
-      const x = baseX + stoneToX(group.stone)
-      const y = baseY + stoneToY(group.stone) + group.startRow * CELL_H
+      const x = baseX + stoneToX(group.stone, stonesPerRowOverride)
+      const y = baseY + stoneToY(group.stone, stonesPerRowOverride) + group.startRow * CELL_H
       const w = STONE_W
       const h = group.count * CELL_H
       const groupStartSixth = group.stone * 6 + group.startRow
@@ -1267,6 +1268,7 @@ const drawSegmentBlock = (
   getLastDragEndTime?: () => number,
   allowInteraction?: () => boolean,
   visuallyMerged?: boolean,
+  stonesPerRowOverride = stonesPerRow,
 ): void => {
   const o = baseOffset ?? { x: 0, y: 0 }
   const { startStone, endStone } = segmentStoneSpan(segment.startSixth, segment.sizeSixths)
@@ -1334,7 +1336,7 @@ const drawSegmentBlock = (
   }
 
   if (visuallyMerged) {
-    const b = segmentBoundsInNodeLocal(segment)
+    const b = segmentBoundsInNodeLocal(segment, stonesPerRowOverride)
     block.rect(b.x - o.x, b.y - o.y, b.w, b.h)
     block.fill({ color: 0xffffff, alpha: 0.001 })
     block.hitArea = new Rectangle(b.x - o.x, b.y - o.y, b.w, b.h)
@@ -1343,7 +1345,7 @@ const drawSegmentBlock = (
   }
 
   if (isMultiStone(segment)) {
-    const chunks = splitStonesAtWrap(startStone, endStone)
+    const chunks = splitStonesAtWrap(startStone, endStone, stonesPerRowOverride)
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
     const strokeOpt = isDropPreview
       ? { width: 2, color: 0x5cadee, alpha: 0.7 }
@@ -1354,8 +1356,8 @@ const drawSegmentBlock = (
     const R = 5
     const multi = chunks.length > 1
     chunks.forEach((chunk, idx) => {
-      const cx = SLOT_START_X + stoneToX(chunk.start) - o.x
-      const cy = TOP_BAND_H + stoneToY(chunk.start) - o.y
+      const cx = SLOT_START_X + stoneToX(chunk.start, stonesPerRowOverride) - o.x
+      const cy = TOP_BAND_H + stoneToY(chunk.start, stonesPerRowOverride) - o.y
       const cw = (chunk.end - chunk.start) * (STONE_W + STONE_GAP) - STONE_GAP
       const ch = STONE_H
       const pad = 0.5
@@ -1442,6 +1444,7 @@ const drawSegmentBlock = (
       maxVisibleLabelPx,
       dimmed,
       dimmedAlpha,
+      stonesPerRowOverride,
     )
     block.rect(hitBounds.x, hitBounds.y, hitBounds.w, hitBounds.h)
     block.fill({ color: 0xffffff, alpha: 0.001 })
@@ -1915,11 +1918,12 @@ export class PixiBoardAdapter {
     for (const [nodeId, view] of this.nodeViews) {
       const node = this.currentScene.nodes[nodeId]
       if (!node) continue
+      const layoutCols = this.getNodeLayoutCols(node)
       for (const segment of node.segments) {
         if (!selectedIds.has(segment.id)) continue
         const segView = view.segmentViews.get(segment.id)
-        const bounds = segmentBoundsInNodeLocal(segment, node.slotCols)
-        const pos = segmentPositionInNode(segment, node.slotCols)
+        const bounds = segmentBoundsInNodeLocal(segment, layoutCols)
+        const pos = segmentPositionInNode(segment, layoutCols)
         const liveNodePos = this.nodeViews.get(node.id)?.root.position
         const nodePos = liveNodePos ? { x: liveNodePos.x, y: liveNodePos.y } : this.getNodeDisplayPosition(node)
         const worldX = nodePos.x + (segView ? segView.container.position.x : pos.x) + bounds.x - pos.x
@@ -2091,9 +2095,10 @@ export class PixiBoardAdapter {
     const originNode = this.currentScene.nodes[origin.nodeId]
     if (!originNode) return selection
     const nodePos = this.getNodeDisplayPosition(originNode)
+    const layoutCols = this.getNodeLayoutCols(originNode)
     for (const segment of originNode.segments) {
       if (segment.isDropPreview) continue
-      const b = segmentBoundsInNodeLocal(segment, originNode.slotCols)
+      const b = segmentBoundsInNodeLocal(segment, layoutCols)
       const x = nodePos.x + b.x
       const y = nodePos.y + b.y
       if (intersects(x, y, b.w, b.h)) selection.segmentIds.push(segment.id)
@@ -2658,9 +2663,7 @@ export class PixiBoardAdapter {
     if (!node) return null
 
     const visibleSlotCount = this.getVisibleSlotCount(node)
-    const layoutCols = this.isNodeExpanded(node.id)
-      ? node.slotCols
-      : Math.max(1, Math.min(visibleSlotCount, stonesPerRow))
+    const layoutCols = this.getNodeLayoutCols(node)
     const nodeMeterWidth = meterWidthForCols(layoutCols)
     const slotAreaH = slotAreaHeightForSlots(visibleSlotCount, layoutCols)
     const pos = this.getNodeDisplayPosition(node)
@@ -2818,9 +2821,10 @@ export class PixiBoardAdapter {
     const node = this.currentScene.nodes[nodeId]
     if (!node) return centers
     const nodePos = this.getNodeDisplayPosition(node)
+    const layoutCols = this.getNodeLayoutCols(node)
     const previewSegs = node.segments.filter((s) => s.isDropPreview === true)
     if (previewSegs.length > 0) {
-      previewSegs.forEach((s) => centers.push(segmentCenterInNode(s, nodePos.x, nodePos.y)))
+      previewSegs.forEach((s) => centers.push(segmentCenterInNode(s, nodePos.x, nodePos.y, layoutCols)))
       return centers
     }
     let cursorSixth = startSixth
@@ -2829,14 +2833,14 @@ export class PixiBoardAdapter {
       if (isSameAsSource) {
         const actualSeg = node.segments.find((s) => s.id === seg.id)
         if (actualSeg) {
-          centers.push(segmentCenterInNode(actualSeg, nodePos.x, nodePos.y))
+          centers.push(segmentCenterInNode(actualSeg, nodePos.x, nodePos.y, layoutCols))
           cursorSixth = actualSeg.startSixth + actualSeg.sizeSixths
         } else {
-          centers.push(segmentCenterInNode({ ...seg, startSixth: cursorSixth, sizeSixths: seg.sizeSixths }, nodePos.x, nodePos.y))
+          centers.push(segmentCenterInNode({ ...seg, startSixth: cursorSixth, sizeSixths: seg.sizeSixths }, nodePos.x, nodePos.y, layoutCols))
           cursorSixth += seg.sizeSixths
         }
       } else {
-        centers.push(segmentCenterInNode({ ...seg, startSixth: cursorSixth, sizeSixths: seg.sizeSixths }, nodePos.x, nodePos.y))
+        centers.push(segmentCenterInNode({ ...seg, startSixth: cursorSixth, sizeSixths: seg.sizeSixths }, nodePos.x, nodePos.y, layoutCols))
         cursorSixth += seg.sizeSixths
       }
     }
@@ -2849,7 +2853,8 @@ export class PixiBoardAdapter {
     if (sourceNode) {
       const sourceSegment = sourceNode.segments.find((s) => s.id === segmentId)
       if (!sourceSegment) return null
-      const b = segmentBoundsInNodeLocal(sourceSegment)
+      const layoutCols = this.getNodeLayoutCols(sourceNode)
+      const b = segmentBoundsInNodeLocal(sourceSegment, layoutCols)
       const nodePos = this.getNodeDisplayPosition(sourceNode)
       return {
         x: nodePos.x + b.x,
@@ -3246,9 +3251,7 @@ export class PixiBoardAdapter {
     const visibleSlotCount = isExpanded
       ? Math.max(slotCount, node.slotCols * node.slotRows)
       : collapsedVisibleSlotCount(node.segments, slotCount)
-    const layoutCols = isExpanded
-      ? node.slotCols
-      : Math.max(1, Math.min(visibleSlotCount, stonesPerRow))
+    const layoutCols = this.getNodeLayoutCols(node)
     const totalMeterWidth = meterWidthForCols(layoutCols)
     const totalWidth = SLOT_START_X + totalMeterWidth + 20
     const totalHeight = TOP_BAND_H + (isExpanded ? slotAreaHeightForRows(node.slotRows) : slotAreaHeightForSlots(visibleSlotCount)) + NODE_BOTTOM_PADDING
@@ -3535,6 +3538,7 @@ export class PixiBoardAdapter {
         () => this.lastDragEndTime,
         () => this.activeDrag.type === 'idle' || this.activeDrag.type === 'pendingSegment',
         mergedIds.has(segment.id),
+        layoutCols,
       )
       segmentContainer.addChild(segContainer)
     })
@@ -3685,6 +3689,7 @@ export class PixiBoardAdapter {
     const tier = getZoomTier(this.zoom)
     const textCompensationScale = getTextCompensationScale(this.zoom)
     const totalSixths = totalSixthsForSlots(node.slotCount)
+    const layoutCols = this.getNodeLayoutCols(node)
 
     view.runVisualsContainer.removeChildren()
     const runs = groupContiguousSameType(node.segments)
@@ -3711,7 +3716,7 @@ export class PixiBoardAdapter {
         this.maxVisibleLabelPx,
         dimmed,
         dimmedAlpha,
-        node.slotCols,
+        layoutCols,
       )
     }
 
@@ -3724,7 +3729,7 @@ export class PixiBoardAdapter {
       }
     }
     node.segments.forEach((segment) => {
-      const pos = segmentPositionInNode(segment, node.slotCols)
+      const pos = segmentPositionInNode(segment, layoutCols)
       let segView = view.segmentViews.get(segment.id)
       if (!segView) {
         const segContainer = new Container()
@@ -3759,6 +3764,7 @@ export class PixiBoardAdapter {
           () => this.lastDragEndTime,
           () => this.activeDrag.type === 'idle' || this.activeDrag.type === 'pendingSegment',
           mergedIds.has(segment.id),
+          layoutCols,
         )
         view.segmentContainer.addChild(segContainer)
       } else {
@@ -3799,6 +3805,7 @@ export class PixiBoardAdapter {
           () => this.lastDragEndTime,
           () => this.activeDrag.type === 'idle' || this.activeDrag.type === 'pendingSegment',
           mergedIds.has(segment.id),
+          layoutCols,
         )
       }
     })
@@ -4811,6 +4818,13 @@ export class PixiBoardAdapter {
   private getVisibleSlotCount(node: SceneNodeVM): number {
     const expanded = this.isNodeExpanded(node.id)
     return expanded ? Math.max(node.slotCount, node.slotCols * node.slotRows) : collapsedVisibleSlotCount(node.segments, node.slotCount)
+  }
+
+  private getNodeLayoutCols(node: SceneNodeVM): number {
+    const visibleSlotCount = this.getVisibleSlotCount(node)
+    return this.isNodeExpanded(node.id)
+      ? node.slotCols
+      : Math.max(1, Math.min(visibleSlotCount, stonesPerRow))
   }
 
   private getNodeDisplayDimensionsForExpanded(
