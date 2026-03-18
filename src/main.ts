@@ -672,11 +672,20 @@ const pixiAdapter = new PixiBoardAdapter(canvasHost, {
   onMoveNodeToGroupIndex(nodeId, groupId, index) {
     postToWorker({ type: 'INTENT', intent: { type: 'MOVE_NODE_TO_GROUP_INDEX', nodeId, groupId, index } })
   },
+  onMoveNodesToGroupIndex(moves) {
+    postToWorker({ type: 'INTENT', intent: { type: 'MOVE_NODES_TO_GROUP_INDEX', moves } })
+  },
   onMoveNodeInGroup(nodeId, groupId, x, y) {
     postToWorker({ type: 'INTENT', intent: { type: 'MOVE_NODE_IN_GROUP', nodeId, groupId, x, y } })
   },
+  onMoveNodesInGroup(moves) {
+    postToWorker({ type: 'INTENT', intent: { type: 'MOVE_NODES_IN_GROUP', moves } })
+  },
   onDropNodeIntoNode(nodeId, targetNodeId) {
     postToWorker({ type: 'INTENT', intent: { type: 'DROP_NODE_INTO_NODE', nodeId, targetNodeId } })
+  },
+  onDropNodesIntoNode(nodeIds, targetNodeId) {
+    postToWorker({ type: 'INTENT', intent: { type: 'DROP_NODES_INTO_NODE', nodeIds, targetNodeId } })
   },
   onConnectNodeParent(nodeId, parentNodeId) {
     postToWorker({ type: 'INTENT', intent: { type: 'CONNECT_NODE_PARENT', nodeId, parentNodeId } })
@@ -687,6 +696,9 @@ const pixiAdapter = new PixiBoardAdapter(canvasHost, {
   onMoveNodeToRoot(nodeId, x, y) {
     console.info('[main node] post MOVE_NODE_TO_ROOT', { nodeId, x, y })
     postToWorker({ type: 'INTENT', intent: { type: 'MOVE_NODE_TO_ROOT', nodeId, x, y } })
+  },
+  onMoveNodesToRoot(moves) {
+    postToWorker({ type: 'INTENT', intent: { type: 'MOVE_NODES_TO_ROOT', moves } })
   },
   onZoomChange(_zoom) {},
   onDragSegmentStart(segmentIds) {

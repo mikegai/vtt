@@ -140,11 +140,24 @@ export type WorkerIntent =
   | { readonly type: 'ADD_INVENTORY_NODE'; readonly x: number; readonly y: number; readonly groupId?: string | null }
   | { readonly type: 'UPDATE_GROUP_TITLE'; readonly groupId: string; readonly title: string }
   | { readonly type: 'MOVE_NODE_TO_GROUP_INDEX'; readonly nodeId: string; readonly groupId: string; readonly index: number }
+  | {
+      readonly type: 'MOVE_NODES_TO_GROUP_INDEX'
+      readonly moves: readonly { readonly nodeId: string; readonly groupId: string; readonly index: number }[]
+    }
   | { readonly type: 'MOVE_NODE_IN_GROUP'; readonly nodeId: string; readonly groupId: string; readonly x: number; readonly y: number }
+  | {
+      readonly type: 'MOVE_NODES_IN_GROUP'
+      readonly moves: readonly { readonly nodeId: string; readonly groupId: string; readonly x: number; readonly y: number }[]
+    }
   | { readonly type: 'DROP_NODE_INTO_NODE'; readonly nodeId: string; readonly targetNodeId: string }
+  | { readonly type: 'DROP_NODES_INTO_NODE'; readonly nodeIds: readonly string[]; readonly targetNodeId: string }
   | { readonly type: 'CONNECT_NODE_PARENT'; readonly nodeId: string; readonly parentNodeId: string }
   | { readonly type: 'NEST_NODE_UNDER'; readonly nodeId: string; readonly parentNodeId: string }
   | { readonly type: 'MOVE_NODE_TO_ROOT'; readonly nodeId: string; readonly x: number; readonly y: number }
+  | {
+      readonly type: 'MOVE_NODES_TO_ROOT'
+      readonly moves: readonly { readonly nodeId: string; readonly x: number; readonly y: number }[]
+    }
   | { readonly type: 'UPDATE_NODE_TITLE'; readonly nodeId: string; readonly title: string }
   | { readonly type: 'DRAG_SEGMENT_START'; readonly segmentIds: readonly string[] }
   | { readonly type: 'DRAG_SEGMENT_UPDATE'; readonly targetNodeId: string | null }

@@ -5,6 +5,7 @@ import { resolveNodeGroupDropMode } from './node-drop-mode'
 import { canShowNodeResizeHandles } from './node-resize-availability'
 import { groupContiguousSameType } from './group-contiguous-same-type'
 import { resolveDragStartFromSegment } from './drag-start-resolution'
+import { decideNodeMotion } from './drag-motion-policy'
 
 /** Stored on segment blocks for context-menu hit testing. */
 type SegmentContext = { segmentId: string; nodeId: string }
@@ -36,6 +37,8 @@ type NodeResizeDragData = {
 type NodeReorderDragData = {
   readonly nodeIds: string[]
   readonly operationNodeIds: string[]
+  readonly primaryNodeId: string
+  readonly primaryInitialPosition: { x: number; y: number }
   readonly nodeContainers: Container[]
   readonly initialPositions: { x: number; y: number }[]
   readonly handleView: Container
@@ -60,6 +63,11 @@ type ConnectorDragData = {
   readonly fromX: number
   readonly fromY: number
   targetNodeId: string | null
+}
+
+type DragMotionTransaction = {
+  readonly transactionId: number
+  readonly remainingNodeIds: Set<string>
 }
 
 type MarqueeSelection = {
@@ -93,11 +101,15 @@ type AdapterHandlers = {
   onSetGroupListView?(groupId: string, enabled: boolean): void
   onResizeNode?(nodeId: string, slotCols: number, slotRows: number): void
   onMoveNodeToGroupIndex?(nodeId: string, groupId: string, index: number): void
+  onMoveNodesToGroupIndex?(moves: readonly { nodeId: string; groupId: string; index: number }[]): void
   onMoveNodeInGroup?(nodeId: string, groupId: string, x: number, y: number): void
+  onMoveNodesInGroup?(moves: readonly { nodeId: string; groupId: string; x: number; y: number }[]): void
   onDropNodeIntoNode?(nodeId: string, targetNodeId: string): void
+  onDropNodesIntoNode?(nodeIds: readonly string[], targetNodeId: string): void
   onConnectNodeParent?(nodeId: string, parentNodeId: string): void
   onNestNodeUnder?(nodeId: string, parentNodeId: string): void
   onMoveNodeToRoot?(nodeId: string, x: number, y: number): void
+  onMoveNodesToRoot?(moves: readonly { nodeId: string; x: number; y: number }[]): void
   onZoomChange(zoom: number): void
   onDragSegmentStart(segmentIds: string[]): void
   onDragSegmentUpdate(targetNodeId: string | null): void
@@ -1488,6 +1500,8 @@ export class PixiBoardAdapter {
   private readonly groupDisplayHeights = new Map<string, number>()
   private readonly skipNodeAnimationOnce = new Set<string>()
   private readonly skipSegmentAnimationOnce = new Set<string>()
+  private nextDragMotionTransactionId = 1
+  private dragMotionTransaction: DragMotionTransaction | null = null
   private readonly hiddenNodeContentIds = new Set<string>()
   private editingTitle: { type: 'node' | 'group'; id: string } | null = null
   private lastTitleTap:
@@ -2908,6 +2922,10 @@ export class PixiBoardAdapter {
     }
     if (nodeContainers.length === 0) return false
     const initialPositions = nodeContainers.map((c) => ({ x: c.position.x, y: c.position.y }))
+    const primaryInitialPosition = {
+      x: primaryNodeContainer.position.x,
+      y: primaryNodeContainer.position.y,
+    }
     const point = this.screenToWorld(clientX, clientY)
     const anchorOffset = {
       x: point.x - primaryNodeContainer.position.x,
@@ -2927,6 +2945,8 @@ export class PixiBoardAdapter {
       state: {
         nodeIds: resolvedNodeIds,
         operationNodeIds: [...new Set(operationNodeIds)],
+        primaryNodeId,
+        primaryInitialPosition,
         nodeContainers,
         initialPositions,
         handleView,
@@ -3589,16 +3609,29 @@ export class PixiBoardAdapter {
     hoveredSegmentId: string | null,
     filterCategory: string | null,
     selectedSegmentIds: readonly string[],
+    consumeSkipNodeAnimation = true,
   ): void {
     const displayPos = this.getNodeDisplayPosition(node)
     setSpringTarget(view.positionSpring, displayPos.x, displayPos.y)
-    if (this.skipNodeAnimationOnce.delete(node.id)) {
+    const skipNodeAnimation = this.shouldSuppressNodeAnimation(node.id, consumeSkipNodeAnimation)
+    const currentPos = { x: view.root.position.x, y: view.root.position.y }
+    const positionChanged = currentPos.x !== displayPos.x || currentPos.y !== displayPos.y
+    const isInListViewGroup = !!(node.groupId && this.currentScene?.groups?.[node.groupId]?.listViewEnabled)
+    const motion = decideNodeMotion({
+      isDraggedNode: skipNodeAnimation,
+      isInListViewGroup,
+      positionChanged,
+    })
+    if (motion === 'snap') {
       view.positionSpring.x = displayPos.x
       view.positionSpring.y = displayPos.y
       view.positionSpring.targetX = displayPos.x
       view.positionSpring.targetY = displayPos.y
       view.positionSpring.vx = 0
       view.positionSpring.vy = 0
+      view.positionSpring.active = false
+      view.root.position.set(displayPos.x, displayPos.y)
+    } else if (motion === 'none') {
       view.positionSpring.active = false
       view.root.position.set(displayPos.x, displayPos.y)
     }
@@ -4181,15 +4214,15 @@ export class PixiBoardAdapter {
     const world = this.screenToWorld(clientX, clientY)
     const x = world.x - drag.anchorOffset.x
     const y = world.y - drag.anchorOffset.y
-    const dx = x - drag.initialPositions[0].x
-    const dy = y - drag.initialPositions[0].y
+    const dx = x - drag.primaryInitialPosition.x
+    const dy = y - drag.primaryInitialPosition.y
     for (let i = 0; i < drag.nodeContainers.length; i++) {
       const c = drag.nodeContainers[i]
       const ip = drag.initialPositions[i]
       c.position.set(ip.x + dx, ip.y + dy)
     }
     this.updateSelectionOverlay()
-    const primaryNode = this.currentScene.nodes[drag.nodeIds[0]]
+    const primaryNode = this.currentScene.nodes[drag.primaryNodeId]
     const primaryDims = primaryNode ? this.getNodeDisplayDimensions(primaryNode) : null
     const probeX = primaryDims ? x + primaryDims.width / 2 : world.x
     const probeY = primaryDims ? y + primaryDims.height / 2 : world.y
@@ -4226,7 +4259,7 @@ export class PixiBoardAdapter {
     const drag = this.activeDrag.state
     this.setNodeContentVisibility(drag.nodeIds, true)
     if (finalClientX != null && finalClientY != null && this.currentScene) {
-      const primaryNode = this.currentScene.nodes[drag.nodeIds[0]]
+      const primaryNode = this.currentScene.nodes[drag.primaryNodeId]
       if (primaryNode) {
         const primaryDims = this.getNodeDisplayDimensions(primaryNode)
         const world = this.screenToWorld(finalClientX, finalClientY)
@@ -4258,8 +4291,7 @@ export class PixiBoardAdapter {
     drag.handleView.cursor = 'grab'
     this.groupDropIndicator.clear()
     this.skipNodeAnimationOnce.clear()
-    const operationNodeIds = drag.operationNodeIds.length > 0 ? drag.operationNodeIds : [drag.nodeIds[0]]
-    drag.nodeIds.forEach((nodeId) => this.skipNodeAnimationOnce.add(nodeId))
+    const operationNodeIds = drag.operationNodeIds.length > 0 ? drag.operationNodeIds : [drag.primaryNodeId]
     const isSingleOp = operationNodeIds.length === 1
     const isNoOp = !isSingleOp
       ? false
@@ -4271,7 +4303,7 @@ export class PixiBoardAdapter {
         ? (drag.targetIndex >= 0 && drag.targetGroupId === drag.originalGroupId && drag.targetIndex === drag.originalIndex)
         : false
     console.info('[pixi node] drag finish decision', {
-      nodeId: drag.nodeIds[0],
+      nodeId: drag.primaryNodeId,
       targetNestParentNodeId: drag.targetNestParentNodeId,
       targetGroupId: drag.targetGroupId,
       targetIndex: drag.targetIndex,
@@ -4291,11 +4323,16 @@ export class PixiBoardAdapter {
           view.root.position.set(pos.x, pos.y)
         }
       }
-    } else if (drag.targetContainNodeId && this.handlers.onDropNodeIntoNode) {
-      operationNodeIds
-        .filter((nodeId) => nodeId !== drag.targetContainNodeId)
-        .forEach((nodeId) => this.handlers.onDropNodeIntoNode?.(nodeId, drag.targetContainNodeId!))
-    } else if (drag.targetNestParentNodeId && this.handlers.onNestNodeUnder) {
+    } else {
+      this.beginDragMotionTransaction(drag.nodeIds)
+      if (drag.targetContainNodeId) {
+      const nodeIds = operationNodeIds.filter((nodeId) => nodeId !== drag.targetContainNodeId)
+      if (this.handlers.onDropNodesIntoNode) {
+        this.handlers.onDropNodesIntoNode(nodeIds, drag.targetContainNodeId)
+      } else if (this.handlers.onDropNodeIntoNode) {
+        nodeIds.forEach((nodeId) => this.handlers.onDropNodeIntoNode?.(nodeId, drag.targetContainNodeId!))
+      }
+      } else if (drag.targetNestParentNodeId && this.handlers.onNestNodeUnder) {
       console.info('[pixi node] dispatch onNestNodeUnder', {
         nodeIds: operationNodeIds,
         parentNodeId: drag.targetNestParentNodeId,
@@ -4303,30 +4340,53 @@ export class PixiBoardAdapter {
       operationNodeIds
         .filter((nodeId) => nodeId !== drag.targetNestParentNodeId)
         .forEach((nodeId) => this.handlers.onNestNodeUnder?.(nodeId, drag.targetNestParentNodeId!))
-    } else if (drag.targetGroupId && drag.targetIndex < 0 && this.handlers.onMoveNodeInGroup && finalClientX != null && finalClientY != null) {
-      operationNodeIds.forEach((nodeId) => {
+      } else if (drag.targetGroupId && drag.targetIndex < 0 && (this.handlers.onMoveNodesInGroup || this.handlers.onMoveNodeInGroup) && finalClientX != null && finalClientY != null) {
+      const moves = operationNodeIds.flatMap((nodeId) => {
         const view = this.nodeViews.get(nodeId)
-        if (!view) return
-        this.handlers.onMoveNodeInGroup?.(nodeId, drag.targetGroupId!, view.root.position.x, view.root.position.y)
+        if (!view) return []
+        return [{
+          nodeId,
+          groupId: drag.targetGroupId!,
+          x: view.root.position.x,
+          y: view.root.position.y,
+        }]
       })
-    } else if (drag.targetGroupId && this.handlers.onMoveNodeToGroupIndex) {
+      if (this.handlers.onMoveNodesInGroup) {
+        this.handlers.onMoveNodesInGroup(moves)
+      } else {
+        moves.forEach((move) => this.handlers.onMoveNodeInGroup?.(move.nodeId, move.groupId, move.x, move.y))
+      }
+      } else if (drag.targetGroupId && (this.handlers.onMoveNodesToGroupIndex || this.handlers.onMoveNodeToGroupIndex)) {
       console.info('[pixi node] dispatch onMoveNodeToGroupIndex', {
         nodeIds: operationNodeIds,
         groupId: drag.targetGroupId,
         index: drag.targetIndex,
       })
-      operationNodeIds.forEach((nodeId, idx) => {
-        this.handlers.onMoveNodeToGroupIndex?.(nodeId, drag.targetGroupId!, drag.targetIndex + idx)
-      })
-    } else if (finalClientX != null && finalClientY != null && this.handlers.onMoveNodeToRoot) {
+      const moves = operationNodeIds.map((nodeId, idx) => ({
+        nodeId,
+        groupId: drag.targetGroupId!,
+        index: drag.targetIndex + idx,
+      }))
+      if (this.handlers.onMoveNodesToGroupIndex) {
+        this.handlers.onMoveNodesToGroupIndex(moves)
+      } else {
+        moves.forEach((move) => this.handlers.onMoveNodeToGroupIndex?.(move.nodeId, move.groupId, move.index))
+      }
+      } else if (finalClientX != null && finalClientY != null && (this.handlers.onMoveNodesToRoot || this.handlers.onMoveNodeToRoot)) {
       console.info('[pixi node] dispatch onMoveNodeToRoot', {
         nodeIds: operationNodeIds,
       })
-      operationNodeIds.forEach((nodeId) => {
+      const moves = operationNodeIds.flatMap((nodeId) => {
         const view = this.nodeViews.get(nodeId)
-        if (!view) return
-        this.handlers.onMoveNodeToRoot?.(nodeId, view.root.position.x, view.root.position.y)
+        if (!view) return []
+        return [{ nodeId, x: view.root.position.x, y: view.root.position.y }]
       })
+      if (this.handlers.onMoveNodesToRoot) {
+        this.handlers.onMoveNodesToRoot(moves)
+      } else {
+        moves.forEach((move) => this.handlers.onMoveNodeToRoot?.(move.nodeId, move.x, move.y))
+      }
+      }
     }
     this.endDrag()
   }
@@ -4362,6 +4422,29 @@ export class PixiBoardAdapter {
     this.endDrag()
   }
 
+  private beginDragMotionTransaction(nodeIds: readonly string[]): void {
+    const uniqueIds = [...new Set(nodeIds)]
+    this.dragMotionTransaction = {
+      transactionId: this.nextDragMotionTransactionId++,
+      remainingNodeIds: new Set(uniqueIds),
+    }
+  }
+
+  private shouldSuppressNodeAnimation(nodeId: string, consume: boolean): boolean {
+    const txn = this.dragMotionTransaction
+    if (txn && txn.remainingNodeIds.has(nodeId)) {
+      if (consume) {
+        txn.remainingNodeIds.delete(nodeId)
+        if (txn.remainingNodeIds.size === 0) {
+          this.dragMotionTransaction = null
+        }
+      }
+      return true
+    }
+    if (consume) return this.skipNodeAnimationOnce.delete(nodeId)
+    return this.skipNodeAnimationOnce.has(nodeId)
+  }
+
   private setNodeContentVisibility(nodeIds: readonly string[], visible: boolean): void {
     nodeIds.forEach((nodeId) => {
       const view = this.nodeViews.get(nodeId)
@@ -4390,13 +4473,15 @@ export class PixiBoardAdapter {
     }
     this.activeDrag = { type: 'idle' }
     if (this.pendingRebuild && this.currentScene) {
-      this.rebuildAllNodes(this.currentScene)
+      // Do not consume skip flags here; let the next real post-drop scene update
+      // consume them so dragged nodes snap in place instead of animating from origin.
+      this.rebuildAllNodes(this.currentScene, false)
       this.startSpringTicker()
       this.pendingRebuild = false
     }
   }
 
-  private rebuildAllNodes(scene: SceneVM): void {
+  private rebuildAllNodes(scene: SceneVM, consumeSkipNodeAnimation = true): void {
     if (!this.fontsLoaded) return
     this.recomputeDisplayFlow(scene)
     const previousNodePositions = new Map<string, { x: number; y: number }>()
@@ -4451,7 +4536,18 @@ export class PixiBoardAdapter {
         previousSize,
       )
       const displayPos = this.getNodeDisplayPosition(node)
-      if (this.skipNodeAnimationOnce.delete(node.id)) {
+      const previousPos = previousNodePositions.get(node.id)
+      const positionChanged = previousPos
+        ? (previousPos.x !== displayPos.x || previousPos.y !== displayPos.y)
+        : false
+      const skipNodeAnimation = this.shouldSuppressNodeAnimation(node.id, consumeSkipNodeAnimation)
+      const isInListViewGroup = !!(node.groupId && scene.groups?.[node.groupId]?.listViewEnabled)
+      const motion = decideNodeMotion({
+        isDraggedNode: skipNodeAnimation,
+        isInListViewGroup,
+        positionChanged,
+      })
+      if (motion === 'snap' || motion === 'none') {
         view.positionSpring.x = displayPos.x
         view.positionSpring.y = displayPos.y
         view.positionSpring.targetX = displayPos.x
@@ -4461,7 +4557,6 @@ export class PixiBoardAdapter {
         view.positionSpring.active = false
         view.root.position.set(displayPos.x, displayPos.y)
       } else {
-        const previousPos = previousNodePositions.get(node.id)
         if (previousPos) {
           const moved = previousPos.x !== displayPos.x || previousPos.y !== displayPos.y
           if (moved) {

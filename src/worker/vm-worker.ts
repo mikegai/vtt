@@ -38,6 +38,8 @@ let localState: WorkerLocalState = {
   selectedLabelId: null,
 }
 let previousScene: SceneVM | null = null
+let batchDepth = 0
+let pendingRecomputeAfterBatch = false
 
 const post = (message: WorkerToMainMessage): void => {
   self.postMessage(message)
@@ -385,6 +387,10 @@ const migrateWieldToActor = (state: CanonicalState): CanonicalState => {
 
 const recompute = (sendInitIfFirst = false): void => {
   if (!worldState) return
+  if (!sendInitIfFirst && batchDepth > 0) {
+    pendingRecomputeAfterBatch = true
+    return
+  }
   const nextScene = buildSceneVM(worldState, localState)
 
   if (sendInitIfFirst || !previousScene) {
@@ -397,6 +403,20 @@ const recompute = (sendInitIfFirst = false): void => {
   previousScene = nextScene
   if (patches.length > 0) {
     post({ type: 'SCENE_PATCHES', patches, scene: nextScene })
+  }
+}
+
+const runIntentBatch = (intents: readonly WorkerIntent[]): void => {
+  if (intents.length === 0) return
+  batchDepth += 1
+  try {
+    intents.forEach((intent) => applyIntent(intent))
+  } finally {
+    batchDepth -= 1
+    if (batchDepth === 0 && pendingRecomputeAfterBatch) {
+      pendingRecomputeAfterBatch = false
+      recompute()
+    }
   }
 }
 
@@ -682,6 +702,16 @@ const applyIntent = (intent: WorkerIntent): void => {
     return
   }
 
+  if (intent.type === 'MOVE_NODES_TO_GROUP_INDEX') {
+    runIntentBatch(intent.moves.map((move) => ({
+      type: 'MOVE_NODE_TO_GROUP_INDEX' as const,
+      nodeId: move.nodeId,
+      groupId: move.groupId,
+      index: move.index,
+    })))
+    return
+  }
+
   if (intent.type === 'MOVE_NODE_TO_GROUP_INDEX') {
     if (!worldState) {
       recompute()
@@ -745,6 +775,17 @@ const applyIntent = (intent: WorkerIntent): void => {
     groupNodePositions[intent.groupId] = targetGroupPositionMap
     localState = { ...localState, nodeGroupOverrides: overrides, nodePositions, groupNodeOrders: nextOrders, groupNodePositions }
     recompute()
+    return
+  }
+
+  if (intent.type === 'MOVE_NODES_IN_GROUP') {
+    runIntentBatch(intent.moves.map((move) => ({
+      type: 'MOVE_NODE_IN_GROUP' as const,
+      nodeId: move.nodeId,
+      groupId: move.groupId,
+      x: move.x,
+      y: move.y,
+    })))
     return
   }
 
@@ -824,6 +865,15 @@ const applyIntent = (intent: WorkerIntent): void => {
       groupNodeOrders: nextOrders,
     }
     recompute()
+    return
+  }
+
+  if (intent.type === 'DROP_NODES_INTO_NODE') {
+    runIntentBatch(intent.nodeIds.map((nodeId) => ({
+      type: 'DROP_NODE_INTO_NODE' as const,
+      nodeId,
+      targetNodeId: intent.targetNodeId,
+    })))
     return
   }
 
@@ -993,6 +1043,16 @@ const applyIntent = (intent: WorkerIntent): void => {
       subtreeNodeIds,
     })
     recompute()
+    return
+  }
+
+  if (intent.type === 'MOVE_NODES_TO_ROOT') {
+    runIntentBatch(intent.moves.map((move) => ({
+      type: 'MOVE_NODE_TO_ROOT' as const,
+      nodeId: move.nodeId,
+      x: move.x,
+      y: move.y,
+    })))
     return
   }
 
