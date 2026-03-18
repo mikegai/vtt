@@ -78,12 +78,21 @@ export const addInventoryNodeToState = ({
   const nextNodeGroupOverrides = { ...localState.nodeGroupOverrides }
   const nextNodePositions = { ...localState.nodePositions }
   const nextGroupNodeOrders = { ...localState.groupNodeOrders }
+  const nextGroupNodePositions = { ...localState.groupNodePositions }
 
   if (resolvedGroupId) {
     nextNodeGroupOverrides[actorId] = resolvedGroupId
     delete nextNodePositions[actorId]
     const currentOrder = nextGroupNodeOrders[resolvedGroupId] ?? []
     nextGroupNodeOrders[resolvedGroupId] = [...currentOrder, actorId]
+    const existingPositions = nextGroupNodePositions[resolvedGroupId] ?? {}
+    nextGroupNodePositions[resolvedGroupId] = {
+      ...existingPositions,
+      [actorId]: {
+        x,
+        y,
+      },
+    }
   } else {
     nextNodeGroupOverrides[actorId] = null
     nextNodePositions[actorId] = { x, y }
@@ -94,6 +103,7 @@ export const addInventoryNodeToState = ({
     nodeGroupOverrides: nextNodeGroupOverrides,
     nodePositions: nextNodePositions,
     groupNodeOrders: nextGroupNodeOrders,
+    groupNodePositions: nextGroupNodePositions,
   }
 
   return {

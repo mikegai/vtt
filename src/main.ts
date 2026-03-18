@@ -663,8 +663,17 @@ const pixiAdapter = new PixiBoardAdapter(canvasHost, {
   onResizeGroup(groupId, width, height) {
     postToWorker({ type: 'INTENT', intent: { type: 'RESIZE_GROUP', groupId, width, height } })
   },
+  onSetGroupListView(groupId, enabled) {
+    postToWorker({ type: 'INTENT', intent: { type: 'SET_GROUP_LIST_VIEW', groupId, enabled } })
+  },
+  onResizeNode(nodeId, slotCols, slotRows) {
+    postToWorker({ type: 'INTENT', intent: { type: 'RESIZE_NODE', nodeId, slotCols, slotRows } })
+  },
   onMoveNodeToGroupIndex(nodeId, groupId, index) {
     postToWorker({ type: 'INTENT', intent: { type: 'MOVE_NODE_TO_GROUP_INDEX', nodeId, groupId, index } })
+  },
+  onMoveNodeInGroup(nodeId, groupId, x, y) {
+    postToWorker({ type: 'INTENT', intent: { type: 'MOVE_NODE_IN_GROUP', nodeId, groupId, x, y } })
   },
   onNestNodeUnder(nodeId, parentNodeId) {
     postToWorker({ type: 'INTENT', intent: { type: 'NEST_NODE_UNDER', nodeId, parentNodeId } })

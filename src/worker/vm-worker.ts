@@ -6,7 +6,6 @@ import { parseNodeId, segmentIdToEntryId } from '../vm/drop-intent'
 import type { ActorRowVM } from '../vm/vm-types'
 import { buildBoardVM } from '../vm/vm'
 import { diffSceneVM } from './scene-diff'
-import { deriveGroupMode } from './group-mode'
 import { addInventoryNodeToState, createInventoryActorId, nextInventoryName } from './inventory-node'
 import { buildSceneVM, type WorkerLocalState } from './scene-vm'
 import type { MainToWorkerMessage, SceneVM, WorkerIntent, WorkerToMainMessage } from './protocol'
@@ -16,8 +15,11 @@ let localState: WorkerLocalState = {
   hoveredSegmentId: null,
   groupPositions: {},
   groupSizeOverrides: {},
+  groupListViewEnabled: {},
   nodeGroupOverrides: {},
   nodePositions: {},
+  groupNodePositions: {},
+  nodeSizeOverrides: {},
   freeSegmentPositions: {},
   groupFreeSegmentPositions: {},
   groupNodeOrders: {},
@@ -486,6 +488,33 @@ const applyIntent = (intent: WorkerIntent): void => {
     return
   }
 
+  if (intent.type === 'SET_GROUP_LIST_VIEW') {
+    localState = {
+      ...localState,
+      groupListViewEnabled: {
+        ...localState.groupListViewEnabled,
+        [intent.groupId]: intent.enabled,
+      },
+    }
+    recompute()
+    return
+  }
+
+  if (intent.type === 'RESIZE_NODE') {
+    localState = {
+      ...localState,
+      nodeSizeOverrides: {
+        ...localState.nodeSizeOverrides,
+        [intent.nodeId]: {
+          slotCols: Math.max(1, Math.floor(intent.slotCols)),
+          slotRows: Math.max(1, Math.floor(intent.slotRows)),
+        },
+      },
+    }
+    recompute()
+    return
+  }
+
   if (intent.type === 'ADD_GROUP') {
     const groupId = `custom-group:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 7)}`
     const title = `Group ${Object.keys(localState.customGroups).length + 1}`
@@ -502,6 +531,10 @@ const applyIntent = (intent: WorkerIntent): void => {
       groupNodeOrders: {
         ...localState.groupNodeOrders,
         [groupId]: [],
+      },
+      groupListViewEnabled: {
+        ...localState.groupListViewEnabled,
+        [groupId]: false,
       },
     }
     recompute()
@@ -542,6 +575,10 @@ const applyIntent = (intent: WorkerIntent): void => {
     delete nextGroupPositions[groupId]
     const nextGroupSizeOverrides = { ...localState.groupSizeOverrides }
     delete nextGroupSizeOverrides[groupId]
+    const nextGroupListViewEnabled = { ...localState.groupListViewEnabled }
+    delete nextGroupListViewEnabled[groupId]
+    const nextGroupNodePositions = { ...localState.groupNodePositions }
+    delete nextGroupNodePositions[groupId]
     const nextGroupTitleOverrides = { ...localState.groupTitleOverrides }
     delete nextGroupTitleOverrides[groupId]
     localState = {
@@ -554,6 +591,8 @@ const applyIntent = (intent: WorkerIntent): void => {
       customGroups: nextCustomGroups,
       groupPositions: nextGroupPositions,
       groupSizeOverrides: nextGroupSizeOverrides,
+      groupListViewEnabled: nextGroupListViewEnabled,
+      groupNodePositions: nextGroupNodePositions,
       groupTitleOverrides: nextGroupTitleOverrides,
     }
     recompute()
@@ -645,9 +684,107 @@ const applyIntent = (intent: WorkerIntent): void => {
 
     const overrides = { ...localState.nodeGroupOverrides }
     const nodePositions = { ...localState.nodePositions }
+    const groupNodePositions = { ...localState.groupNodePositions }
+    const targetGroupPositionMap = { ...(groupNodePositions[intent.groupId] ?? {}) }
+    const targetGroup = scene.groups[intent.groupId]
+    const targetGroupWorld = targetGroup
+      ? { x: targetGroup.x, y: targetGroup.y }
+      : (localState.groupPositions[intent.groupId] ?? { x: 0, y: 0 })
     for (const nid of nodeIdsToMove) overrides[nid] = intent.groupId
+    for (const nid of nodeIdsToMove) {
+      if (targetGroupPositionMap[nid]) continue
+      const sceneNode = scene.nodes[nid]
+      const worldPos = sceneNode
+        ? { x: sceneNode.x, y: sceneNode.y }
+        : nodePositions[nid]
+      if (!worldPos) continue
+      targetGroupPositionMap[nid] = {
+        x: worldPos.x - targetGroupWorld.x,
+        y: worldPos.y - targetGroupWorld.y,
+      }
+    }
     for (const nid of nodeIdsToMove) delete nodePositions[nid]
-    localState = { ...localState, nodeGroupOverrides: overrides, nodePositions, groupNodeOrders: nextOrders }
+    groupNodePositions[intent.groupId] = targetGroupPositionMap
+    localState = { ...localState, nodeGroupOverrides: overrides, nodePositions, groupNodeOrders: nextOrders, groupNodePositions }
+    recompute()
+    return
+  }
+
+  if (intent.type === 'MOVE_NODE_IN_GROUP') {
+    if (!worldState) {
+      recompute()
+      return
+    }
+    const scene = buildSceneVM(worldState, localState)
+    const targetGroup = scene.groups[intent.groupId]
+    if (!targetGroup) {
+      recompute()
+      return
+    }
+    const nodeIdsToMove = collectSceneSubtreeNodeIds(scene, intent.nodeId)
+    const primaryNode = scene.nodes[intent.nodeId]
+    if (!primaryNode) {
+      recompute()
+      return
+    }
+
+    const baseOrders: Record<string, readonly string[]> = {}
+    for (const [gid, g] of Object.entries(scene.groups ?? {})) {
+      baseOrders[gid] = [...g.nodeIds]
+    }
+    const nextOrders: Record<string, readonly string[]> = { ...baseOrders }
+    for (const [gid, order] of Object.entries(nextOrders)) {
+      nextOrders[gid] = order.filter((id) => !nodeIdsToMove.includes(id))
+    }
+    const targetOrder = [...(nextOrders[intent.groupId] ?? [])]
+    nodeIdsToMove.forEach((id) => {
+      if (!targetOrder.includes(id)) targetOrder.push(id)
+    })
+    nextOrders[intent.groupId] = targetOrder
+
+    for (const nid of nodeIdsToMove) {
+      const actor: Actor | undefined = worldState.actors[nid]
+      if (!actor) continue
+      worldState = {
+        ...worldState,
+        actors: {
+          ...worldState.actors,
+          [nid]: {
+            ...actor,
+            movementGroupId: intent.groupId,
+            ownerActorId: nid === intent.nodeId ? undefined : actor.ownerActorId,
+          },
+        },
+      }
+    }
+
+    const overrides = { ...localState.nodeGroupOverrides }
+    const nodePositions = { ...localState.nodePositions }
+    const groupNodePositions = { ...localState.groupNodePositions }
+    const targetGroupPositions = { ...(groupNodePositions[intent.groupId] ?? {}) }
+    const primaryOffsetX = intent.x - primaryNode.x
+    const primaryOffsetY = intent.y - primaryNode.y
+    for (const nid of nodeIdsToMove) {
+      overrides[nid] = intent.groupId
+      delete nodePositions[nid]
+      const sceneNode = scene.nodes[nid]
+      if (!sceneNode) continue
+      const worldX = sceneNode.x + primaryOffsetX
+      const worldY = sceneNode.y + primaryOffsetY
+      targetGroupPositions[nid] = {
+        x: worldX - targetGroup.x,
+        y: worldY - targetGroup.y,
+      }
+    }
+    groupNodePositions[intent.groupId] = targetGroupPositions
+
+    localState = {
+      ...localState,
+      nodeGroupOverrides: overrides,
+      nodePositions,
+      groupNodePositions,
+      groupNodeOrders: nextOrders,
+    }
     recompute()
     return
   }
@@ -919,8 +1056,7 @@ const applyIntent = (intent: WorkerIntent): void => {
       const source = firstSourceNodeId ? parseNodeId(firstSourceNodeId) : null
       const sceneAtDrop = buildSceneVM(worldState, localState)
       const targetGroup = hoverTargetGroupId ? sceneAtDrop.groups[hoverTargetGroupId] : null
-      const groupCanAcceptSegments =
-        !!targetGroup && deriveGroupMode(targetGroup) !== 'nodes'
+      const groupCanAcceptSegments = !!targetGroup
       if (source) {
         for (const segmentId of segmentIds) {
           const sourceNodeId = sourceNodeIds[segmentId]
@@ -1272,14 +1408,24 @@ const applyIntent = (intent: WorkerIntent): void => {
         Object.entries(localState.freeSegmentPositions).filter(([id]) => !entryIdSet.has(segmentIdToEntryId(id))),
       ),
       groupFreeSegmentPositions: removeSegmentsFromGroupPositions(localState.groupFreeSegmentPositions, entryIdsToRemove),
+      nodeSizeOverrides: Object.fromEntries(
+        Object.entries(localState.nodeSizeOverrides).filter(([id]) => id !== actorId),
+      ),
     }
     const nextGroupNodeOrders = { ...localState.groupNodeOrders }
+    const nextGroupNodePositions = { ...localState.groupNodePositions }
     for (const [gid, order] of Object.entries(nextGroupNodeOrders)) {
       if (order.includes(actorId)) {
         nextGroupNodeOrders[gid] = order.filter((id) => id !== actorId)
       }
+      const positions = nextGroupNodePositions[gid]
+      if (positions?.[actorId]) {
+        const nextPositions = { ...positions }
+        delete nextPositions[actorId]
+        nextGroupNodePositions[gid] = nextPositions
+      }
     }
-    localState = { ...localState, groupNodeOrders: nextGroupNodeOrders }
+    localState = { ...localState, groupNodeOrders: nextGroupNodeOrders, groupNodePositions: nextGroupNodePositions }
     recompute()
     return
   }
@@ -1354,12 +1500,25 @@ const applyIntent = (intent: WorkerIntent): void => {
     }
     const node = scene.nodes[intent.nodeId] ?? Object.values(scene.nodes).find((n) => n.actorId === actorId)
     const groupId = node?.groupId ?? null
+    const sourceSizeOverride = localState.nodeSizeOverrides[actorId]
     if (groupId) {
+      const sourceGroupPositions = localState.groupNodePositions[groupId] ?? {}
+      const sourceRelativePos = sourceGroupPositions[actorId] ?? { x: 40, y: 60 }
       localState = {
         ...localState,
         freeSegmentPositions: nextFreeSegmentPositions,
         groupFreeSegmentPositions: nextGroupFreeSegmentPositions,
         nodeGroupOverrides: { ...localState.nodeGroupOverrides, [newActorId]: groupId },
+        groupNodePositions: {
+          ...localState.groupNodePositions,
+          [groupId]: {
+            ...sourceGroupPositions,
+            [newActorId]: { x: sourceRelativePos.x + 40, y: sourceRelativePos.y + 60 },
+          },
+        },
+        nodeSizeOverrides: sourceSizeOverride
+          ? { ...localState.nodeSizeOverrides, [newActorId]: sourceSizeOverride }
+          : localState.nodeSizeOverrides,
         groupNodeOrders: {
           ...localState.groupNodeOrders,
           [groupId]: [...(localState.groupNodeOrders[groupId] ?? []), newActorId],
@@ -1377,6 +1536,9 @@ const applyIntent = (intent: WorkerIntent): void => {
           ...localState.nodePositions,
           [newActorId]: { x: pos.x + 40, y: pos.y + 60 },
         },
+        nodeSizeOverrides: sourceSizeOverride
+          ? { ...localState.nodeSizeOverrides, [newActorId]: sourceSizeOverride }
+          : localState.nodeSizeOverrides,
         selectedSegmentIds: Array.from(entryIdMap.values()),
       }
     }

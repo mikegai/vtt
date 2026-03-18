@@ -1,7 +1,8 @@
 import { Application, Assets, BitmapText, Color, Container, Graphics, Point, Rectangle } from 'pixi.js'
 import { createSpring1D, createSpring2D, setSpring1DTarget, setSpringTarget, updateSpring1D, updateSpring2D } from './spring'
 import type { SceneFreeSegmentVM, SceneGroupVM, SceneLabelVM, SceneNodeVM, ScenePatch, SceneVM, SceneSegmentVM } from '../worker/protocol'
-import { deriveGroupMode } from '../worker/group-mode'
+import { resolveNodeGroupDropMode } from './node-drop-mode'
+import { canShowNodeResizeHandles } from './node-resize-availability'
 import { groupContiguousSameType } from './group-contiguous-same-type'
 
 /** Stored on segment blocks for context-menu hit testing. */
@@ -18,6 +19,15 @@ type GroupResizeDragData = {
   readonly startPointerWorld: { x: number; y: number }
   readonly startWidth: number
   readonly startHeight: number
+  readonly resizeX: boolean
+  readonly resizeY: boolean
+}
+
+type NodeResizeDragData = {
+  readonly nodeId: string
+  readonly startPointerWorld: { x: number; y: number }
+  readonly startSlotCols: number
+  readonly startSlotRows: number
   readonly resizeX: boolean
   readonly resizeY: boolean
 }
@@ -48,6 +58,7 @@ type ActiveDrag =
   | { type: 'segment'; state: SegmentDragState }
   | { type: 'group'; state: GroupDragData }
   | { type: 'groupResize'; state: GroupResizeDragData }
+  | { type: 'nodeResize'; state: NodeResizeDragData }
   | { type: 'nodeReorder'; state: NodeReorderDragData }
   | { type: 'label'; state: LabelDragData }
   | { type: 'marquee'; startWorldX: number; startWorldY: number; endX: number; endY: number }
@@ -56,7 +67,10 @@ type AdapterHandlers = {
   onHoverSegment(segmentId: string | null): void
   onMoveGroup?(groupId: string, x: number, y: number): void
   onResizeGroup?(groupId: string, width: number, height: number): void
+  onSetGroupListView?(groupId: string, enabled: boolean): void
+  onResizeNode?(nodeId: string, slotCols: number, slotRows: number): void
   onMoveNodeToGroupIndex?(nodeId: string, groupId: string, index: number): void
+  onMoveNodeInGroup?(nodeId: string, groupId: string, x: number, y: number): void
   onNestNodeUnder?(nodeId: string, parentNodeId: string): void
   onMoveNodeToRoot?(nodeId: string, x: number, y: number): void
   onZoomChange(zoom: number): void
@@ -201,6 +215,8 @@ let stonesPerRow = DEFAULT_STONES_PER_ROW
 
 const meterWidthForSlots = (slotCount: number): number =>
   Math.min(slotCount, stonesPerRow) * (STONE_W + STONE_GAP) - STONE_GAP
+const meterWidthForCols = (slotCols: number): number =>
+  Math.max(1, slotCols) * (STONE_W + STONE_GAP) - STONE_GAP
 const totalSixthsForSlots = (slotCount: number): number => slotCount * 6
 
 const SPEED_COLORS: Record<string, number> = {
@@ -449,15 +465,17 @@ const selectLabelFitForSteps = (
 const isMultiStone = (segment: SceneSegmentVM): boolean =>
   segment.sizeSixths >= 6 && segment.sizeSixths % 6 === 0
 
-const stoneToX = (stoneIndex: number): number =>
-  (stoneIndex % stonesPerRow) * (STONE_W + STONE_GAP)
-const stoneToY = (stoneIndex: number): number =>
-  Math.floor(stoneIndex / stonesPerRow) * (STONE_H + STONE_ROW_GAP)
+const stoneToX = (stoneIndex: number, stonesPerRowOverride = stonesPerRow): number =>
+  (stoneIndex % stonesPerRowOverride) * (STONE_W + STONE_GAP)
+const stoneToY = (stoneIndex: number, stonesPerRowOverride = stonesPerRow): number =>
+  Math.floor(stoneIndex / stonesPerRowOverride) * (STONE_H + STONE_ROW_GAP)
 
-const slotAreaHeightForSlots = (slotCount: number): number => {
-  const numRows = Math.ceil(slotCount / stonesPerRow)
+const slotAreaHeightForSlots = (slotCount: number, stonesPerRowOverride = stonesPerRow): number => {
+  const numRows = Math.ceil(slotCount / stonesPerRowOverride)
   return numRows * (STONE_H + STONE_ROW_GAP) - STONE_ROW_GAP
 }
+const slotAreaHeightForRows = (slotRows: number): number =>
+  Math.max(1, slotRows) * (STONE_H + STONE_ROW_GAP) - STONE_ROW_GAP
 
 const drawNodeClipMask = (clip: Graphics, width: number, height: number): void => {
   clip.clear()
@@ -494,20 +512,20 @@ const segmentStoneSpan = (startSixth: number, sizeSixths: number): { startStone:
 }
 
 /** Position (top-left) of segment in node's local space (relative to node root). */
-const segmentPositionInNode = (segment: SceneSegmentVM): { x: number; y: number } => {
+const segmentPositionInNode = (segment: SceneSegmentVM, stonesPerRowOverride = stonesPerRow): { x: number; y: number } => {
   const { startStone } = segmentStoneSpan(segment.startSixth, segment.sizeSixths)
   const isMulti = segment.sizeSixths >= 6 && segment.sizeSixths % 6 === 0
   if (isMulti) {
     return {
-      x: SLOT_START_X + stoneToX(startStone),
-      y: TOP_BAND_H + stoneToY(startStone),
+      x: SLOT_START_X + stoneToX(startStone, stonesPerRowOverride),
+      y: TOP_BAND_H + stoneToY(startStone, stonesPerRowOverride),
     }
   }
   const groups = groupSixthsByStone(segment.startSixth, segment.sizeSixths)
   let minX = Infinity, minY = Infinity
   groups.forEach((g) => {
-    minX = Math.min(minX, stoneToX(g.stone))
-    minY = Math.min(minY, stoneToY(g.stone) + g.startRow * CELL_H)
+    minX = Math.min(minX, stoneToX(g.stone, stonesPerRowOverride))
+    minY = Math.min(minY, stoneToY(g.stone, stonesPerRowOverride) + g.startRow * CELL_H)
   })
   return {
     x: SLOT_START_X + minX,
@@ -516,15 +534,15 @@ const segmentPositionInNode = (segment: SceneSegmentVM): { x: number; y: number 
 }
 
 /** Bounds of segment in node-local space (relative to node root). */
-const segmentBoundsInNodeLocal = (segment: SceneSegmentVM): { x: number; y: number; w: number; h: number } => {
+const segmentBoundsInNodeLocal = (segment: SceneSegmentVM, stonesPerRowOverride = stonesPerRow): { x: number; y: number; w: number; h: number } => {
   const { startStone, endStone } = segmentStoneSpan(segment.startSixth, segment.sizeSixths)
   const isMulti = isMultiStone(segment)
   if (isMulti) {
-    const chunks = splitStonesAtWrap(startStone, endStone)
+    const chunks = splitStonesAtWrap(startStone, endStone, stonesPerRowOverride)
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
     chunks.forEach((chunk) => {
-      const cx = SLOT_START_X + stoneToX(chunk.start)
-      const cy = TOP_BAND_H + stoneToY(chunk.start)
+      const cx = SLOT_START_X + stoneToX(chunk.start, stonesPerRowOverride)
+      const cy = TOP_BAND_H + stoneToY(chunk.start, stonesPerRowOverride)
       const cw = (chunk.end - chunk.start) * (STONE_W + STONE_GAP) - STONE_GAP
       minX = Math.min(minX, cx)
       minY = Math.min(minY, cy)
@@ -536,8 +554,8 @@ const segmentBoundsInNodeLocal = (segment: SceneSegmentVM): { x: number; y: numb
   const groups = groupSixthsByStone(segment.startSixth, segment.sizeSixths)
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
   groups.forEach((g) => {
-    const x = stoneToX(g.stone)
-    const y = stoneToY(g.stone) + g.startRow * CELL_H
+    const x = stoneToX(g.stone, stonesPerRowOverride)
+    const y = stoneToY(g.stone, stonesPerRowOverride) + g.startRow * CELL_H
     minX = Math.min(minX, x)
     minY = Math.min(minY, y)
     maxX = Math.max(maxX, x + STONE_W)
@@ -556,14 +574,15 @@ const segmentCenterInNode = (
   segment: SceneSegmentVM,
   nodeX: number,
   nodeY: number,
+  stonesPerRowOverride = stonesPerRow,
 ): { x: number; y: number } => {
   const { startStone, endStone } = segmentStoneSpan(segment.startSixth, segment.sizeSixths)
   const isMulti = segment.sizeSixths >= 6 && segment.sizeSixths % 6 === 0
   if (isMulti) {
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
     for (let s = startStone; s < endStone; s += 1) {
-      const x = stoneToX(s)
-      const y = stoneToY(s)
+      const x = stoneToX(s, stonesPerRowOverride)
+      const y = stoneToY(s, stonesPerRowOverride)
       minX = Math.min(minX, x)
       minY = Math.min(minY, y)
       maxX = Math.max(maxX, x + STONE_W)
@@ -577,8 +596,8 @@ const segmentCenterInNode = (
   const groups = groupSixthsByStone(segment.startSixth, segment.sizeSixths)
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
   groups.forEach((g) => {
-    const x = stoneToX(g.stone)
-    const y = stoneToY(g.stone) + g.startRow * CELL_H
+    const x = stoneToX(g.stone, stonesPerRowOverride)
+    const y = stoneToY(g.stone, stonesPerRowOverride) + g.startRow * CELL_H
     minX = Math.min(minX, x)
     minY = Math.min(minY, y)
     maxX = Math.max(maxX, x + STONE_W)
@@ -686,12 +705,13 @@ const fillRoundedRect = (
 const splitStonesAtWrap = (
   startStone: number,
   endStone: number,
+  stonesPerRowOverride = stonesPerRow,
 ): { start: number; end: number }[] => {
   const chunks: { start: number; end: number }[] = []
   let s = startStone
   while (s < endStone) {
-    const rowStart = Math.floor(s / stonesPerRow) * stonesPerRow
-    const rowEnd = rowStart + stonesPerRow
+    const rowStart = Math.floor(s / stonesPerRowOverride) * stonesPerRowOverride
+    const rowEnd = rowStart + stonesPerRowOverride
     const chunkEnd = Math.min(endStone, rowEnd)
     chunks.push({ start: s, end: chunkEnd })
     s = chunkEnd
@@ -755,30 +775,30 @@ const collapsedVisibleSlotCount = (
   return Math.min(slotCount, highestOccupiedStone + 2)
 }
 
-const localToSixth = (localX: number, localY: number, slotCount: number): number => {
+const localToSixth = (localX: number, localY: number, slotCount: number, stonesPerRowOverride = stonesPerRow): number => {
   if (localX <= 0) return 0
   const totalSixths = totalSixthsForSlots(slotCount)
-  const numRows = Math.ceil(slotCount / stonesPerRow)
+  const numRows = Math.ceil(slotCount / stonesPerRowOverride)
   for (let rowIndex = 0; rowIndex < numRows; rowIndex += 1) {
     const rowY = rowIndex * (STONE_H + STONE_ROW_GAP)
     const rowBottom = rowY + STONE_H
-    if (localY < rowY) return Math.min(totalSixths, rowIndex * stonesPerRow * 6)
+    if (localY < rowY) return Math.min(totalSixths, rowIndex * stonesPerRowOverride * 6)
     if (localY >= rowBottom + (rowIndex < numRows - 1 ? STONE_ROW_GAP : 0)) continue
-    const stonesInRow = Math.min(stonesPerRow, slotCount - rowIndex * stonesPerRow)
+    const stonesInRow = Math.min(stonesPerRowOverride, slotCount - rowIndex * stonesPerRowOverride)
     const rowWidth = stonesInRow * (STONE_W + STONE_GAP) - STONE_GAP
-    if (localX >= rowWidth + STONE_W) return Math.min(totalSixths, (rowIndex * stonesPerRow + stonesInRow) * 6)
+    if (localX >= rowWidth + STONE_W) return Math.min(totalSixths, (rowIndex * stonesPerRowOverride + stonesInRow) * 6)
     for (let col = 0; col < stonesInRow; col += 1) {
       const stoneStart = col * (STONE_W + STONE_GAP)
       const stoneEnd = stoneStart + STONE_W
       if (localX >= stoneStart && localX < stoneEnd) {
         const sixthRow = Math.max(0, Math.min(5, Math.floor((localY - rowY) / CELL_H)))
-        return (rowIndex * stonesPerRow + col) * 6 + sixthRow
+        return (rowIndex * stonesPerRowOverride + col) * 6 + sixthRow
       }
       if (localX >= stoneEnd && localX < stoneStart + STONE_W + STONE_GAP) {
-        return (rowIndex * stonesPerRow + col + 1) * 6
+        return (rowIndex * stonesPerRowOverride + col + 1) * 6
       }
     }
-    return Math.min(totalSixths, (rowIndex * stonesPerRow + stonesInRow) * 6)
+    return Math.min(totalSixths, (rowIndex * stonesPerRowOverride + stonesInRow) * 6)
   }
   return totalSixths
 }
@@ -987,6 +1007,7 @@ const drawRunVisuals = (
   maxVisibleLabelPx: number,
   dimmed: boolean,
   dimmedAlpha: number,
+  stonesPerRowOverride = stonesPerRow,
 ): void => {
   const startSixth = run[0].startSixth
   const sizeSixths = run.reduce((sum, s) => sum + s.sizeSixths, 0)
@@ -998,7 +1019,7 @@ const drawRunVisuals = (
   const visualScale = textCompensationScale * zoomReadableScale
 
   if (isMulti) {
-    const chunks = splitStonesAtWrap(startStone, endStone)
+    const chunks = splitStonesAtWrap(startStone, endStone, stonesPerRowOverride)
     const R = 5
     const multi = chunks.length > 1
     const fillOpt = { color, alpha }
@@ -1006,8 +1027,8 @@ const drawRunVisuals = (
     let labelBounds: { x: number; y: number; w: number; h: number } | null = null
 
     chunks.forEach((chunk, idx) => {
-      const cx = baseX + stoneToX(chunk.start)
-      const cy = baseY + stoneToY(chunk.start)
+      const cx = baseX + stoneToX(chunk.start, stonesPerRowOverride)
+      const cy = baseY + stoneToY(chunk.start, stonesPerRowOverride)
       const cw = (chunk.end - chunk.start) * (STONE_W + STONE_GAP) - STONE_GAP
       const ch = STONE_H
       const pad = 0.5
@@ -1039,14 +1060,14 @@ const drawRunVisuals = (
       div.eventMode = 'none'
       if (boundarySixth % 6 === 0) {
         const stone = boundarySixth / 6
-        const x = baseX + stoneToX(stone - 1) + STONE_W
-        const y = baseY + stoneToY(stone - 1)
+        const x = baseX + stoneToX(stone - 1, stonesPerRowOverride) + STONE_W
+        const y = baseY + stoneToY(stone - 1, stonesPerRowOverride)
         drawDashedLine(div, x, y, x, y + STONE_H, strokeColor, 0.85)
       } else {
         const stone = Math.floor(boundarySixth / 6)
         const row = boundarySixth % 6
-        const x = baseX + stoneToX(stone)
-        const y = baseY + stoneToY(stone) + row * CELL_H
+        const x = baseX + stoneToX(stone, stonesPerRowOverride)
+        const y = baseY + stoneToY(stone, stonesPerRowOverride) + row * CELL_H
         drawDashedLine(div, x, y, x + STONE_W, y, strokeColor, 0.85)
       }
       container.addChild(div)
@@ -1087,8 +1108,8 @@ const drawRunVisuals = (
     const PAD = 1.2
 
     groups.forEach((group, idx) => {
-      const x = baseX + stoneToX(group.stone)
-      const y = baseY + stoneToY(group.stone) + group.startRow * CELL_H
+      const x = baseX + stoneToX(group.stone, stonesPerRowOverride)
+      const y = baseY + stoneToY(group.stone, stonesPerRowOverride) + group.startRow * CELL_H
       const w = STONE_W
       const h = group.count * CELL_H
 
@@ -1582,6 +1603,7 @@ export class PixiBoardAdapter {
             return
           case 'group':
           case 'groupResize':
+          case 'nodeResize':
             this.endDrag()
             return
           case 'marquee': {
@@ -1623,6 +1645,9 @@ export class PixiBoardAdapter {
           return
         case 'groupResize':
           this.updateGroupResizeDrag(event.clientX, event.clientY)
+          return
+        case 'nodeResize':
+          this.updateNodeResizeDrag(event.clientX, event.clientY)
           return
         case 'marquee': {
           const { x, y } = canvasCoords(event)
@@ -1734,6 +1759,9 @@ export class PixiBoardAdapter {
           case 'label':
             this.updateLabelDrag(pos.clientX, pos.clientY)
             break
+          case 'nodeResize':
+            this.updateNodeResizeDrag(pos.clientX, pos.clientY)
+            break
           case 'nodeReorder':
             this.updateNodeReorderDrag(pos.clientX, pos.clientY)
             break
@@ -1787,8 +1815,8 @@ export class PixiBoardAdapter {
       for (const segment of node.segments) {
         if (!selectedIds.has(segment.id)) continue
         const segView = view.segmentViews.get(segment.id)
-        const bounds = segmentBoundsInNodeLocal(segment)
-        const pos = segmentPositionInNode(segment)
+        const bounds = segmentBoundsInNodeLocal(segment, node.slotCols)
+        const pos = segmentPositionInNode(segment, node.slotCols)
         const nodePos = this.getNodeDisplayPosition(node)
         const worldX = nodePos.x + (segView ? segView.container.position.x : pos.x) + bounds.x - pos.x
         const worldY = nodePos.y + (segView ? segView.container.position.y : pos.y) + bounds.y - pos.y
@@ -2184,6 +2212,64 @@ export class PixiBoardAdapter {
     this.handlers.onResizeGroup(drag.groupId, nextWidth, nextHeight)
   }
 
+  private applyLocalNodeSize(nodeId: string, slotCols: number, slotRows: number): void {
+    if (!this.currentScene?.nodes?.[nodeId]) return
+    const mutableNode = this.currentScene.nodes[nodeId] as SceneNodeVM & { slotCols: number; slotRows: number; width: number; height: number }
+    mutableNode.slotCols = Math.max(1, Math.floor(slotCols))
+    mutableNode.slotRows = Math.max(1, Math.floor(slotRows))
+    mutableNode.width = SLOT_START_X + meterWidthForCols(mutableNode.slotCols) + 20
+    mutableNode.height = TOP_BAND_H + slotAreaHeightForRows(mutableNode.slotRows) + NODE_BOTTOM_PADDING
+    this.recomputeDisplayFlow(this.currentScene)
+    this.rebuildAllNodes(this.currentScene)
+  }
+
+  private startNodeResizeDrag(
+    nodeId: string,
+    resizeX: boolean,
+    resizeY: boolean,
+    clientX: number,
+    clientY: number,
+  ): void {
+    if (!this.currentScene || !this.handlers.onResizeNode) return
+    const node = this.currentScene.nodes[nodeId]
+    if (!node) return
+    if (!this.isNodeExpanded(nodeId)) this.setNodeExpanded(nodeId, true)
+    const startPointerWorld = this.screenToWorld(clientX, clientY)
+    this.activeDrag = {
+      type: 'nodeResize',
+      state: {
+        nodeId,
+        startPointerWorld,
+        startSlotCols: Math.max(1, node.slotCols),
+        startSlotRows: Math.max(1, node.slotRows),
+        resizeX,
+        resizeY,
+      },
+    }
+    this.lastPointerPosition = { clientX, clientY }
+    this.startAutoPanLoop()
+  }
+
+  private updateNodeResizeDrag(clientX: number, clientY: number): void {
+    if (this.activeDrag.type !== 'nodeResize' || !this.currentScene || !this.handlers.onResizeNode) return
+    const drag = this.activeDrag.state
+    const node = this.currentScene.nodes[drag.nodeId]
+    if (!node) return
+    const world = this.screenToWorld(clientX, clientY)
+    const deltaX = world.x - drag.startPointerWorld.x
+    const deltaY = world.y - drag.startPointerWorld.y
+    const stepX = STONE_W + STONE_GAP
+    const stepY = STONE_H + STONE_ROW_GAP
+    const nextCols = drag.resizeX
+      ? Math.max(1, drag.startSlotCols + Math.round(deltaX / stepX))
+      : drag.startSlotCols
+    const nextRows = drag.resizeY
+      ? Math.max(1, drag.startSlotRows + Math.round(deltaY / stepY))
+      : drag.startSlotRows
+    this.applyLocalNodeSize(drag.nodeId, nextCols, nextRows)
+    this.handlers.onResizeNode(drag.nodeId, nextCols, nextRows)
+  }
+
   private screenToWorld(clientX: number, clientY: number): { x: number; y: number } {
     const rect = this.app.canvas.getBoundingClientRect()
     const canvasX = clientX - rect.left
@@ -2360,8 +2446,6 @@ export class PixiBoardAdapter {
     for (let i = groups.length - 1; i >= 0; i -= 1) {
       const group = groups[i]
       if (!group) continue
-      const mode = deriveGroupMode(group)
-      if (mode === 'nodes') continue
       const dims = this.getGroupDisplayDimensions(group)
       if (
         worldX >= group.x &&
@@ -2383,8 +2467,11 @@ export class PixiBoardAdapter {
     if (!node) return null
 
     const visibleSlotCount = this.getVisibleSlotCount(node)
-    const nodeMeterWidth = meterWidthForSlots(visibleSlotCount)
-    const slotAreaH = slotAreaHeightForSlots(visibleSlotCount)
+    const layoutCols = this.isNodeExpanded(node.id)
+      ? node.slotCols
+      : Math.max(1, Math.min(visibleSlotCount, stonesPerRow))
+    const nodeMeterWidth = meterWidthForCols(layoutCols)
+    const slotAreaH = slotAreaHeightForSlots(visibleSlotCount, layoutCols)
     const pos = this.getNodeDisplayPosition(node)
     const inY = worldY >= pos.y + TOP_BAND_H && worldY <= pos.y + TOP_BAND_H + slotAreaH
     if (!inY) return { nodeId: targetNodeId, startSixth: 0 }
@@ -2392,7 +2479,7 @@ export class PixiBoardAdapter {
     const localY = worldY - pos.y - TOP_BAND_H
     if (localX < -STONE_W || localX > nodeMeterWidth + STONE_W) return { nodeId: targetNodeId, startSixth: 0 }
 
-    let startSixth = localToSixth(localX, localY, visibleSlotCount)
+    let startSixth = localToSixth(localX, localY, visibleSlotCount, layoutCols)
     if (isMultiStone(segment)) {
       startSixth = Math.floor(startSixth / 6) * 6
     }
@@ -2863,10 +2950,15 @@ export class PixiBoardAdapter {
 
     const slotCount = node.slotCount
     const isExpanded = this.isNodeExpanded(node.id)
-    const visibleSlotCount = isExpanded ? slotCount : collapsedVisibleSlotCount(node.segments, slotCount)
-    const totalMeterWidth = meterWidthForSlots(visibleSlotCount)
+    const visibleSlotCount = isExpanded
+      ? Math.max(slotCount, node.slotCols * node.slotRows)
+      : collapsedVisibleSlotCount(node.segments, slotCount)
+    const layoutCols = isExpanded
+      ? node.slotCols
+      : Math.max(1, Math.min(visibleSlotCount, stonesPerRow))
+    const totalMeterWidth = meterWidthForCols(layoutCols)
     const totalWidth = SLOT_START_X + totalMeterWidth + 20
-    const totalHeight = TOP_BAND_H + slotAreaHeightForSlots(visibleSlotCount) + NODE_BOTTOM_PADDING
+    const totalHeight = TOP_BAND_H + (isExpanded ? slotAreaHeightForRows(node.slotRows) : slotAreaHeightForSlots(visibleSlotCount)) + NODE_BOTTOM_PADDING
     const totalSixths = totalSixthsForSlots(slotCount)
 
     let moveToRootBtn: Graphics | undefined
@@ -3012,8 +3104,8 @@ export class PixiBoardAdapter {
     const brightAlpha = tier === 'far' ? 0.36 : 0.48
     const slotColorFn = node.twoBandSlots ? twoBandSlotColor : fixedSlotBandColor
     for (let stone = 0; stone < visibleSlotCount; stone += 1) {
-      const sx = SLOT_START_X + stoneToX(stone)
-      const sy = TOP_BAND_H + stoneToY(stone)
+      const sx = SLOT_START_X + (stone % layoutCols) * (STONE_W + STONE_GAP)
+      const sy = TOP_BAND_H + Math.floor(stone / layoutCols) * (STONE_H + STONE_ROW_GAP)
       const slotBandColor = slotColorFn(stone, node.fixedGreenStoneSlots)
       for (let row = 0; row < SIXTH_ROWS; row += 1) {
         const sixth = stone * 6 + row
@@ -3064,12 +3156,13 @@ export class PixiBoardAdapter {
         this.maxVisibleLabelPx,
         dimmed,
         dimmedAlpha,
+        layoutCols,
       )
     }
 
     const segmentViews = new Map<string, SegmentView>()
     node.segments.forEach((segment) => {
-      const pos = segmentPositionInNode(segment)
+      const pos = segmentPositionInNode(segment, layoutCols)
       const segContainer = new Container()
       segContainer.position.set(pos.x, pos.y)
       const spring = createSpring2D(pos.x, pos.y)
@@ -3105,6 +3198,40 @@ export class PixiBoardAdapter {
       segmentContainer.addChild(segContainer)
     })
     contentContainer.addChild(segmentContainer)
+
+    const owningGroup = node.groupId ? this.currentScene?.groups?.[node.groupId] : null
+    const canResizeNode = canShowNodeResizeHandles(owningGroup?.listViewEnabled === true)
+    if (canResizeNode && this.handlers.onResizeNode) {
+      const addNodeResizeHandle = (
+        x: number,
+        y: number,
+        w: number,
+        h: number,
+        cursor: string,
+        resizeX: boolean,
+        resizeY: boolean,
+      ): void => {
+        const resizeHandle = new Graphics()
+        resizeHandle.eventMode = 'static'
+        resizeHandle.cursor = cursor
+        ;(resizeHandle as Container & { __dragHandle?: boolean }).__dragHandle = true
+        resizeHandle.roundRect(x, y, w, h, 6)
+        resizeHandle.fill({ color: 0xffffff, alpha: 0.001 })
+        resizeHandle.on('pointerdown', (event: any) => {
+          if (event.button !== 0 || this.activeDrag.type !== 'idle') return
+          const canvasRect = this.app.canvas.getBoundingClientRect()
+          const clientX = typeof event.clientX === 'number' ? event.clientX : event.global.x + canvasRect.left
+          const clientY = typeof event.clientY === 'number' ? event.clientY : event.global.y + canvasRect.top
+          this.startNodeResizeDrag(node.id, resizeX, resizeY, clientX, clientY)
+          event.stopPropagation()
+        })
+        contentContainer.addChild(resizeHandle)
+      }
+      const edgeThickness = 10
+      addNodeResizeHandle(totalWidth - edgeThickness, TOP_BAND_H, edgeThickness, Math.max(20, totalHeight - TOP_BAND_H), 'ew-resize', true, false)
+      addNodeResizeHandle(18, totalHeight - edgeThickness, Math.max(44, totalWidth - 18), edgeThickness, 'ns-resize', false, true)
+      addNodeResizeHandle(totalWidth - 14, totalHeight - 14, 14, 14, 'nwse-resize', true, true)
+    }
 
     root.position.set(displayPos.x, displayPos.y)
     this.enableDrag(dragHandle, root, node.id)
@@ -3230,6 +3357,7 @@ export class PixiBoardAdapter {
         this.maxVisibleLabelPx,
         dimmed,
         dimmedAlpha,
+        node.slotCols,
       )
     }
 
@@ -3242,7 +3370,7 @@ export class PixiBoardAdapter {
       }
     }
     node.segments.forEach((segment) => {
-      const pos = segmentPositionInNode(segment)
+      const pos = segmentPositionInNode(segment, node.slotCols)
       let segView = view.segmentViews.get(segment.id)
       if (!segView) {
         const segContainer = new Container()
@@ -3523,6 +3651,33 @@ export class PixiBoardAdapter {
     })
     root.addChild(titleTapTarget)
 
+    const listToggleW = 92
+    const listToggleH = 20
+    const listToggleX = Math.max(36, displayWidth - listToggleW - 12)
+    const listToggleY = 10
+    const listToggle = new Graphics()
+    listToggle.eventMode = 'static'
+    listToggle.cursor = 'pointer'
+    ;(listToggle as Container & { __dragHandle?: boolean }).__dragHandle = true
+    listToggle.roundRect(listToggleX, listToggleY, listToggleW, listToggleH, 8)
+    listToggle.fill({ color: group.listViewEnabled ? 0x214d78 : 0x28344b, alpha: 0.9 })
+    listToggle.stroke({ width: 1, color: group.listViewEnabled ? 0x8fd0ff : 0x778db3, alpha: 0.95 })
+    listToggle.on('pointertap', (event: any) => {
+      event.stopPropagation()
+      this.handlers.onSetGroupListView?.(group.id, !group.listViewEnabled)
+    })
+    root.addChild(listToggle)
+
+    const listToggleLabel = new BitmapText({
+      text: `List view ${group.listViewEnabled ? 'on' : 'off'}`,
+      style: { fill: '#d8ebff', fontSize: 11, fontFamily: FONT_SEMIBOLD },
+    })
+    listToggleLabel.eventMode = 'none'
+    listToggleLabel.anchor.set(0.5, 0.5)
+    listToggleLabel.scale.set(getTextCompensationScale(this.zoom))
+    listToggleLabel.position.set(listToggleX + listToggleW / 2, listToggleY + listToggleH / 2 + 1)
+    root.addChild(listToggleLabel)
+
     this.groupLayer.addChild(root)
     return { root, hoverOutline }
   }
@@ -3659,7 +3814,10 @@ export class PixiBoardAdapter {
     nodeIds: string[],
     worldX: number,
     worldY: number,
-  ): { type: 'reorder'; groupId: string; index: number; lineY: number } | { type: 'nest'; parentNodeId: string; lineY: number } | null {
+  ): { type: 'reorder'; groupId: string; index: number; lineY: number }
+    | { type: 'absolute'; groupId: string }
+    | { type: 'nest'; parentNodeId: string; lineY: number }
+    | null {
     if (!this.currentScene) return null
     const BODY_INSET = 8
 
@@ -3682,7 +3840,6 @@ export class PixiBoardAdapter {
     for (let i = groups.length - 1; i >= 0; i -= 1) {
       const g = groups[i]
       if (!g) continue
-      if (deriveGroupMode(g) === 'segments') continue
       const dims = this.getGroupDisplayDimensions(g)
       if (worldX >= g.x && worldX <= g.x + dims.width && worldY >= g.y && worldY <= g.y + dims.height) {
         target = g
@@ -3690,6 +3847,9 @@ export class PixiBoardAdapter {
       }
     }
     if (!target) return null
+    if (resolveNodeGroupDropMode(target.listViewEnabled) === 'absolute') {
+      return { type: 'absolute', groupId: target.id }
+    }
 
     const candidateIds = target.nodeIds.filter((id) => !nodeIds.includes(id))
     let index = candidateIds.length
@@ -3774,12 +3934,17 @@ export class PixiBoardAdapter {
         drag.targetGroupId = drop.groupId
         drag.targetIndex = drop.index
         drag.targetNestParentNodeId = null
+      } else if (drop.type === 'absolute') {
+        drag.targetGroupId = drop.groupId
+        drag.targetIndex = -1
+        drag.targetNestParentNodeId = null
       } else {
         drag.targetGroupId = null
         drag.targetIndex = 0
         drag.targetNestParentNodeId = drop.parentNodeId
       }
-      this.drawGroupDropIndicator(drop)
+      if (drop.type !== 'absolute') this.drawGroupDropIndicator(drop)
+      else this.groupDropIndicator.clear()
     } else {
       this.groupDropIndicator.clear()
       drag.targetGroupId = null
@@ -3806,6 +3971,10 @@ export class PixiBoardAdapter {
             drag.targetGroupId = finalDrop.groupId
             drag.targetIndex = finalDrop.index
             drag.targetNestParentNodeId = null
+          } else if (finalDrop.type === 'absolute') {
+            drag.targetGroupId = finalDrop.groupId
+            drag.targetIndex = -1
+            drag.targetNestParentNodeId = null
           } else {
             drag.targetGroupId = null
             drag.targetIndex = 0
@@ -3820,7 +3989,7 @@ export class PixiBoardAdapter {
     const isNoOp = drag.targetNestParentNodeId
       ? drag.targetNestParentNodeId === drag.originalNestParentId
       : drag.targetGroupId != null
-        ? drag.targetGroupId === drag.originalGroupId && drag.targetIndex === drag.originalIndex
+        ? (drag.targetIndex >= 0 && drag.targetGroupId === drag.originalGroupId && drag.targetIndex === drag.originalIndex)
         : false
     console.info('[pixi node] drag finish decision', {
       nodeId: drag.nodeIds[0],
@@ -3850,6 +4019,15 @@ export class PixiBoardAdapter {
         parentNodeId: drag.targetNestParentNodeId,
       })
       this.handlers.onNestNodeUnder(drag.nodeIds[0], drag.targetNestParentNodeId)
+    } else if (drag.targetGroupId && drag.targetIndex < 0 && this.handlers.onMoveNodeInGroup && finalClientX != null && finalClientY != null) {
+      const world = this.screenToWorld(finalClientX, finalClientY)
+      drag.nodeIds.forEach((nodeId) => this.skipNodeAnimationOnce.add(nodeId))
+      this.handlers.onMoveNodeInGroup(
+        drag.nodeIds[0],
+        drag.targetGroupId,
+        world.x - drag.anchorOffset.x,
+        world.y - drag.anchorOffset.y,
+      )
     } else if (drag.targetGroupId && this.handlers.onMoveNodeToGroupIndex) {
       drag.nodeIds.forEach((nodeId) => this.skipNodeAnimationOnce.add(nodeId))
       console.info('[pixi node] dispatch onMoveNodeToGroupIndex', {
@@ -4214,18 +4392,22 @@ export class PixiBoardAdapter {
 
   private getVisibleSlotCount(node: SceneNodeVM): number {
     const expanded = this.isNodeExpanded(node.id)
-    return expanded ? node.slotCount : collapsedVisibleSlotCount(node.segments, node.slotCount)
+    return expanded ? Math.max(node.slotCount, node.slotCols * node.slotRows) : collapsedVisibleSlotCount(node.segments, node.slotCount)
   }
 
   private getNodeDisplayDimensionsForExpanded(
     node: SceneNodeVM,
     expanded: boolean,
   ): { width: number; height: number } {
-    const visibleSlotCount = expanded ? node.slotCount : collapsedVisibleSlotCount(node.segments, node.slotCount)
-    const totalMeterWidth = meterWidthForSlots(visibleSlotCount)
+    const visibleSlotCount = expanded
+      ? Math.max(node.slotCount, node.slotCols * node.slotRows)
+      : collapsedVisibleSlotCount(node.segments, node.slotCount)
+    const totalMeterWidth = expanded
+      ? meterWidthForCols(node.slotCols)
+      : meterWidthForSlots(visibleSlotCount)
     return {
       width: SLOT_START_X + totalMeterWidth + 20,
-      height: TOP_BAND_H + slotAreaHeightForSlots(visibleSlotCount) + NODE_BOTTOM_PADDING,
+      height: TOP_BAND_H + (expanded ? slotAreaHeightForRows(node.slotRows) : slotAreaHeightForSlots(visibleSlotCount)) + NODE_BOTTOM_PADDING,
     }
   }
 
@@ -4237,13 +4419,19 @@ export class PixiBoardAdapter {
     this.nodeDisplayOffsetY.clear()
     this.groupDisplayHeights.clear()
     for (const group of Object.values(scene.groups ?? {})) {
-      let yOffset = 0
-      for (const nodeId of group.nodeIds) {
-        const node = scene.nodes[nodeId]
-        if (!node) continue
-        this.nodeDisplayOffsetY.set(node.id, yOffset)
-        const dims = this.getNodeDisplayDimensions(node)
-        yOffset += dims.height - node.height
+      if (group.listViewEnabled) {
+        let yOffset = 0
+        for (const nodeId of group.nodeIds) {
+          const node = scene.nodes[nodeId]
+          if (!node) continue
+          this.nodeDisplayOffsetY.set(node.id, yOffset)
+          const dims = this.getNodeDisplayDimensions(node)
+          yOffset += dims.height - node.height
+        }
+      } else {
+        for (const nodeId of group.nodeIds) {
+          this.nodeDisplayOffsetY.set(nodeId, 0)
+        }
       }
       if (this.isGroupExpanded(group.id)) {
         this.groupDisplayHeights.set(group.id, group.height)
@@ -4319,61 +4507,77 @@ export class PixiBoardAdapter {
 
   private getGroupContentMinDimensions(group: SceneGroupVM): { width: number; height: number } {
     if (!this.currentScene) return { width: group.width, height: group.height }
-    const nodeIdsInGroup = new Set(group.nodeIds)
-    const childrenByParent = new Map<string, string[]>()
-    for (const nodeId of group.nodeIds) {
-      const node = this.currentScene.nodes[nodeId]
-      const parentId = node?.parentNodeId
-      if (!parentId || !nodeIdsInGroup.has(parentId)) continue
-      const siblings = childrenByParent.get(parentId) ?? []
-      siblings.push(nodeId)
-      childrenByParent.set(parentId, siblings)
-    }
-    const orderedRoots = group.nodeIds.filter((nodeId) => {
-      const parentId = this.currentScene!.nodes[nodeId]?.parentNodeId
-      return !parentId || !nodeIdsInGroup.has(parentId)
-    })
-    if (orderedRoots.length > 0) {
-      let maxNodeW = 0
-      let cursorY = group.y + GROUP_PADDING_TOP
-      const layoutSubtree = (nodeId: string, depth: number): void => {
-        const node = this.currentScene!.nodes[nodeId]
-        if (!node) return
-        const dims = this.getNodeDisplayDimensions(node)
-        const indentPx = depth * NODE_INDENT
-        maxNodeW = Math.max(maxNodeW, dims.width + indentPx)
-        cursorY += dims.height + NODE_ROW_GAP
-        const children = childrenByParent.get(nodeId) ?? []
-        children.forEach((childId) => layoutSubtree(childId, depth + 1))
-      }
-      orderedRoots.forEach((rootId) => layoutSubtree(rootId, 0))
-      return {
-        width: maxNodeW + GROUP_PADDING_X * 2,
-        height: cursorY - NODE_ROW_GAP - group.y + GROUP_PADDING_BOTTOM,
-      }
-    }
-    if (group.freeSegmentIds.length > 0) {
-      let maxX = 0
-      let maxY = 0
-      for (const segmentId of group.freeSegmentIds) {
-        const free = this.currentScene.freeSegments[segmentId]
-        if (!free) continue
-        const bounds = segmentBoundsInNodeLocal(free.segment)
-        const right = free.x + bounds.x - SLOT_START_X + bounds.w
-        const bottom = free.y + bounds.y - TOP_BAND_H + bounds.h
-        maxX = Math.max(maxX, right)
-        maxY = Math.max(maxY, bottom)
-      }
-      return {
-        width: Math.max(EMPTY_GROUP_MIN_WIDTH, maxX + GROUP_PADDING_X),
-        height: Math.max(EMPTY_GROUP_MIN_HEIGHT, maxY + GROUP_PADDING_BOTTOM),
+    let nodeWidth = 0
+    let nodeHeight = 0
+    if (group.nodeIds.length > 0) {
+      if (group.listViewEnabled) {
+        const nodeIdsInGroup = new Set(group.nodeIds)
+        const childrenByParent = new Map<string, string[]>()
+        for (const nodeId of group.nodeIds) {
+          const node = this.currentScene.nodes[nodeId]
+          const parentId = node?.parentNodeId
+          if (!parentId || !nodeIdsInGroup.has(parentId)) continue
+          const siblings = childrenByParent.get(parentId) ?? []
+          siblings.push(nodeId)
+          childrenByParent.set(parentId, siblings)
+        }
+        const orderedRoots = group.nodeIds.filter((nodeId) => {
+          const parentId = this.currentScene!.nodes[nodeId]?.parentNodeId
+          return !parentId || !nodeIdsInGroup.has(parentId)
+        })
+        let maxNodeW = 0
+        let cursorY = group.y + GROUP_PADDING_TOP
+        const layoutSubtree = (nodeId: string, depth: number): void => {
+          const node = this.currentScene!.nodes[nodeId]
+          if (!node) return
+          const dims = this.getNodeDisplayDimensions(node)
+          const indentPx = depth * NODE_INDENT
+          maxNodeW = Math.max(maxNodeW, dims.width + indentPx)
+          cursorY += dims.height + NODE_ROW_GAP
+          const children = childrenByParent.get(nodeId) ?? []
+          children.forEach((childId) => layoutSubtree(childId, depth + 1))
+        }
+        orderedRoots.forEach((rootId) => layoutSubtree(rootId, 0))
+        nodeWidth = maxNodeW + GROUP_PADDING_X * 2
+        nodeHeight = cursorY - NODE_ROW_GAP - group.y + GROUP_PADDING_BOTTOM
+      } else {
+        let maxNodeRight = 0
+        let maxNodeBottom = 0
+        for (const nodeId of group.nodeIds) {
+          const node = this.currentScene.nodes[nodeId]
+          if (!node) continue
+          const pos = this.getNodeDisplayPosition(node)
+          const dims = this.getNodeDisplayDimensions(node)
+          maxNodeRight = Math.max(maxNodeRight, pos.x - group.x + dims.width)
+          maxNodeBottom = Math.max(maxNodeBottom, pos.y - group.y + dims.height)
+        }
+        nodeWidth = maxNodeRight + GROUP_PADDING_X
+        nodeHeight = maxNodeBottom + GROUP_PADDING_BOTTOM
       }
     }
-    return { width: EMPTY_GROUP_MIN_WIDTH, height: EMPTY_GROUP_MIN_HEIGHT }
+
+    let segmentWidth = 0
+    let segmentHeight = 0
+    for (const segmentId of group.freeSegmentIds) {
+      const free = this.currentScene.freeSegments[segmentId]
+      if (!free) continue
+      const bounds = segmentBoundsInNodeLocal(free.segment)
+      const right = free.x + bounds.x - SLOT_START_X + bounds.w
+      const bottom = free.y + bounds.y - TOP_BAND_H + bounds.h
+      segmentWidth = Math.max(segmentWidth, right + GROUP_PADDING_X)
+      segmentHeight = Math.max(segmentHeight, bottom + GROUP_PADDING_BOTTOM)
+    }
+    return {
+      width: Math.max(EMPTY_GROUP_MIN_WIDTH, nodeWidth, segmentWidth),
+      height: Math.max(EMPTY_GROUP_MIN_HEIGHT, nodeHeight, segmentHeight),
+    }
   }
 
   private getGroupCollapsedDimensions(group: SceneGroupVM): { width: number; height: number } {
     if (!this.currentScene) return { width: group.width, height: group.height }
+    if (!group.listViewEnabled) {
+      return this.getGroupContentMinDimensions(group)
+    }
     const nodeIdsInGroup = new Set(group.nodeIds)
     const childrenByParent = new Map<string, string[]>()
     for (const nodeId of group.nodeIds) {

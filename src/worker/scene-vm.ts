@@ -4,7 +4,6 @@ import { applyDropIntentToState } from '../vm/drop-intent'
 import { buildBoardVM } from '../vm/vm'
 import type { ActorRowVM } from '../vm/vm-types'
 import type { CanonicalState } from '../domain/types'
-import { deriveGroupMode } from './group-mode'
 import type { DropIntent } from './protocol'
 import type { SceneFreeSegmentVM, SceneGroupVM, SceneNodeVM, SceneVM } from './protocol'
 
@@ -12,8 +11,11 @@ export type WorkerLocalState = {
   readonly hoveredSegmentId: string | null
   readonly groupPositions: Record<string, { x: number; y: number }>
   readonly groupSizeOverrides: Record<string, { width: number; height: number }>
+  readonly groupListViewEnabled: Record<string, boolean>
   readonly nodeGroupOverrides: Record<string, string | null>
   readonly nodePositions: Record<string, { x: number; y: number }>
+  readonly groupNodePositions: Record<string, Record<string, { x: number; y: number }>>
+  readonly nodeSizeOverrides: Record<string, { slotCols: number; slotRows: number }>
   readonly freeSegmentPositions: Record<string, { x: number; y: number }>
   readonly groupFreeSegmentPositions: Record<string, Record<string, { x: number; y: number }>>
   readonly groupNodeOrders: Record<string, readonly string[]>
@@ -36,19 +38,17 @@ const SLOT_START_X = 10
 const TOP_BAND_H = 34
 const NODE_BOTTOM_PADDING = 6
 
-const slotAreaHeightForSlots = (slotCount: number, stonesPerRow: number): number => {
-  const numRows = Math.ceil(slotCount / stonesPerRow)
-  return numRows * (STONE_H + STONE_ROW_GAP) - STONE_ROW_GAP
-}
+const meterWidthForCols = (slotCols: number): number =>
+  Math.max(1, slotCols) * (STONE_W + STONE_GAP) - STONE_GAP
 
-const meterWidthForSlots = (slotCount: number, stonesPerRow: number): number =>
-  Math.min(slotCount, stonesPerRow) * (STONE_W + STONE_GAP) - STONE_GAP
+const slotAreaHeightForRows = (slotRows: number): number =>
+  Math.max(1, slotRows) * (STONE_H + STONE_ROW_GAP) - STONE_ROW_GAP
 
-const nodeHeightForSlots = (slotCount: number, stonesPerRow: number): number =>
-  TOP_BAND_H + slotAreaHeightForSlots(slotCount, stonesPerRow) + NODE_BOTTOM_PADDING
+const nodeHeightForRows = (slotRows: number): number =>
+  TOP_BAND_H + slotAreaHeightForRows(slotRows) + NODE_BOTTOM_PADDING
 
-const nodeWidthForSlots = (slotCount: number, stonesPerRow: number): number =>
-  SLOT_START_X + meterWidthForSlots(slotCount, stonesPerRow) + 20
+const nodeWidthForCols = (slotCols: number): number =>
+  SLOT_START_X + meterWidthForCols(slotCols) + 20
 
 const GROUP_X = 80
 const GROUP_STACK_GAP = 28
@@ -223,7 +223,7 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
   const rows = flattenRows(board.rows)
   const nodes: Record<string, SceneNodeVM> = {}
   const freeSegments: Record<string, SceneFreeSegmentVM> = {}
-  const groupsById = new Map<string, { id: string; title: string; nodeIds: string[]; freeSegmentIds: string[] }>()
+  const groupsById = new Map<string, { id: string; title: string; listViewEnabled: boolean; nodeIds: string[]; freeSegmentIds: string[] }>()
   const segmentGroupOwner = new Map<string, string>()
 
   for (const [groupId, positions] of Object.entries(localState.groupFreeSegmentPositions)) {
@@ -233,7 +233,13 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
   }
 
   for (const [groupId, group] of Object.entries(localState.customGroups)) {
-    groupsById.set(groupId, { id: groupId, title: group.title, nodeIds: [], freeSegmentIds: [] })
+    groupsById.set(groupId, {
+      id: groupId,
+      title: group.title,
+      listViewEnabled: localState.groupListViewEnabled[groupId] === true,
+      nodeIds: [],
+      freeSegmentIds: [],
+    })
   }
 
   for (const row of rows) {
@@ -269,7 +275,13 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
         if (ownerGroupId) {
           const existing = groupsById.get(ownerGroupId)
           if (existing) existing.freeSegmentIds.push(segment.id)
-          else groupsById.set(ownerGroupId, { id: ownerGroupId, title: ownerGroupId, nodeIds: [], freeSegmentIds: [segment.id] })
+          else groupsById.set(ownerGroupId, {
+            id: ownerGroupId,
+            title: ownerGroupId,
+            listViewEnabled: localState.groupListViewEnabled[ownerGroupId] === true,
+            nodeIds: [],
+            freeSegmentIds: [segment.id],
+          })
         }
         yCursor += STONE_H + FREE_SEGMENT_STACK_GAP
       }
@@ -293,6 +305,13 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
       : null
     const parentNodeId = row.parentActorId
 
+    const defaultSlotCols = Math.max(1, Math.min(slotCount, localState.stonesPerRow))
+    const defaultSlotRows = Math.max(1, Math.ceil(slotCount / defaultSlotCols))
+    const sizeOverride = localState.nodeSizeOverrides[row.id]
+    const slotCols = Math.max(1, sizeOverride?.slotCols ?? defaultSlotCols)
+    const minRowsForCapacity = Math.max(1, Math.ceil(slotCount / slotCols))
+    const slotRows = Math.max(minRowsForCapacity, sizeOverride?.slotRows ?? defaultSlotRows)
+
     nodes[row.id] = {
       id: row.id,
       rowId: row.id,
@@ -303,13 +322,15 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
       title: localState.nodeTitleOverrides[row.id] ?? row.title,
       x: 0,
       y: 0,
-      width: nodeWidthForSlots(slotCount, localState.stonesPerRow),
-      height: nodeHeightForSlots(slotCount, localState.stonesPerRow),
+      width: nodeWidthForCols(slotCols),
+      height: nodeHeightForRows(slotRows),
       speedFeet: row.speed.explorationFeet,
       speedBand: row.speedBand.band,
       fixedGreenStoneSlots,
       slotCount,
       twoBandSlots,
+      slotCols,
+      slotRows,
       usedSixths: row.encumbranceSixths,
       usedStoneText: row.summary.usedStoneText,
       capacityStoneText: row.summary.capacityStoneText,
@@ -333,7 +354,13 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
     if (groupId && groupTitle) {
       const existing = groupsById.get(groupId)
       if (existing) existing.nodeIds.push(row.id)
-      else groupsById.set(groupId, { id: groupId, title: groupTitle, nodeIds: [row.id], freeSegmentIds: [] })
+      else groupsById.set(groupId, {
+        id: groupId,
+        title: groupTitle,
+        listViewEnabled: localState.groupListViewEnabled[groupId] === true,
+        nodeIds: [row.id],
+        freeSegmentIds: [],
+      })
     }
   }
 
@@ -352,36 +379,58 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
     meta.nodeIds = orderedNodeIds
 
     const pos = localState.groupPositions[groupId] ?? { x: GROUP_X, y: flowY }
-    const nodeIdsInGroup = new Set(orderedNodeIds)
-    const childrenByParent = new Map<string, string[]>()
-    orderedNodeIds.forEach((nodeId) => {
-      const node = nodes[nodeId]
-      const parentId = node?.parentNodeId
-      if (!parentId || !nodeIdsInGroup.has(parentId)) return
-      const siblings = childrenByParent.get(parentId) ?? []
-      siblings.push(nodeId)
-      childrenByParent.set(parentId, siblings)
-    })
-    const orderedRoots = orderedNodeIds.filter((nodeId) => {
-      const parentId = nodes[nodeId]?.parentNodeId
-      return !parentId || !nodeIdsInGroup.has(parentId)
-    })
-
+    const listViewEnabled = meta.listViewEnabled
     let cursorY = pos.y + GROUP_PADDING_TOP
     let maxNodeW = 0
-    const layoutGroupSubtree = (nodeId: string, depth: number): void => {
-      const node = nodes[nodeId]
-      if (!node) return
-      const mutableNode = node as SceneNodeVM & { x: number; y: number }
-      const indentPx = depth * NODE_INDENT
-      mutableNode.x = pos.x + GROUP_PADDING_X + indentPx
-      mutableNode.y = cursorY
-      cursorY += node.height + NODE_ROW_GAP
-      maxNodeW = Math.max(maxNodeW, node.width + indentPx)
-      const children = childrenByParent.get(nodeId) ?? []
-      children.forEach((childId) => layoutGroupSubtree(childId, depth + 1))
+    let maxNodeBottom = pos.y + GROUP_PADDING_TOP
+
+    if (listViewEnabled) {
+      const nodeIdsInGroup = new Set(orderedNodeIds)
+      const childrenByParent = new Map<string, string[]>()
+      orderedNodeIds.forEach((nodeId) => {
+        const node = nodes[nodeId]
+        const parentId = node?.parentNodeId
+        if (!parentId || !nodeIdsInGroup.has(parentId)) return
+        const siblings = childrenByParent.get(parentId) ?? []
+        siblings.push(nodeId)
+        childrenByParent.set(parentId, siblings)
+      })
+      const orderedRoots = orderedNodeIds.filter((nodeId) => {
+        const parentId = nodes[nodeId]?.parentNodeId
+        return !parentId || !nodeIdsInGroup.has(parentId)
+      })
+
+      const layoutGroupSubtree = (nodeId: string, depth: number): void => {
+        const node = nodes[nodeId]
+        if (!node) return
+        const mutableNode = node as SceneNodeVM & { x: number; y: number }
+        const indentPx = depth * NODE_INDENT
+        mutableNode.x = pos.x + GROUP_PADDING_X + indentPx
+        mutableNode.y = cursorY
+        cursorY += node.height + NODE_ROW_GAP
+        maxNodeW = Math.max(maxNodeW, node.width + indentPx)
+        maxNodeBottom = Math.max(maxNodeBottom, mutableNode.y + node.height)
+        const children = childrenByParent.get(nodeId) ?? []
+        children.forEach((childId) => layoutGroupSubtree(childId, depth + 1))
+      }
+      orderedRoots.forEach((rootId) => layoutGroupSubtree(rootId, 0))
+    } else {
+      const remembered = localState.groupNodePositions[groupId] ?? {}
+      orderedNodeIds.forEach((nodeId, index) => {
+        const node = nodes[nodeId]
+        if (!node) return
+        const mutableNode = node as SceneNodeVM & { x: number; y: number }
+        const fallback = {
+          x: GROUP_PADDING_X,
+          y: GROUP_PADDING_TOP + index * (node.height + NODE_ROW_GAP),
+        }
+        const relPos = remembered[nodeId] ?? fallback
+        mutableNode.x = pos.x + relPos.x
+        mutableNode.y = pos.y + relPos.y
+        maxNodeW = Math.max(maxNodeW, relPos.x + node.width)
+        maxNodeBottom = Math.max(maxNodeBottom, mutableNode.y + node.height)
+      })
     }
-    orderedRoots.forEach((rootId) => layoutGroupSubtree(rootId, 0))
 
     const segmentIds = meta.freeSegmentIds.filter((id) => !!freeSegments[id])
     const hasSegments = segmentIds.length > 0
@@ -402,23 +451,26 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
       segmentWidth = maxX + GROUP_PADDING_X
       segmentHeight = maxY + GROUP_PADDING_BOTTOM
     }
-    const mode = deriveGroupMode({ nodeIds: orderedNodeIds, freeSegmentIds: segmentIds })
-    const contentMinHeight = mode === 'nodes'
-      ? cursorY - NODE_ROW_GAP - pos.y + GROUP_PADDING_BOTTOM
-      : mode === 'segments'
-        ? Math.max(EMPTY_GROUP_MIN_HEIGHT, segmentHeight)
-        : EMPTY_GROUP_MIN_HEIGHT
-    const contentMinWidth = mode === 'nodes'
-      ? maxNodeW + GROUP_PADDING_X * 2
-      : mode === 'segments'
-        ? Math.max(EMPTY_GROUP_MIN_WIDTH, segmentWidth)
-        : EMPTY_GROUP_MIN_WIDTH
+    const hasNodes = orderedNodeIds.length > 0
+    const nodeMinHeight = hasNodes
+      ? (listViewEnabled
+          ? cursorY - NODE_ROW_GAP - pos.y + GROUP_PADDING_BOTTOM
+          : maxNodeBottom - pos.y + GROUP_PADDING_BOTTOM)
+      : EMPTY_GROUP_MIN_HEIGHT
+    const nodeMinWidth = hasNodes
+      ? (listViewEnabled
+          ? maxNodeW + GROUP_PADDING_X * 2
+          : maxNodeW + GROUP_PADDING_X)
+      : EMPTY_GROUP_MIN_WIDTH
+    const contentMinHeight = Math.max(EMPTY_GROUP_MIN_HEIGHT, nodeMinHeight, hasSegments ? segmentHeight : 0)
+    const contentMinWidth = Math.max(EMPTY_GROUP_MIN_WIDTH, nodeMinWidth, hasSegments ? segmentWidth : 0)
     const override = localState.groupSizeOverrides[groupId]
     const width = override ? override.width : contentMinWidth
     const height = override ? override.height : contentMinHeight
     groups[groupId] = {
       id: groupId,
       title: meta.title,
+      listViewEnabled,
       nodeIds: orderedNodeIds,
       freeSegmentIds: segmentIds,
       x: pos.x,

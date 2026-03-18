@@ -42,6 +42,10 @@ export type SceneNodeVM = {
   readonly fixedGreenStoneSlots: number
   /** Total stone slots (e.g. 20 for PCs, 60 for medium riding horse). */
   readonly slotCount: number
+  /** Current expanded grid width in stone slots. */
+  readonly slotCols: number
+  /** Current expanded grid height in stone slots. */
+  readonly slotRows: number
   /** Animals and vehicles use green/orange only (50% breakpoint). */
   readonly twoBandSlots?: boolean
   readonly usedSixths: number
@@ -70,6 +74,7 @@ export type SceneFreeSegmentVM = {
 export type SceneGroupVM = {
   readonly id: string
   readonly title: string
+  readonly listViewEnabled: boolean
   readonly nodeIds: readonly string[]
   readonly freeSegmentIds: readonly string[]
   readonly x: number
@@ -111,11 +116,14 @@ export type WorkerIntent =
   | { readonly type: 'SELECT_ALL_OF_TYPE'; readonly itemDefId: string; readonly nodeId?: string }
   | { readonly type: 'MOVE_GROUP'; readonly groupId: string; readonly x: number; readonly y: number }
   | { readonly type: 'RESIZE_GROUP'; readonly groupId: string; readonly width: number; readonly height: number }
+  | { readonly type: 'SET_GROUP_LIST_VIEW'; readonly groupId: string; readonly enabled: boolean }
+  | { readonly type: 'RESIZE_NODE'; readonly nodeId: string; readonly slotCols: number; readonly slotRows: number }
   | { readonly type: 'ADD_GROUP'; readonly x: number; readonly y: number }
   | { readonly type: 'DELETE_GROUP'; readonly groupId: string }
   | { readonly type: 'ADD_INVENTORY_NODE'; readonly x: number; readonly y: number; readonly groupId?: string | null }
   | { readonly type: 'UPDATE_GROUP_TITLE'; readonly groupId: string; readonly title: string }
   | { readonly type: 'MOVE_NODE_TO_GROUP_INDEX'; readonly nodeId: string; readonly groupId: string; readonly index: number }
+  | { readonly type: 'MOVE_NODE_IN_GROUP'; readonly nodeId: string; readonly groupId: string; readonly x: number; readonly y: number }
   | { readonly type: 'NEST_NODE_UNDER'; readonly nodeId: string; readonly parentNodeId: string }
   | { readonly type: 'MOVE_NODE_TO_ROOT'; readonly nodeId: string; readonly x: number; readonly y: number }
   | { readonly type: 'UPDATE_NODE_TITLE'; readonly nodeId: string; readonly title: string }

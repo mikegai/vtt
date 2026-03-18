@@ -8,8 +8,11 @@ const makeLocalState = (overrides: Partial<WorkerLocalState> = {}): WorkerLocalS
     hoveredSegmentId: null,
     groupPositions: {},
     groupSizeOverrides: {},
+    groupListViewEnabled: {},
     nodeGroupOverrides: {},
     nodePositions: {},
+    groupNodePositions: {},
+    nodeSizeOverrides: {},
     freeSegmentPositions: {},
     groupFreeSegmentPositions: {},
     groupNodeOrders: {},
@@ -26,6 +29,93 @@ const makeLocalState = (overrides: Partial<WorkerLocalState> = {}): WorkerLocalS
   }) as WorkerLocalState
 
 describe('group segment behavior', () => {
+  it('defaults list view off for groups', () => {
+    const scene = buildSceneVM(sampleState, makeLocalState())
+    expect(scene.groups.party).toBeDefined()
+    expect((scene.groups.party as any).listViewEnabled).toBe(false)
+  })
+
+  it('uses remembered absolute node position when list view is off', () => {
+    const local = makeLocalState({
+      // New state key introduced by list/absolute group behavior.
+      groupNodePositions: {
+        party: {
+          cutthroat: { x: 333, y: 444 },
+        },
+      },
+      groupListViewEnabled: {
+        party: false,
+      },
+    } as any)
+
+    const scene = buildSceneVM(sampleState, local)
+    const group = scene.groups.party
+    expect(group).toBeDefined()
+    expect(scene.nodes.cutthroat).toBeDefined()
+    expect(scene.nodes.cutthroat?.x).toBe((group?.x ?? 0) + 333)
+    expect(scene.nodes.cutthroat?.y).toBe((group?.y ?? 0) + 444)
+  })
+
+  it('keeps mixed nodes + free segments in the same group without auto-switching list mode', () => {
+    const state = {
+      ...sampleState,
+      carryGroups: {
+        ...sampleState.carryGroups,
+        'cutthroat:ground': {
+          id: 'cutthroat:ground',
+          ownerActorId: 'cutthroat',
+          name: 'Ground',
+          dropped: true,
+        },
+      },
+      inventoryEntries: {
+        ...sampleState.inventoryEntries,
+        cutthroatHandAxe: {
+          ...sampleState.inventoryEntries.cutthroatHandAxe,
+          zone: 'dropped' as const,
+          carryGroupId: 'cutthroat:ground',
+          state: { dropped: true },
+        },
+      },
+    }
+    const local = makeLocalState({
+      groupFreeSegmentPositions: {
+        party: {
+          cutthroatHandAxe: { x: 40, y: 40 },
+        },
+      },
+      groupListViewEnabled: {
+        party: false,
+      },
+    })
+    const scene = buildSceneVM(state, local)
+    expect(scene.groups.party?.nodeIds.length).toBeGreaterThan(0)
+    expect(scene.groups.party?.freeSegmentIds).toContain('cutthroatHandAxe')
+    expect(scene.groups.party?.listViewEnabled).toBe(false)
+  })
+
+  it('restores remembered absolute node position after list view is turned off', () => {
+    const baseLocal = makeLocalState({
+      groupNodePositions: {
+        party: {
+          cutthroat: { x: 210, y: 260 },
+        },
+      },
+    })
+    const listOn = buildSceneVM(sampleState, {
+      ...baseLocal,
+      groupListViewEnabled: { party: true },
+    })
+    const listOff = buildSceneVM(sampleState, {
+      ...baseLocal,
+      groupListViewEnabled: { party: false },
+    })
+    expect(listOn.groups.party?.listViewEnabled).toBe(true)
+    expect(listOff.groups.party?.listViewEnabled).toBe(false)
+    expect(listOff.nodes.cutthroat?.x).toBe((listOff.groups.party?.x ?? 0) + 210)
+    expect(listOff.nodes.cutthroat?.y).toBe((listOff.groups.party?.y ?? 0) + 260)
+  })
+
   it('derives group mode from contained ids only', () => {
     expect(deriveGroupMode({ nodeIds: [], freeSegmentIds: [] })).toBe('empty')
     expect(
@@ -140,5 +230,19 @@ describe('group segment behavior', () => {
     expect(empty).toBeDefined()
     expect(empty!.width).toBe(1)
     expect(empty!.height).toBe(1)
+  })
+
+  it('keeps node size overrides in slot units and clamps rows to fit node capacity', () => {
+    const local = makeLocalState({
+      nodeSizeOverrides: {
+        cutthroat: { slotCols: 7, slotRows: 1 },
+      },
+    })
+    const scene = buildSceneVM(sampleState, local)
+    const node = scene.nodes.cutthroat
+    expect(node).toBeDefined()
+    expect(node.slotCols).toBe(7)
+    // 20 stone capacity requires at least 3 rows at 7 columns.
+    expect(node.slotRows).toBe(3)
   })
 })
