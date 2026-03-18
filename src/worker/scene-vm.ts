@@ -299,13 +299,20 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
 
     const actor = worldState.actors[row.actorId]
     const twoBandSlots = actor?.kind === 'animal' || actor?.kind === 'vehicle'
-    const totalStoneSlots = Math.ceil(row.capacitySixths / SIXTHS_PER_STONE)
+    const baseStoneSlots = Math.ceil(row.capacitySixths / SIXTHS_PER_STONE)
+    const defaultSlotCols = Math.max(1, Math.min(baseStoneSlots, localState.stonesPerRow))
+    const defaultSlotRows = Math.max(1, Math.ceil(baseStoneSlots / defaultSlotCols))
+    const sizeOverride = localState.nodeSizeOverrides[row.id]
+    const slotCols = Math.max(1, sizeOverride?.slotCols ?? defaultSlotCols)
+    const minRowsForCapacity = Math.max(1, Math.ceil(baseStoneSlots / slotCols))
+    const slotRows = Math.max(minRowsForCapacity, sizeOverride?.slotRows ?? defaultSlotRows)
+    const slotCount = baseStoneSlots
     const fixedGreenStoneSlots = twoBandSlots
-      ? Math.floor(totalStoneSlots / 2)
+      ? Math.floor(slotCount / 2)
       : actor?.stats.hasLoadBearing
         ? 7
         : 5
-    const slotCount = totalStoneSlots
+    const clampedGreenSlots = Math.min(slotCount, Math.max(0, fixedGreenStoneSlots))
     const baseGroupId = actor?.movementGroupId ?? 'ungrouped'
     const hasOverride = Object.prototype.hasOwnProperty.call(localState.nodeGroupOverrides, row.id)
     const groupId = hasOverride ? localState.nodeGroupOverrides[row.id] : baseGroupId
@@ -313,13 +320,6 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
       ? (localState.groupTitleOverrides[groupId] ?? localState.customGroups[groupId]?.title ?? worldState.movementGroups[groupId]?.name ?? groupId)
       : null
     const parentNodeId = row.parentActorId
-
-    const defaultSlotCols = Math.max(1, Math.min(slotCount, localState.stonesPerRow))
-    const defaultSlotRows = Math.max(1, Math.ceil(slotCount / defaultSlotCols))
-    const sizeOverride = localState.nodeSizeOverrides[row.id]
-    const slotCols = Math.max(1, sizeOverride?.slotCols ?? defaultSlotCols)
-    const minRowsForCapacity = Math.max(1, Math.ceil(slotCount / slotCols))
-    const slotRows = Math.max(minRowsForCapacity, sizeOverride?.slotRows ?? defaultSlotRows)
 
     nodes[row.id] = {
       id: row.id,
@@ -335,7 +335,7 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
       height: nodeHeightForRows(slotRows),
       speedFeet: row.speed.explorationFeet,
       speedBand: row.speedBand.band,
-      fixedGreenStoneSlots,
+      fixedGreenStoneSlots: clampedGreenSlots,
       slotCount,
       twoBandSlots,
       slotCols,

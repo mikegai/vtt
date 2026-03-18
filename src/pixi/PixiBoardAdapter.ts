@@ -3438,6 +3438,15 @@ export class PixiBoardAdapter {
     for (let stone = 0; stone < visibleSlotCount; stone += 1) {
       const sx = SLOT_START_X + (stone % layoutCols) * (STONE_W + STONE_GAP)
       const sy = TOP_BAND_H + Math.floor(stone / layoutCols) * (STONE_H + STONE_ROW_GAP)
+      if (stone >= slotCount) {
+        // Dead zone: visual grid cells beyond the node's actual allocated capacity
+        for (let row = 0; row < SIXTH_ROWS; row += 1) {
+          const cy = sy + row * CELL_H
+          slotFillLayer.roundRect(sx + 1.6, cy + 0.8, STONE_W - 3.2, CELL_H - 1.6, 1.6)
+          slotFillLayer.fill({ color: 0x111111, alpha: 0.55 })
+        }
+        continue
+      }
       const slotBandColor = slotColorFn(stone, node.fixedGreenStoneSlots)
       for (let row = 0; row < SIXTH_ROWS; row += 1) {
         const sixth = stone * 6 + row

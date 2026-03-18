@@ -248,5 +248,6 @@ describe('group segment behavior', () => {
     expect(node.slotCols).toBe(7)
     // 20 stone capacity requires at least 3 rows at 7 columns.
     expect(node.slotRows).toBe(3)
+    expect(node.slotCount).toBe(20)
   })
 })
