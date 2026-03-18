@@ -22,6 +22,10 @@ export type SceneSegmentVM = {
   }
   /** When true, contiguous same-type segments may be visually merged. Fallback: sizeSixths <= 1. */
   readonly isFungibleVisual?: boolean
+  /** Synthetic non-removable segment representing a contained node's own weight. */
+  readonly isSelfWeightToken?: boolean
+  /** Segment is immutable in UI actions (move/delete/duplicate). */
+  readonly locked?: boolean
 }
 
 export type SceneNodeVM = {
@@ -88,6 +92,9 @@ export type SceneVM = {
   readonly hoveredSegmentId: string | null
   readonly filterCategory: ItemCategory | null
   readonly selectedSegmentIds: readonly string[]
+  readonly selectedNodeIds: readonly string[]
+  readonly selectedGroupIds: readonly string[]
+  readonly selectedLabelIds: readonly string[]
   readonly nodes: Record<string, SceneNodeVM>
   readonly freeSegments: Record<string, SceneFreeSegmentVM>
   readonly groups: Record<string, SceneGroupVM>
@@ -113,6 +120,16 @@ export type WorkerIntent =
   | { readonly type: 'SET_SELECTED_SEGMENTS'; readonly segmentIds: readonly string[] }
   | { readonly type: 'SELECT_SEGMENTS_ADD'; readonly segmentIds: readonly string[] }
   | { readonly type: 'SELECT_SEGMENTS_REMOVE'; readonly segmentIds: readonly string[] }
+  | {
+      readonly type: 'SET_MARQUEE_SELECTION'
+      readonly selection: {
+        readonly segmentIds: readonly string[]
+        readonly nodeIds: readonly string[]
+        readonly groupIds: readonly string[]
+        readonly labelIds: readonly string[]
+      }
+      readonly addToSelection: boolean
+    }
   | { readonly type: 'SELECT_ALL_OF_TYPE'; readonly itemDefId: string; readonly nodeId?: string }
   | { readonly type: 'MOVE_GROUP'; readonly groupId: string; readonly x: number; readonly y: number }
   | { readonly type: 'RESIZE_GROUP'; readonly groupId: string; readonly width: number; readonly height: number }
@@ -124,6 +141,8 @@ export type WorkerIntent =
   | { readonly type: 'UPDATE_GROUP_TITLE'; readonly groupId: string; readonly title: string }
   | { readonly type: 'MOVE_NODE_TO_GROUP_INDEX'; readonly nodeId: string; readonly groupId: string; readonly index: number }
   | { readonly type: 'MOVE_NODE_IN_GROUP'; readonly nodeId: string; readonly groupId: string; readonly x: number; readonly y: number }
+  | { readonly type: 'DROP_NODE_INTO_NODE'; readonly nodeId: string; readonly targetNodeId: string }
+  | { readonly type: 'CONNECT_NODE_PARENT'; readonly nodeId: string; readonly parentNodeId: string }
   | { readonly type: 'NEST_NODE_UNDER'; readonly nodeId: string; readonly parentNodeId: string }
   | { readonly type: 'MOVE_NODE_TO_ROOT'; readonly nodeId: string; readonly x: number; readonly y: number }
   | { readonly type: 'UPDATE_NODE_TITLE'; readonly nodeId: string; readonly title: string }

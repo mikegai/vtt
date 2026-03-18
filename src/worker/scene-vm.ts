@@ -26,6 +26,11 @@ export type WorkerLocalState = {
   readonly stonesPerRow: number
   readonly filterCategory: ItemCategory | null
   readonly selectedSegmentIds: readonly string[]
+  readonly selectedNodeIds: readonly string[]
+  readonly selectedGroupIds: readonly string[]
+  readonly selectedLabelIds: readonly string[]
+  /** Containment relation: contained node id -> container node id. */
+  readonly nodeContainment: Record<string, string>
   readonly labels: Record<string, { text: string; x: number; y: number }>
   readonly selectedLabelId: string | null
 }
@@ -66,6 +71,10 @@ const ROOT_NODE_ROW_GAP = 16
 const ROOT_NODE_MAX_W = 1800
 const FREE_SEGMENT_STACK_GAP = 8
 const CELL_H = STONE_H / 6
+const SELF_WEIGHT_TOKEN_PREFIX = '__self_weight__:'
+
+const selfWeightStoneForActorKind = (kind: SceneNodeVM['actorKind']): number =>
+  kind === 'pc' ? 15 : 100
 
 const stoneToX = (stoneIndex: number, stonesPerRow: number): number =>
   (stoneIndex % stonesPerRow) * (STONE_W + STONE_GAP)
@@ -364,6 +373,39 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
     }
   }
 
+  const containedNodeIds = new Set(Object.keys(localState.nodeContainment))
+  for (const [containedNodeId, targetNodeId] of Object.entries(localState.nodeContainment)) {
+    const containedNode = nodes[containedNodeId]
+    const targetNode = nodes[targetNodeId]
+    if (!containedNode || !targetNode) continue
+    const nextStartSixth = targetNode.segments.reduce((max, segment) => {
+      return Math.max(max, segment.startSixth + segment.sizeSixths)
+    }, 0)
+    const sizeSixths = selfWeightStoneForActorKind(containedNode.actorKind) * SIXTHS_PER_STONE
+    ;(targetNode.segments as any[]).push({
+      id: `${SELF_WEIGHT_TOKEN_PREFIX}${containedNodeId}`,
+      shortLabel: `${containedNode.title}`,
+      mediumLabel: `${containedNode.title} (contained)`,
+      fullLabel: `${containedNode.title} (contained node weight)`,
+      startSixth: nextStartSixth,
+      sizeSixths,
+      isOverflow: nextStartSixth + sizeSixths > targetNode.slotCount * SIXTHS_PER_STONE,
+      itemDefId: '__contained-node-weight__',
+      category: 'adventuring',
+      tooltip: {
+        title: `${containedNode.title} (contained)`,
+        encumbranceText: `${selfWeightStoneForActorKind(containedNode.actorKind)} st`,
+        zoneText: 'Contained',
+        quantityText: '1',
+      },
+      isSelfWeightToken: true,
+      locked: true,
+    })
+  }
+  for (const containedNodeId of containedNodeIds) {
+    delete nodes[containedNodeId]
+  }
+
   const groupOrder = [...groupsById.keys()]
   const groups: Record<string, SceneGroupVM> = {}
   let flowY = 80
@@ -375,7 +417,7 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
     const orderedNodeIds = [
       ...preferredOrder.filter((id) => meta.nodeIds.includes(id)),
       ...meta.nodeIds.filter((id) => !preferredSet.has(id)),
-    ]
+    ].filter((id) => !containedNodeIds.has(id))
     meta.nodeIds = orderedNodeIds
 
     const pos = localState.groupPositions[groupId] ?? { x: GROUP_X, y: flowY }
@@ -483,7 +525,7 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
 
   // Ungrouped nodes are freely positioned on the world canvas.
   const ungroupedNodeIds = Object.values(nodes)
-    .filter((node) => node.groupId == null)
+    .filter((node) => node.groupId == null && !containedNodeIds.has(node.id))
     .map((node) => node.id)
   const ungroupedNodeSet = new Set(ungroupedNodeIds)
   const childrenByParent = new Map<string, string[]>()
@@ -528,6 +570,9 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
     hoveredSegmentId: localState.hoveredSegmentId,
     filterCategory: localState.filterCategory,
     selectedSegmentIds: localState.selectedSegmentIds,
+    selectedNodeIds: localState.selectedNodeIds.filter((id) => !!nodes[id] && !containedNodeIds.has(id)),
+    selectedGroupIds: localState.selectedGroupIds.filter((id) => !!groups[id]),
+    selectedLabelIds: localState.selectedLabelIds.filter((id) => !!localState.labels[id]),
     nodes,
     freeSegments,
     groups,

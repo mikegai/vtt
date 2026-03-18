@@ -30,6 +30,10 @@ let localState: WorkerLocalState = {
   stonesPerRow: 25,
   filterCategory: null,
   selectedSegmentIds: [],
+  selectedNodeIds: [],
+  selectedGroupIds: [],
+  selectedLabelIds: [],
+  nodeContainment: {},
   labels: {},
   selectedLabelId: null,
 }
@@ -106,6 +110,8 @@ const collectSceneSubtreeNodeIds = (scene: SceneVM, rootNodeId: string): string[
 }
 
 const droppedGroupIdForActor = (actorId: string): string => `${actorId}:ground`
+const SELF_WEIGHT_TOKEN_PREFIX = '__self_weight__:'
+const isSelfWeightTokenId = (segmentId: string): boolean => segmentId.startsWith(SELF_WEIGHT_TOKEN_PREFIX)
 
 const ensureDroppedGroup = (state: CanonicalState, actorId: string): CanonicalState => {
   const droppedGroupId = droppedGroupIdForActor(actorId)
@@ -411,7 +417,7 @@ const applyIntent = (intent: WorkerIntent): void => {
   }
 
   if (intent.type === 'SET_SELECTED_SEGMENTS') {
-    localState = { ...localState, selectedSegmentIds: intent.segmentIds }
+    localState = { ...localState, selectedSegmentIds: intent.segmentIds, selectedNodeIds: [], selectedGroupIds: [], selectedLabelIds: [] }
     recompute()
     return
   }
@@ -428,6 +434,38 @@ const applyIntent = (intent: WorkerIntent): void => {
     const toRemove = new Set(intent.segmentIds)
     const next = localState.selectedSegmentIds.filter((id) => !toRemove.has(id))
     localState = { ...localState, selectedSegmentIds: next }
+    recompute()
+    return
+  }
+
+  if (intent.type === 'SET_MARQUEE_SELECTION') {
+    if (intent.addToSelection) {
+      const seg = new Set(localState.selectedSegmentIds)
+      const node = new Set(localState.selectedNodeIds)
+      const group = new Set(localState.selectedGroupIds)
+      const label = new Set(localState.selectedLabelIds)
+      intent.selection.segmentIds.forEach((id) => seg.add(id))
+      intent.selection.nodeIds.forEach((id) => node.add(id))
+      intent.selection.groupIds.forEach((id) => group.add(id))
+      intent.selection.labelIds.forEach((id) => label.add(id))
+      localState = {
+        ...localState,
+        selectedSegmentIds: [...seg],
+        selectedNodeIds: [...node],
+        selectedGroupIds: [...group],
+        selectedLabelIds: [...label],
+        selectedLabelId: [...label][0] ?? localState.selectedLabelId,
+      }
+    } else {
+      localState = {
+        ...localState,
+        selectedSegmentIds: [...intent.selection.segmentIds],
+        selectedNodeIds: [...intent.selection.nodeIds],
+        selectedGroupIds: [...intent.selection.groupIds],
+        selectedLabelIds: [...intent.selection.labelIds],
+        selectedLabelId: intent.selection.labelIds[0] ?? null,
+      }
+    }
     recompute()
     return
   }
@@ -789,6 +827,51 @@ const applyIntent = (intent: WorkerIntent): void => {
     return
   }
 
+  if (intent.type === 'DROP_NODE_INTO_NODE') {
+    if (!worldState) {
+      recompute()
+      return
+    }
+    if (intent.nodeId === intent.targetNodeId) {
+      recompute()
+      return
+    }
+    localState = {
+      ...localState,
+      nodeContainment: {
+        ...localState.nodeContainment,
+        [intent.nodeId]: intent.targetNodeId,
+      },
+    }
+    recompute()
+    return
+  }
+
+  if (intent.type === 'CONNECT_NODE_PARENT') {
+    if (!worldState) {
+      recompute()
+      return
+    }
+    const childActor = worldState.actors[intent.nodeId]
+    const parentActor = worldState.actors[intent.parentNodeId]
+    if (!childActor || !parentActor || intent.nodeId === intent.parentNodeId) {
+      recompute()
+      return
+    }
+    worldState = {
+      ...worldState,
+      actors: {
+        ...worldState.actors,
+        [intent.nodeId]: {
+          ...childActor,
+          ownerActorId: intent.parentNodeId,
+        },
+      },
+    }
+    recompute()
+    return
+  }
+
   if (intent.type === 'NEST_NODE_UNDER') {
     if (!worldState) {
       recompute()
@@ -900,6 +983,9 @@ const applyIntent = (intent: WorkerIntent): void => {
       ...localState,
       nodeGroupOverrides: nextNodeGroupOverrides,
       nodePositions: nextNodePositions,
+      nodeContainment: Object.fromEntries(
+        Object.entries(localState.nodeContainment).filter(([id]) => !subtreeNodeIds.includes(id)),
+      ),
     }
     debugDrag('MOVE_NODE_TO_ROOT applied', {
       nodeId: intent.nodeId,
@@ -933,23 +1019,24 @@ const applyIntent = (intent: WorkerIntent): void => {
   }
 
   if (intent.type === 'DRAG_SEGMENT_START') {
-    if (!worldState || intent.segmentIds.length === 0) {
+    const movableSegmentIds = intent.segmentIds.filter((id) => !isSelfWeightTokenId(id))
+    if (!worldState || movableSegmentIds.length === 0) {
       recompute()
       return
     }
     const segToNode = buildSegmentIdToNodeId(worldState)
-    const firstSource = segToNode[intent.segmentIds[0]]
+    const firstSource = segToNode[movableSegmentIds[0]]
     const sourceNodeIds: Record<string, string> = {}
-    for (const id of intent.segmentIds) {
+    for (const id of movableSegmentIds) {
       const nodeId = segToNode[id]
       if (nodeId) sourceNodeIds[id] = nodeId
     }
     localState = {
       ...localState,
       dropIntent: {
-        segmentIds: intent.segmentIds,
+        segmentIds: movableSegmentIds,
         sourceNodeIds,
-        targetNodeId: firstSource ?? intent.segmentIds[0],
+        targetNodeId: firstSource ?? movableSegmentIds[0],
       },
     }
     recompute()
@@ -1352,6 +1439,10 @@ const applyIntent = (intent: WorkerIntent): void => {
 
   if (intent.type === 'MOVE_ENTRY_TO') {
     if (!worldState) return
+    if (isSelfWeightTokenId(intent.segmentId)) {
+      recompute()
+      return
+    }
     applyMoveEntryTo(intent.segmentId, intent.sourceNodeId, intent.targetNodeId)
     recompute()
     return
@@ -1359,7 +1450,7 @@ const applyIntent = (intent: WorkerIntent): void => {
 
   if (intent.type === 'MOVE_ENTRIES_TO') {
     if (!worldState) return
-    for (const { segmentId, sourceNodeId } of intent.moves) {
+    for (const { segmentId, sourceNodeId } of intent.moves.filter((m) => !isSelfWeightTokenId(m.segmentId))) {
       applyMoveEntryTo(segmentId, sourceNodeId, intent.targetNodeId)
     }
     recompute()
@@ -1410,6 +1501,9 @@ const applyIntent = (intent: WorkerIntent): void => {
       groupFreeSegmentPositions: removeSegmentsFromGroupPositions(localState.groupFreeSegmentPositions, entryIdsToRemove),
       nodeSizeOverrides: Object.fromEntries(
         Object.entries(localState.nodeSizeOverrides).filter(([id]) => id !== actorId),
+      ),
+      nodeContainment: Object.fromEntries(
+        Object.entries(localState.nodeContainment).filter(([id, targetId]) => id !== actorId && targetId !== actorId),
       ),
     }
     const nextGroupNodeOrders = { ...localState.groupNodeOrders }
@@ -1550,7 +1644,7 @@ const applyIntent = (intent: WorkerIntent): void => {
     if (!worldState) return
     const scene = buildSceneVM(worldState, localState)
     const newSegmentIds: string[] = []
-    for (const segmentId of intent.segmentIds) {
+    for (const segmentId of intent.segmentIds.filter((id) => !isSelfWeightTokenId(id))) {
       const entryId = segmentIdToEntryId(segmentId)
       const entry = worldState.inventoryEntries[entryId]
       if (!entry) continue
@@ -1616,7 +1710,7 @@ const applyIntent = (intent: WorkerIntent): void => {
   if (intent.type === 'DELETE_ENTRY') {
     if (!worldState) return
     const entryIdsToRemove = new Set<string>()
-    for (const segmentId of intent.segmentIds) {
+    for (const segmentId of intent.segmentIds.filter((id) => !isSelfWeightTokenId(id))) {
       const entryId = segmentIdToEntryId(segmentId)
       if (worldState.inventoryEntries[entryId]) entryIdsToRemove.add(entryId)
     }
@@ -1655,6 +1749,10 @@ const applyIntent = (intent: WorkerIntent): void => {
 
   if (intent.type === 'SET_WIELD') {
     if (!worldState) return
+    if (isSelfWeightTokenId(intent.segmentId)) {
+      recompute()
+      return
+    }
     const entryId = segmentIdToEntryId(intent.segmentId)
     const entry = worldState.inventoryEntries[entryId]
     const itemDef = entry ? worldState.itemDefinitions[entry.itemDefId] : null
@@ -1704,6 +1802,10 @@ const applyIntent = (intent: WorkerIntent): void => {
 
   if (intent.type === 'UNWIELD') {
     if (!worldState) return
+    if (isSelfWeightTokenId(intent.segmentId)) {
+      recompute()
+      return
+    }
     const entryId = segmentIdToEntryId(intent.segmentId)
     const entry = worldState.inventoryEntries[entryId]
     if (!entry) {
@@ -1740,6 +1842,7 @@ const applyIntent = (intent: WorkerIntent): void => {
         ...localState.labels,
         [labelId]: { text, x: intent.x, y: intent.y },
       },
+      selectedLabelIds: [labelId],
       selectedLabelId: labelId,
     }
     recompute()
@@ -1790,6 +1893,7 @@ const applyIntent = (intent: WorkerIntent): void => {
     localState = {
       ...localState,
       labels,
+      selectedLabelIds: localState.selectedLabelIds.filter((id) => id !== intent.labelId),
       selectedLabelId: localState.selectedLabelId === intent.labelId ? null : localState.selectedLabelId,
     }
     recompute()
@@ -1797,7 +1901,11 @@ const applyIntent = (intent: WorkerIntent): void => {
   }
 
   if (intent.type === 'SELECT_LABEL') {
-    localState = { ...localState, selectedLabelId: intent.labelId }
+    localState = {
+      ...localState,
+      selectedLabelId: intent.labelId,
+      selectedLabelIds: intent.labelId ? [intent.labelId] : [],
+    }
     recompute()
     return
   }

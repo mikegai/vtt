@@ -675,6 +675,12 @@ const pixiAdapter = new PixiBoardAdapter(canvasHost, {
   onMoveNodeInGroup(nodeId, groupId, x, y) {
     postToWorker({ type: 'INTENT', intent: { type: 'MOVE_NODE_IN_GROUP', nodeId, groupId, x, y } })
   },
+  onDropNodeIntoNode(nodeId, targetNodeId) {
+    postToWorker({ type: 'INTENT', intent: { type: 'DROP_NODE_INTO_NODE', nodeId, targetNodeId } })
+  },
+  onConnectNodeParent(nodeId, parentNodeId) {
+    postToWorker({ type: 'INTENT', intent: { type: 'CONNECT_NODE_PARENT', nodeId, parentNodeId } })
+  },
   onNestNodeUnder(nodeId, parentNodeId) {
     postToWorker({ type: 'INTENT', intent: { type: 'NEST_NODE_UNDER', nodeId, parentNodeId } })
   },
@@ -755,12 +761,8 @@ const pixiAdapter = new PixiBoardAdapter(canvasHost, {
   onSegmentDoubleClick(_segmentId, itemDefId, nodeId) {
     postToWorker({ type: 'INTENT', intent: { type: 'SELECT_ALL_OF_TYPE', itemDefId, nodeId } })
   },
-  onMarqueeSelect(segmentIds, addToSelection) {
-    if (addToSelection) {
-      postToWorker({ type: 'INTENT', intent: { type: 'SELECT_SEGMENTS_ADD', segmentIds } })
-    } else {
-      postToWorker({ type: 'INTENT', intent: { type: 'SET_SELECTED_SEGMENTS', segmentIds } })
-    }
+  onMarqueeSelect(selection, addToSelection) {
+    postToWorker({ type: 'INTENT', intent: { type: 'SET_MARQUEE_SELECTION', selection, addToSelection } })
   },
   onExternalDragEnd(targetNodeId, x, y, cancelled, freeSegmentPositions) {
     parseResultsEl.querySelectorAll('.parsed-item-dragging').forEach((el) => el.classList.remove('parsed-item-dragging'))

@@ -45,12 +45,32 @@ type NodeReorderDragData = {
   targetGroupId: string | null
   targetIndex: number
   targetNestParentNodeId: string | null
+  targetContainNodeId: string | null
 }
 
 type LabelDragData = {
   readonly labelId: string
   readonly offset: { x: number; y: number }
 }
+
+type ConnectorDragData = {
+  readonly nodeId: string
+  readonly fromX: number
+  readonly fromY: number
+  targetNodeId: string | null
+}
+
+type MarqueeSelection = {
+  readonly segmentIds: string[]
+  readonly nodeIds: string[]
+  readonly groupIds: string[]
+  readonly labelIds: string[]
+}
+
+type MarqueeOriginScope =
+  | { type: 'world' }
+  | { type: 'group'; groupId: string }
+  | { type: 'node'; nodeId: string }
 
 type ActiveDrag =
   | { type: 'idle' }
@@ -60,8 +80,9 @@ type ActiveDrag =
   | { type: 'groupResize'; state: GroupResizeDragData }
   | { type: 'nodeResize'; state: NodeResizeDragData }
   | { type: 'nodeReorder'; state: NodeReorderDragData }
+  | { type: 'connector'; state: ConnectorDragData }
   | { type: 'label'; state: LabelDragData }
-  | { type: 'marquee'; startWorldX: number; startWorldY: number; endX: number; endY: number }
+  | { type: 'marquee'; startWorldX: number; startWorldY: number; endX: number; endY: number; origin: MarqueeOriginScope }
 
 type AdapterHandlers = {
   onHoverSegment(segmentId: string | null): void
@@ -71,6 +92,8 @@ type AdapterHandlers = {
   onResizeNode?(nodeId: string, slotCols: number, slotRows: number): void
   onMoveNodeToGroupIndex?(nodeId: string, groupId: string, index: number): void
   onMoveNodeInGroup?(nodeId: string, groupId: string, x: number, y: number): void
+  onDropNodeIntoNode?(nodeId: string, targetNodeId: string): void
+  onConnectNodeParent?(nodeId: string, parentNodeId: string): void
   onNestNodeUnder?(nodeId: string, parentNodeId: string): void
   onMoveNodeToRoot?(nodeId: string, x: number, y: number): void
   onZoomChange(zoom: number): void
@@ -89,7 +112,7 @@ type AdapterHandlers = {
   onCanvasContextMenu?(worldX: number, worldY: number, clientX: number, clientY: number): void
   onSegmentClick?(segmentId: string, nodeId: string, addToSelection: boolean): void
   onSegmentDoubleClick?(segmentId: string, itemDefId: string, nodeId: string): void
-  onMarqueeSelect?(segmentIds: string[], addToSelection: boolean): void
+  onMarqueeSelect?(selection: MarqueeSelection, addToSelection: boolean): void
   onMoveLabel?(labelId: string, x: number, y: number): void
   onSelectLabel?(labelId: string | null): void
   onEditNodeTitleRequest?(
@@ -1235,13 +1258,22 @@ const drawSegmentBlock = (
   const { startStone, endStone } = segmentStoneSpan(segment.startSixth, segment.sizeSixths)
   const isDropPreview = segment.isDropPreview === true
   const dimmed = filterCategory != null && segment.category !== filterCategory
-  const color = isDropPreview ? 0x5cadee : segment.isOverflow ? 0x932d4e : hovered ? 0x5cadee : 0x3d9ac9
+  const color = isDropPreview
+    ? 0x5cadee
+    : segment.isSelfWeightToken
+      ? 0x8a6eff
+      : segment.isOverflow
+        ? 0x932d4e
+        : hovered
+          ? 0x5cadee
+          : 0x3d9ac9
   const dimmedAlpha = 0.12
   const alpha = isDropPreview ? 0.25 : segment.isOverflow ? 0.88 : dimmed ? dimmedAlpha : 0.95
+  const isLocked = segment.locked === true || segment.isSelfWeightToken === true
 
   const block = new Graphics()
-  block.eventMode = 'static'
-  block.cursor = 'pointer'
+  block.eventMode = isLocked ? 'none' : 'static'
+  block.cursor = isLocked ? 'default' : 'pointer'
   block.on('pointerover', (event: any) => {
     if (allowInteraction && !allowInteraction()) return
     handlers.onHoverSegment(segment.id)
@@ -1256,7 +1288,7 @@ const drawSegmentBlock = (
     handlers.onHoverSegment(null)
     onTooltipLeave?.()
   })
-  if (onSegmentPointerDown && nodeId) {
+  if (!isLocked && onSegmentPointerDown && nodeId) {
     block.on('pointerdown', (event: any) => {
       if (event.button === 0) {
         event.stopPropagation()
@@ -1268,7 +1300,7 @@ const drawSegmentBlock = (
       }
     })
   }
-  if (nodeId && (onSegmentClick || onSegmentDoubleClick)) {
+  if (!isLocked && nodeId && (onSegmentClick || onSegmentDoubleClick)) {
     block.on('pointertap', (event: any) => {
       if (allowInteraction && !allowInteraction()) return
       if (event.button !== 0) return
@@ -1431,12 +1463,18 @@ export class PixiBoardAdapter {
   private activeDrag: ActiveDrag = { type: 'idle' }
   private groupDropIndicator: Graphics
   private nestConnectorGraphics: Graphics
+  private connectorDragLine: Graphics
   private lastDragEndTime = 0
   private segmentDragHoveredGroupId: string | null = null
   private pendingRebuild = false
   private marqueeGraphics: Graphics | null = null
-  /** During marquee drag: segment IDs that would be selected (live preview). */
-  private marqueePreviewSegmentIds: Set<string> | null = null
+  /** During marquee drag: typed IDs that would be selected (live preview). */
+  private marqueePreviewSelection: {
+    segmentIds: Set<string>
+    nodeIds: Set<string>
+    groupIds: Set<string>
+    labelIds: Set<string>
+  } | null = null
   /** During marquee drag: whether add-to-selection modifier is held (for preview merge). */
   private marqueePreviewAddToSelection = false
   private minVisibleLabelPx = DEFAULT_MIN_VISIBLE_PX
@@ -1465,6 +1503,8 @@ export class PixiBoardAdapter {
     this.groupDropIndicator.eventMode = 'none'
     this.nestConnectorGraphics = new Graphics()
     this.nestConnectorGraphics.eventMode = 'none'
+    this.connectorDragLine = new Graphics()
+    this.connectorDragLine.eventMode = 'none'
     this.worldLayer = new Container()
     this.labelLayer = new Container()
     this.selectionOverlayLayer = new Container()
@@ -1534,6 +1574,7 @@ export class PixiBoardAdapter {
     this.marqueeGraphics = new Graphics()
     this.marqueeGraphics.eventMode = 'none'
     this.hudLayer.addChild(this.marqueeGraphics)
+    this.hudLayer.addChild(this.connectorDragLine)
     this.app.stage.addChild(this.hudLayer)
     this.paceText.position.set(16, 12)
 
@@ -1579,7 +1620,14 @@ export class PixiBoardAdapter {
           const { x, y } = canvasCoords(event)
           const startWorldX = (x - this.pan.x) / this.zoom
           const startWorldY = (y - this.pan.y) / this.zoom
-          this.activeDrag = { type: 'marquee', startWorldX, startWorldY, endX: x, endY: y }
+          this.activeDrag = {
+            type: 'marquee',
+            startWorldX,
+            startWorldY,
+            endX: x,
+            endY: y,
+            origin: this.getMarqueeOriginScope(startWorldX, startWorldY),
+          }
           this.lastPointerPosition = { clientX: event.clientX, clientY: event.clientY }
           this.startAutoPanLoop()
           this.drawMarquee()
@@ -1605,6 +1653,9 @@ export class PixiBoardAdapter {
           case 'groupResize':
           case 'nodeResize':
             this.endDrag()
+            return
+          case 'connector':
+            this.finishConnectorDrag(event.clientX, event.clientY)
             return
           case 'marquee': {
             const { x, y } = canvasCoords(event)
@@ -1648,6 +1699,9 @@ export class PixiBoardAdapter {
           return
         case 'nodeResize':
           this.updateNodeResizeDrag(event.clientX, event.clientY)
+          return
+        case 'connector':
+          this.updateConnectorDrag(event.clientX, event.clientY)
           return
         case 'marquee': {
           const { x, y } = canvasCoords(event)
@@ -1765,6 +1819,9 @@ export class PixiBoardAdapter {
           case 'nodeReorder':
             this.updateNodeReorderDrag(pos.clientX, pos.clientY)
             break
+          case 'connector':
+            this.updateConnectorDrag(pos.clientX, pos.clientY)
+            break
           case 'marquee': {
             const canvasX = pos.clientX - rect.left
             const canvasY = pos.clientY - rect.top
@@ -1791,24 +1848,50 @@ export class PixiBoardAdapter {
   private updateSelectionOverlay(): void {
     this.selectionOverlayLayer.removeChildren()
     if (!this.currentScene) return
-    let selectedIds: Set<string>
-    if (this.marqueePreviewSegmentIds != null) {
+    let selectedIds = new Set(this.currentScene.selectedSegmentIds ?? [])
+    let selectedNodeIds = new Set(this.currentScene.selectedNodeIds ?? [])
+    let selectedGroupIds = new Set(this.currentScene.selectedGroupIds ?? [])
+    let selectedLabelIds = new Set(this.currentScene.selectedLabelIds ?? [])
+    if (this.marqueePreviewSelection) {
       if (this.marqueePreviewAddToSelection) {
-        selectedIds = new Set([
-          ...(this.currentScene.selectedSegmentIds ?? []),
-          ...this.marqueePreviewSegmentIds,
-        ])
+        this.marqueePreviewSelection.segmentIds.forEach((id) => selectedIds.add(id))
+        this.marqueePreviewSelection.nodeIds.forEach((id) => selectedNodeIds.add(id))
+        this.marqueePreviewSelection.groupIds.forEach((id) => selectedGroupIds.add(id))
+        this.marqueePreviewSelection.labelIds.forEach((id) => selectedLabelIds.add(id))
       } else {
-        selectedIds = this.marqueePreviewSegmentIds
+        selectedIds = new Set(this.marqueePreviewSelection.segmentIds)
+        selectedNodeIds = new Set(this.marqueePreviewSelection.nodeIds)
+        selectedGroupIds = new Set(this.marqueePreviewSelection.groupIds)
+        selectedLabelIds = new Set(this.marqueePreviewSelection.labelIds)
       }
-    } else {
-      selectedIds = new Set(this.currentScene.selectedSegmentIds ?? [])
     }
-    if (selectedIds.size === 0) return
+    if (selectedIds.size === 0 && selectedNodeIds.size === 0 && selectedGroupIds.size === 0 && selectedLabelIds.size === 0) return
     const PAD = 0.2
     const STROKE = 0.8
     const RADIUS = 2
     const boxBounds: { left: number; top: number; right: number; bottom: number }[] = []
+    for (const [groupId, group] of Object.entries(this.currentScene.groups ?? {})) {
+      if (!selectedGroupIds.has(groupId)) continue
+      const dims = this.getGroupDisplayDimensions(group)
+      const g = new Graphics()
+      g.eventMode = 'none'
+      g.roundRect(group.x, group.y, dims.width, dims.height, 12)
+      g.stroke({ width: 2, color: 0xc8e4ff, alpha: 0.72 })
+      this.selectionOverlayLayer.addChild(g)
+      boxBounds.push({ left: group.x, top: group.y, right: group.x + dims.width, bottom: group.y + dims.height })
+    }
+    for (const nodeId of selectedNodeIds) {
+      const node = this.currentScene.nodes[nodeId]
+      if (!node) continue
+      const pos = this.getNodeDisplayPosition(node)
+      const dims = this.getNodeDisplayDimensions(node)
+      const g = new Graphics()
+      g.eventMode = 'none'
+      g.roundRect(pos.x, pos.y, dims.width, dims.height, 10)
+      g.stroke({ width: 2, color: 0xffffff, alpha: 0.72 })
+      this.selectionOverlayLayer.addChild(g)
+      boxBounds.push({ left: pos.x, top: pos.y, right: pos.x + dims.width, bottom: pos.y + dims.height })
+    }
     for (const [nodeId, view] of this.nodeViews) {
       const node = this.currentScene.nodes[nodeId]
       if (!node) continue
@@ -1849,7 +1932,22 @@ export class PixiBoardAdapter {
       g.stroke({ width: STROKE, color: 0xffffff, alpha: 0.55 })
       this.selectionOverlayLayer.addChild(g)
     }
-    if (selectedIds.size > 1 && boxBounds.length > 0) {
+    for (const labelId of selectedLabelIds) {
+      const label = this.currentScene.labels[labelId]
+      const view = this.labelViews.get(labelId)
+      if (!label || !view) continue
+      const b = view.root.getLocalBounds()
+      const w = Math.max(40, b.width)
+      const h = Math.max(20, b.height)
+      const g = new Graphics()
+      g.eventMode = 'none'
+      g.roundRect(label.x - 8, label.y, w, h, 6)
+      g.stroke({ width: 1.5, color: 0xbad8ff, alpha: 0.72 })
+      this.selectionOverlayLayer.addChild(g)
+      boxBounds.push({ left: label.x - 8, top: label.y, right: label.x - 8 + w, bottom: label.y + h })
+    }
+    const selectedCount = selectedIds.size + selectedNodeIds.size + selectedGroupIds.size + selectedLabelIds.size
+    if (selectedCount > 1 && boxBounds.length > 0) {
       const minX = Math.min(...boxBounds.map((bb) => bb.left))
       const minY = Math.min(...boxBounds.map((bb) => bb.top))
       const maxX = Math.max(...boxBounds.map((bb) => bb.right))
@@ -1879,75 +1977,146 @@ export class PixiBoardAdapter {
     this.marqueeGraphics.fill({ color: 0x5cadee, alpha: 0.12 })
   }
 
-  /** Returns segment IDs that intersect the marquee rect (screen coords). */
-  private computeSegmentsInMarqueeRect(x1: number, y1: number, x2: number, y2: number): string[] {
-    if (!this.currentScene) return []
+  private getMarqueeOriginScope(worldX: number, worldY: number): MarqueeOriginScope {
+    if (!this.currentScene) return { type: 'world' }
+    for (const node of Object.values(this.currentScene.nodes)) {
+      const pos = this.getNodeDisplayPosition(node)
+      const dims = this.getNodeDisplayDimensions(node)
+      if (worldX >= pos.x && worldX <= pos.x + dims.width && worldY >= pos.y && worldY <= pos.y + dims.height) {
+        return { type: 'node', nodeId: node.id }
+      }
+    }
+    const groups = Object.values(this.currentScene.groups ?? {})
+    for (let i = groups.length - 1; i >= 0; i -= 1) {
+      const g = groups[i]
+      if (!g) continue
+      const dims = this.getGroupDisplayDimensions(g)
+      if (worldX >= g.x && worldX <= g.x + dims.width && worldY >= g.y && worldY <= g.y + dims.height) {
+        return { type: 'group', groupId: g.id }
+      }
+    }
+    return { type: 'world' }
+  }
+
+  /** Returns peer-level marquee selection for the chosen origin scope. */
+  private computeMarqueeSelection(
+    origin: MarqueeOriginScope,
+    x1: number,
+    y1: number,
+    x2: number,
+    y2: number,
+  ): MarqueeSelection {
+    if (!this.currentScene) return { segmentIds: [], nodeIds: [], groupIds: [], labelIds: [] }
     const minW = (Math.min(x1, x2) - this.pan.x) / this.zoom
     const maxW = (Math.max(x1, x2) - this.pan.x) / this.zoom
     const minH = (Math.min(y1, y2) - this.pan.y) / this.zoom
     const maxH = (Math.max(y1, y2) - this.pan.y) / this.zoom
-    const segmentIds: string[] = []
-    for (const node of Object.values(this.currentScene.nodes)) {
-      for (const segment of node.segments) {
-        if (segment.isDropPreview) continue
-        const b = segmentBoundsInNodeLocal(segment)
-        const nodePos = this.getNodeDisplayPosition(node)
-        const segX1 = nodePos.x + b.x
-        const segY1 = nodePos.y + b.y
-        const segX2 = segX1 + b.w
-        const segY2 = segY1 + b.h
-        if (segX1 < maxW && segX2 > minW && segY1 < maxH && segY2 > minH) {
-          segmentIds.push(segment.id)
-        }
+    const intersects = (x: number, y: number, w: number, h: number): boolean =>
+      x < maxW && x + w > minW && y < maxH && y + h > minH
+    const selection: MarqueeSelection = { segmentIds: [], nodeIds: [], groupIds: [], labelIds: [] }
+
+    if (origin.type === 'world') {
+      const groups = Object.values(this.currentScene.groups ?? {})
+      for (let i = groups.length - 1; i >= 0; i -= 1) {
+        const group = groups[i]
+        if (!group) continue
+        const dims = this.getGroupDisplayDimensions(group)
+        if (intersects(group.x, group.y, dims.width, dims.height)) selection.groupIds.push(group.id)
       }
-    }
-    for (const free of Object.values(this.currentScene.freeSegments ?? {})) {
-      if (free.segment.isDropPreview) continue
-      const b = segmentBoundsInNodeLocal(free.segment)
-      const anchor = this.freeSegmentAnchorWorld(free)
-      const segX1 = anchor.x + b.x - SLOT_START_X
-      const segY1 = anchor.y + b.y - TOP_BAND_H
-      const segX2 = segX1 + b.w
-      const segY2 = segY1 + b.h
-      if (segX1 < maxW && segX2 > minW && segY1 < maxH && segY2 > minH) {
-        segmentIds.push(free.segment.id)
+      for (const node of Object.values(this.currentScene.nodes)) {
+        if (node.groupId != null) continue
+        const pos = this.getNodeDisplayPosition(node)
+        const dims = this.getNodeDisplayDimensions(node)
+        if (intersects(pos.x, pos.y, dims.width, dims.height)) selection.nodeIds.push(node.id)
       }
+      for (const free of Object.values(this.currentScene.freeSegments ?? {})) {
+        if (free.groupId) continue
+        if (free.segment.isDropPreview) continue
+        const b = segmentBoundsInNodeLocal(free.segment)
+        const anchor = this.freeSegmentAnchorWorld(free)
+        const x = anchor.x + b.x - SLOT_START_X
+        const y = anchor.y + b.y - TOP_BAND_H
+        if (intersects(x, y, b.w, b.h)) selection.segmentIds.push(free.segment.id)
+      }
+      for (const [labelId, label] of Object.entries(this.currentScene.labels ?? {})) {
+        const view = this.labelViews.get(labelId)
+        const b = view?.root.getLocalBounds()
+        const w = b ? Math.max(40, b.width) : 120
+        const h = b ? Math.max(20, b.height) : 28
+        if (intersects(label.x - 8, label.y, w, h)) selection.labelIds.push(label.id)
+      }
+      return selection
     }
-    return segmentIds
+
+    if (origin.type === 'group') {
+      for (const node of Object.values(this.currentScene.nodes)) {
+        if (node.groupId !== origin.groupId) continue
+        const pos = this.getNodeDisplayPosition(node)
+        const dims = this.getNodeDisplayDimensions(node)
+        if (intersects(pos.x, pos.y, dims.width, dims.height)) selection.nodeIds.push(node.id)
+      }
+      for (const free of Object.values(this.currentScene.freeSegments ?? {})) {
+        if (free.groupId !== origin.groupId) continue
+        if (free.segment.isDropPreview) continue
+        const b = segmentBoundsInNodeLocal(free.segment)
+        const anchor = this.freeSegmentAnchorWorld(free)
+        const x = anchor.x + b.x - SLOT_START_X
+        const y = anchor.y + b.y - TOP_BAND_H
+        if (intersects(x, y, b.w, b.h)) selection.segmentIds.push(free.segment.id)
+      }
+      return selection
+    }
+
+    const originNode = this.currentScene.nodes[origin.nodeId]
+    if (!originNode) return selection
+    const nodePos = this.getNodeDisplayPosition(originNode)
+    for (const segment of originNode.segments) {
+      if (segment.isDropPreview) continue
+      const b = segmentBoundsInNodeLocal(segment, originNode.slotCols)
+      const x = nodePos.x + b.x
+      const y = nodePos.y + b.y
+      if (intersects(x, y, b.w, b.h)) selection.segmentIds.push(segment.id)
+    }
+    return selection
   }
 
   private updateMarqueePreview(addToSelection: boolean): void {
     if (this.activeDrag.type !== 'marquee') return
-    const { startWorldX, startWorldY, endX, endY } = this.activeDrag
+    const { startWorldX, startWorldY, endX, endY, origin } = this.activeDrag
     const startX = startWorldX * this.zoom + this.pan.x
     const startY = startWorldY * this.zoom + this.pan.y
     const w = Math.abs(endX - startX)
     const h = Math.abs(endY - startY)
     if (w < 2 && h < 2) {
-      this.marqueePreviewSegmentIds = null
+      this.marqueePreviewSelection = null
       this.marqueePreviewAddToSelection = false
     } else {
-      const ids = this.computeSegmentsInMarqueeRect(startX, startY, endX, endY)
-      this.marqueePreviewSegmentIds = new Set(ids)
+      const selection = this.computeMarqueeSelection(origin, startX, startY, endX, endY)
+      this.marqueePreviewSelection = {
+        segmentIds: new Set(selection.segmentIds),
+        nodeIds: new Set(selection.nodeIds),
+        groupIds: new Set(selection.groupIds),
+        labelIds: new Set(selection.labelIds),
+      }
       this.marqueePreviewAddToSelection = addToSelection
     }
     this.updateSelectionOverlay()
   }
 
   private clearMarqueePreview(): void {
-    this.marqueePreviewSegmentIds = null
+    this.marqueePreviewSelection = null
     this.marqueePreviewAddToSelection = false
     this.updateSelectionOverlay()
   }
 
   private finishMarquee(addToSelection: boolean): void {
     if (this.activeDrag.type !== 'marquee' || !this.currentScene || !this.handlers.onMarqueeSelect) return
-    const { startWorldX, startWorldY, endX, endY } = this.activeDrag
+    const { startWorldX, startWorldY, endX, endY, origin } = this.activeDrag
     const startX = startWorldX * this.zoom + this.pan.x
     const startY = startWorldY * this.zoom + this.pan.y
-    const segmentIds = this.computeSegmentsInMarqueeRect(startX, startY, endX, endY)
+    const selection = this.computeMarqueeSelection(origin, startX, startY, endX, endY)
     this.clearMarqueePreview()
-    this.handlers.onMarqueeSelect(segmentIds, addToSelection)
+    this.handlers.onMarqueeSelect(selection, addToSelection)
   }
 
   /** Cancel marquee drag (e.g. on Escape). Clears preview without committing selection. */
@@ -3021,6 +3190,45 @@ export class PixiBoardAdapter {
     }
     contentContainer.addChild(dragHandle)
 
+    const connectorPin = new Graphics()
+    connectorPin.eventMode = 'static'
+    connectorPin.cursor = 'crosshair'
+    ;(connectorPin as Container & { __dragHandle?: boolean }).__dragHandle = true
+    const pinR = 5
+    const pinX = totalWidth - 12
+    const pinY = TOP_BAND_H / 2
+    connectorPin.circle(pinX, pinY, pinR)
+    connectorPin.fill({ color: 0x17324f, alpha: 0.9 })
+    connectorPin.stroke({ width: 1.5, color: 0xbddfff, alpha: 0.95 })
+    connectorPin.visible = false
+    contentContainer.addChild(connectorPin)
+    root.eventMode = 'static'
+    root.on('pointerover', () => {
+      connectorPin.visible = true
+    })
+    root.on('pointerout', () => {
+      connectorPin.visible = false
+    })
+    connectorPin.on('pointerdown', (event: any) => {
+      if (event.button !== 0 || this.activeDrag.type !== 'idle') return
+      const canvasRect = this.app.canvas.getBoundingClientRect()
+      const clientX = typeof event.clientX === 'number' ? event.clientX : event.global.x + canvasRect.left
+      const clientY = typeof event.clientY === 'number' ? event.clientY : event.global.y + canvasRect.top
+      const world = this.screenToWorld(clientX, clientY)
+      this.activeDrag = {
+        type: 'connector',
+        state: {
+          nodeId: node.id,
+          fromX: world.x,
+          fromY: world.y,
+          targetNodeId: null,
+        },
+      }
+      this.lastPointerPosition = { clientX, clientY }
+      this.startAutoPanLoop()
+      event.stopPropagation()
+    })
+
     const addExpandCaret = (midY: number): void => {
       const caret = new Graphics()
       caret.eventMode = 'static'
@@ -3497,6 +3705,7 @@ export class PixiBoardAdapter {
           targetGroupId: null,
           targetIndex: 0,
           targetNestParentNodeId: null,
+          targetContainNodeId: null,
         },
       }
       this.lastPointerPosition = { clientX, clientY }
@@ -3816,7 +4025,7 @@ export class PixiBoardAdapter {
     worldY: number,
   ): { type: 'reorder'; groupId: string; index: number; lineY: number }
     | { type: 'absolute'; groupId: string }
-    | { type: 'nest'; parentNodeId: string; lineY: number }
+    | { type: 'contain'; targetNodeId: string }
     | null {
     if (!this.currentScene) return null
     const BODY_INSET = 8
@@ -3831,7 +4040,7 @@ export class PixiBoardAdapter {
       const bodyTop = pos.y + TOP_BAND_H
       const bodyBottom = pos.y + dims.height - BODY_INSET
       if (worldX >= bodyLeft && worldX <= bodyRight && worldY >= bodyTop && worldY <= bodyBottom) {
-        return { type: 'nest', parentNodeId: node.id, lineY: pos.y + dims.height / 2 }
+        return { type: 'contain', targetNodeId: node.id }
       }
     }
 
@@ -3884,31 +4093,20 @@ export class PixiBoardAdapter {
   }
 
   private drawGroupDropIndicator(
-    drop:
-      | { type: 'reorder'; groupId: string; lineY: number }
-      | { type: 'nest'; parentNodeId: string; lineY: number },
+    drop: { type: 'reorder'; groupId: string; lineY: number },
   ): void {
     const indicator = this.groupDropIndicator
     if (!this.currentScene) return
     indicator.clear()
     this.groupLayer.addChild(indicator)
-    if (drop.type === 'reorder') {
-      const group = this.currentScene.groups[drop.groupId]
-      if (!group) return
-      const dims = this.getGroupDisplayDimensions(group)
-      const x1 = group.x + 20
-      const x2 = group.x + dims.width - 20
-      indicator.moveTo(x1, drop.lineY)
-      indicator.lineTo(x2, drop.lineY)
-      indicator.stroke({ width: 3, color: 0xffffff, alpha: 0.95 })
-    } else {
-      const node = this.currentScene.nodes[drop.parentNodeId]
-      if (!node) return
-      const pos = this.getNodeDisplayPosition(node)
-      const dims = this.getNodeDisplayDimensions(node)
-      indicator.roundRect(pos.x - 2, pos.y - 2, dims.width + 4, dims.height + 4, 12)
-      indicator.stroke({ width: 3, color: 0x5cadee, alpha: 0.9 })
-    }
+    const group = this.currentScene.groups[drop.groupId]
+    if (!group) return
+    const dims = this.getGroupDisplayDimensions(group)
+    const x1 = group.x + 20
+    const x2 = group.x + dims.width - 20
+    indicator.moveTo(x1, drop.lineY)
+    indicator.lineTo(x2, drop.lineY)
+    indicator.stroke({ width: 3, color: 0xffffff, alpha: 0.95 })
   }
 
   private updateNodeReorderDrag(clientX: number, clientY: number): void {
@@ -3934,21 +4132,25 @@ export class PixiBoardAdapter {
         drag.targetGroupId = drop.groupId
         drag.targetIndex = drop.index
         drag.targetNestParentNodeId = null
+        drag.targetContainNodeId = null
       } else if (drop.type === 'absolute') {
         drag.targetGroupId = drop.groupId
         drag.targetIndex = -1
         drag.targetNestParentNodeId = null
+        drag.targetContainNodeId = null
       } else {
         drag.targetGroupId = null
         drag.targetIndex = 0
-        drag.targetNestParentNodeId = drop.parentNodeId
+        drag.targetNestParentNodeId = null
+        drag.targetContainNodeId = drop.targetNodeId
       }
-      if (drop.type !== 'absolute') this.drawGroupDropIndicator(drop)
+      if (drop.type === 'reorder') this.drawGroupDropIndicator(drop)
       else this.groupDropIndicator.clear()
     } else {
       this.groupDropIndicator.clear()
       drag.targetGroupId = null
       drag.targetNestParentNodeId = null
+      drag.targetContainNodeId = null
     }
   }
 
@@ -3971,14 +4173,17 @@ export class PixiBoardAdapter {
             drag.targetGroupId = finalDrop.groupId
             drag.targetIndex = finalDrop.index
             drag.targetNestParentNodeId = null
+            drag.targetContainNodeId = null
           } else if (finalDrop.type === 'absolute') {
             drag.targetGroupId = finalDrop.groupId
             drag.targetIndex = -1
             drag.targetNestParentNodeId = null
+            drag.targetContainNodeId = null
           } else {
             drag.targetGroupId = null
             drag.targetIndex = 0
-            drag.targetNestParentNodeId = finalDrop.parentNodeId
+            drag.targetNestParentNodeId = null
+            drag.targetContainNodeId = finalDrop.targetNodeId
           }
         }
       }
@@ -3986,7 +4191,9 @@ export class PixiBoardAdapter {
     drag.handleView.cursor = 'grab'
     this.groupDropIndicator.clear()
     this.skipNodeAnimationOnce.clear()
-    const isNoOp = drag.targetNestParentNodeId
+    const isNoOp = drag.targetContainNodeId
+      ? drag.targetContainNodeId === drag.nodeIds[0]
+      : drag.targetNestParentNodeId
       ? drag.targetNestParentNodeId === drag.originalNestParentId
       : drag.targetGroupId != null
         ? (drag.targetIndex >= 0 && drag.targetGroupId === drag.originalGroupId && drag.targetIndex === drag.originalIndex)
@@ -4012,6 +4219,9 @@ export class PixiBoardAdapter {
           view.root.position.set(pos.x, pos.y)
         }
       }
+    } else if (drag.targetContainNodeId && this.handlers.onDropNodeIntoNode) {
+      drag.nodeIds.forEach((nodeId) => this.skipNodeAnimationOnce.add(nodeId))
+      this.handlers.onDropNodeIntoNode(drag.nodeIds[0], drag.targetContainNodeId)
     } else if (drag.targetNestParentNodeId && this.handlers.onNestNodeUnder) {
       drag.nodeIds.forEach((nodeId) => this.skipNodeAnimationOnce.add(nodeId))
       console.info('[pixi node] dispatch onNestNodeUnder', {
@@ -4049,6 +4259,37 @@ export class PixiBoardAdapter {
     this.endDrag()
   }
 
+  private updateConnectorDrag(clientX: number, clientY: number): void {
+    if (this.activeDrag.type !== 'connector' || !this.currentScene) return
+    const drag = this.activeDrag.state
+    const world = this.screenToWorld(clientX, clientY)
+    this.connectorDragLine.clear()
+    this.connectorDragLine.moveTo(drag.fromX, drag.fromY)
+    this.connectorDragLine.lineTo(world.x, world.y)
+    this.connectorDragLine.stroke({ width: 2, color: 0x9ecfff, alpha: 0.95 })
+    let targetNodeId: string | null = null
+    for (const node of Object.values(this.currentScene.nodes)) {
+      if (node.id === drag.nodeId) continue
+      const pos = this.getNodeDisplayPosition(node)
+      const dims = this.getNodeDisplayDimensions(node)
+      if (world.x >= pos.x && world.x <= pos.x + dims.width && world.y >= pos.y && world.y <= pos.y + dims.height) {
+        targetNodeId = node.id
+      }
+    }
+    drag.targetNodeId = targetNodeId
+  }
+
+  private finishConnectorDrag(finalClientX: number, finalClientY: number): void {
+    if (this.activeDrag.type !== 'connector') return
+    this.updateConnectorDrag(finalClientX, finalClientY)
+    const drag = this.activeDrag.state
+    if (drag.targetNodeId && this.handlers.onConnectNodeParent) {
+      this.handlers.onConnectNodeParent(drag.nodeId, drag.targetNodeId)
+    }
+    this.connectorDragLine.clear()
+    this.endDrag()
+  }
+
   private setNodeContentVisibility(nodeIds: readonly string[], visible: boolean): void {
     nodeIds.forEach((nodeId) => {
       const view = this.nodeViews.get(nodeId)
@@ -4069,6 +4310,7 @@ export class PixiBoardAdapter {
   private endDrag(): void {
     this.stopAutoPanLoop()
     this.setSegmentDragHoveredGroup(null)
+    this.connectorDragLine.clear()
     if (this.activeDrag.type === 'group') {
       this.setGroupNodeContentVisibility(this.activeDrag.state.groupId, true)
     } else if (this.activeDrag.type === 'nodeReorder') {
