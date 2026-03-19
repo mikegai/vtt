@@ -202,14 +202,33 @@ export type WorkerIntent =
   | { readonly type: 'SELECT_LABEL'; readonly labelId: string | null }
   | { readonly type: 'SET_WORLD_STATE'; readonly worldState: CanonicalState }
 
+export interface ConnectedUser {
+  identityHex: string
+  displayName: string
+  role: 'gm' | 'player'
+  online: boolean
+}
+
+export interface RemoteCursor {
+  identityHex: string
+  x: number
+  y: number
+}
+
 export type MainToWorkerMessage =
   | { readonly type: 'INIT'; readonly worldState: CanonicalState; readonly stonesPerRow?: number }
   | { readonly type: 'RESET'; readonly worldState: CanonicalState; readonly stonesPerRow?: number }
   | { readonly type: 'SET_STONES_PER_ROW'; readonly stonesPerRow: number }
   | { readonly type: 'INTENT'; readonly intent: WorkerIntent }
+  | { readonly type: 'SET_SPACETIMEDB_TOKEN'; readonly token: string }
+  | { readonly type: 'UPDATE_CURSOR'; readonly x: number; readonly y: number }
+  | { readonly type: 'SET_DISPLAY_NAME'; readonly name: string }
 
 export type WorkerToMainMessage =
   | { readonly type: 'SCENE_INIT'; readonly scene: SceneVM }
   | { readonly type: 'SCENE_PATCHES'; readonly patches: readonly ScenePatch[]; readonly scene: SceneVM }
   | { readonly type: 'LOG'; readonly message: string }
+  | { readonly type: 'CONNECTION_STATUS'; readonly status: 'connected' | 'disconnected' | 'error' }
+  | { readonly type: 'STORE_TOKEN'; readonly token: string }
+  | { readonly type: 'PRESENCE_UPDATE'; readonly users: ConnectedUser[]; readonly cursors: RemoteCursor[]; readonly myIdentityHex: string }
 

@@ -11,6 +11,9 @@ import { buildSceneVM, type WorkerLocalState } from './scene-vm'
 import type { MainToWorkerMessage, SceneVM, WorkerIntent, WorkerToMainMessage } from './protocol'
 import type { PersistenceBackend, PersistedLocalState } from '../persistence/backend'
 import { IndexedDBBackend } from '../persistence/indexeddb-backend'
+import { connect as stdbConnect, getConnection, isConnected, updateMyCursor, setMyDisplayName } from '../spacetimedb/client'
+import type { ConnectedUser, RemoteCursor } from '../spacetimedb/client'
+import { syncWorldState, syncLocalState } from '../spacetimedb/sync'
 
 let worldState: CanonicalState | null = null
 let localState: WorkerLocalState = {
@@ -77,6 +80,38 @@ function scheduleSave(): void {
 
 const post = (message: WorkerToMainMessage): void => {
   self.postMessage(message)
+}
+
+function onServerState(
+  newWorldState: CanonicalState,
+  newLayoutState: Partial<PersistedLocalState>,
+): void {
+  worldState = newWorldState
+  localState = { ...localState, ...newLayoutState }
+  recompute(true)
+  scheduleSave()
+}
+
+function onPresenceUpdate(
+  users: ConnectedUser[],
+  cursors: RemoteCursor[],
+  myIdentityHex: string,
+): void {
+  post({ type: 'PRESENCE_UPDATE', users, cursors, myIdentityHex })
+}
+
+function initSpacetimeDB(token?: string): void {
+  stdbConnect(
+    onServerState,
+    (status) => {
+      post({ type: 'CONNECTION_STATUS', status })
+    },
+    (newToken) => {
+      post({ type: 'STORE_TOKEN', token: newToken })
+    },
+    onPresenceUpdate,
+    token,
+  )
 }
 
 const debugDrag = (...args: unknown[]): void => {
@@ -2034,6 +2069,8 @@ async function initFromPersistence(fallbackWorldState: CanonicalState, stonesPer
     localState = { ...localState, stonesPerRow }
   }
   recompute(true)
+
+  initSpacetimeDB()
 }
 
 self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
@@ -2073,6 +2110,21 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
     }
     previousScene = null
     recompute(true)
+    if (isConnected() && worldState) {
+      const conn = getConnection()
+      if (conn) {
+        conn.reducers.setWorldState({
+          dataJson: JSON.stringify({
+            actors: Object.values(worldState.actors),
+            itemDefinitions: Object.values(worldState.itemDefinitions),
+            inventoryEntries: Object.values(worldState.inventoryEntries),
+            carryGroups: Object.values(worldState.carryGroups),
+            movementGroups: Object.values(worldState.movementGroups),
+          }),
+        })
+        conn.reducers.setLayoutState({ dataJson: JSON.stringify({}) })
+      }
+    }
     return
   }
   if (message.type === 'SET_STONES_PER_ROW') {
@@ -2080,8 +2132,35 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
     recompute(true)
     return
   }
+  if (message.type === 'SET_SPACETIMEDB_TOKEN') {
+    (globalThis as unknown as { __spacetimedb_token?: string }).__spacetimedb_token = message.token
+    return
+  }
+  if (message.type === 'UPDATE_CURSOR') {
+    updateMyCursor(message.x, message.y)
+    return
+  }
+  if (message.type === 'SET_DISPLAY_NAME') {
+    setMyDisplayName(message.name)
+    return
+  }
   if (message.type === 'INTENT') {
+    const oldWorld = worldState
+    const oldLocal = localState
     applyIntent(message.intent)
+    syncToSpacetimeDB(oldWorld, oldLocal)
   }
 }
+
+function syncToSpacetimeDB(
+  oldWorld: CanonicalState | null,
+  oldLocal: WorkerLocalState,
+): void {
+  if (!isConnected()) return
+  const conn = getConnection()
+  if (!conn || !worldState) return
+  syncWorldState(conn, oldWorld, worldState)
+  syncLocalState(conn, oldLocal, localState)
+}
+
 

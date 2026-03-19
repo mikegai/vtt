@@ -2476,6 +2476,18 @@ export class PixiBoardAdapter {
     }
   }
 
+  getWorldPosition(clientX: number, clientY: number): { x: number; y: number } {
+    return this.screenToWorld(clientX, clientY)
+  }
+
+  getScreenPosition(worldX: number, worldY: number): { x: number; y: number } {
+    return this.worldToScreen(worldX, worldY)
+  }
+
+  getZoom(): number {
+    return this.zoom
+  }
+
   /** Converts world coordinates to canvas/screen coordinates (for HUD layer drawing). */
   private worldToScreen(worldX: number, worldY: number): { x: number; y: number } {
     return {

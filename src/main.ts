@@ -8,7 +8,7 @@ import { getWieldOptions } from './domain/weapon-metadata'
 import { PixiBoardAdapter } from './pixi/PixiBoardAdapter'
 import { sampleState } from './sample-data'
 import type { ActorKind } from './domain/types'
-import type { MainToWorkerMessage, SceneSegmentVM, SceneVM, WorkerToMainMessage } from './worker/protocol'
+import type { ConnectedUser, MainToWorkerMessage, RemoteCursor, SceneSegmentVM, SceneVM, WorkerToMainMessage } from './worker/protocol'
 import type { ItemCategory } from './domain/item-category'
 
 const app = document.querySelector<HTMLDivElement>('#app')
@@ -34,6 +34,240 @@ Object.assign(debugBadge.style, {
   pointerEvents: 'none',
 } as Partial<CSSStyleDeclaration>)
 document.body.appendChild(debugBadge)
+
+const connectionBadge = document.createElement('div')
+connectionBadge.textContent = 'DB: offline'
+Object.assign(connectionBadge.style, {
+  position: 'fixed',
+  right: '12px',
+  bottom: '36px',
+  zIndex: '2147483647',
+  background: '#10161fcc',
+  color: '#ff8866',
+  border: '1px solid #ff886666',
+  borderRadius: '6px',
+  padding: '4px 8px',
+  fontFamily: 'monospace',
+  fontSize: '10px',
+  letterSpacing: '0.02em',
+  pointerEvents: 'none',
+  transition: 'color 0.3s, border-color 0.3s',
+} as Partial<CSSStyleDeclaration>)
+document.body.appendChild(connectionBadge)
+
+function updateConnectionBadge(status: 'connected' | 'disconnected' | 'error'): void {
+  if (status === 'connected') {
+    connectionBadge.textContent = 'DB: connected'
+    connectionBadge.style.color = '#8ff7bf'
+    connectionBadge.style.borderColor = '#8ff7bf66'
+  } else if (status === 'error') {
+    connectionBadge.textContent = 'DB: error'
+    connectionBadge.style.color = '#ff4444'
+    connectionBadge.style.borderColor = '#ff444466'
+  } else {
+    connectionBadge.textContent = 'DB: offline'
+    connectionBadge.style.color = '#ff8866'
+    connectionBadge.style.borderColor = '#ff886666'
+  }
+}
+
+// ─── Users Panel ──────────────────────────────────────────────────────────────
+
+const usersPanel = document.createElement('div')
+Object.assign(usersPanel.style, {
+  position: 'fixed',
+  right: '12px',
+  top: '12px',
+  zIndex: '2147483646',
+  background: '#10161fdd',
+  border: '1px solid #ffffff22',
+  borderRadius: '8px',
+  padding: '8px 10px',
+  fontFamily: 'monospace',
+  fontSize: '11px',
+  color: '#ccd6e0',
+  pointerEvents: 'auto',
+  minWidth: '140px',
+  maxWidth: '200px',
+  display: 'none',
+} as Partial<CSSStyleDeclaration>)
+document.body.appendChild(usersPanel)
+
+const CURSOR_COLORS = ['#ff6b6b', '#4ecdc4', '#ffe66d', '#95e1d3', '#f38181', '#aa96da', '#fcbad3', '#a8d8ea']
+function cursorColorForUser(hex: string): string {
+  let hash = 0
+  for (let i = 0; i < hex.length; i++) hash = ((hash << 5) - hash + hex.charCodeAt(i)) | 0
+  return CURSOR_COLORS[Math.abs(hash) % CURSOR_COLORS.length]
+}
+
+let currentUsers: ConnectedUser[] = []
+let currentCursors: RemoteCursor[] = []
+let myIdentityHex = ''
+
+function updateUsersPanel(users: ConnectedUser[]): void {
+  const online = users.filter(u => u.online)
+  if (online.length === 0) {
+    usersPanel.style.display = 'none'
+    return
+  }
+  usersPanel.style.display = 'block'
+  usersPanel.innerHTML = ''
+  const header = document.createElement('div')
+  header.textContent = `Online (${online.length})`
+  Object.assign(header.style, {
+    fontWeight: 'bold',
+    marginBottom: '4px',
+    fontSize: '10px',
+    color: '#8899aa',
+    textTransform: 'uppercase',
+    letterSpacing: '0.05em',
+  } as Partial<CSSStyleDeclaration>)
+  usersPanel.appendChild(header)
+
+  for (const user of online) {
+    const row = document.createElement('div')
+    Object.assign(row.style, {
+      display: 'flex',
+      alignItems: 'center',
+      gap: '6px',
+      padding: '2px 0',
+    } as Partial<CSSStyleDeclaration>)
+
+    const dot = document.createElement('span')
+    const color = user.identityHex === myIdentityHex ? '#8ff7bf' : cursorColorForUser(user.identityHex)
+    Object.assign(dot.style, {
+      width: '6px',
+      height: '6px',
+      borderRadius: '50%',
+      background: color,
+      flexShrink: '0',
+    } as Partial<CSSStyleDeclaration>)
+    row.appendChild(dot)
+
+    const name = document.createElement('span')
+    name.textContent = user.displayName + (user.identityHex === myIdentityHex ? ' (you)' : '')
+    name.style.overflow = 'hidden'
+    name.style.textOverflow = 'ellipsis'
+    name.style.whiteSpace = 'nowrap'
+    row.appendChild(name)
+
+    const roleBadge = document.createElement('span')
+    roleBadge.textContent = user.role.toUpperCase()
+    Object.assign(roleBadge.style, {
+      marginLeft: 'auto',
+      fontSize: '8px',
+      padding: '1px 4px',
+      borderRadius: '3px',
+      background: user.role === 'gm' ? '#ff886633' : '#8ff7bf33',
+      color: user.role === 'gm' ? '#ff8866' : '#8ff7bf',
+      fontWeight: 'bold',
+      flexShrink: '0',
+    } as Partial<CSSStyleDeclaration>)
+    row.appendChild(roleBadge)
+
+    usersPanel.appendChild(row)
+  }
+}
+
+// ─── Remote Cursor Overlay ────────────────────────────────────────────────────
+
+const cursorOverlay = document.createElement('div')
+Object.assign(cursorOverlay.style, {
+  position: 'absolute',
+  top: '0',
+  left: '0',
+  width: '100%',
+  height: '100%',
+  pointerEvents: 'none',
+  zIndex: '999999',
+  overflow: 'hidden',
+} as Partial<CSSStyleDeclaration>)
+
+const remoteCursorElements = new Map<string, HTMLElement>()
+
+function renderRemoteCursors(cursors: RemoteCursor[], users: ConnectedUser[]): void {
+  const canvasHost = document.querySelector<HTMLElement>('#canvas-host')
+  if (!canvasHost) return
+
+  if (!cursorOverlay.parentElement) {
+    canvasHost.style.position = 'relative'
+    canvasHost.appendChild(cursorOverlay)
+  }
+
+  const userMap = new Map(users.map(u => [u.identityHex, u]))
+  const activeCursorIds = new Set(cursors.map(c => c.identityHex))
+
+  for (const [id, el] of remoteCursorElements) {
+    if (!activeCursorIds.has(id)) {
+      el.remove()
+      remoteCursorElements.delete(id)
+    }
+  }
+
+  for (const cursor of cursors) {
+    const user = userMap.get(cursor.identityHex)
+    if (!user || !user.online) continue
+
+    const screen = pixiAdapter.getScreenPosition(cursor.x, cursor.y)
+
+    let el = remoteCursorElements.get(cursor.identityHex)
+    if (!el) {
+      el = document.createElement('div')
+      Object.assign(el.style, {
+        position: 'absolute',
+        pointerEvents: 'none',
+        transition: 'left 0.1s linear, top 0.1s linear',
+        zIndex: '999999',
+      } as Partial<CSSStyleDeclaration>)
+
+      const color = cursorColorForUser(cursor.identityHex)
+
+      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+      svg.setAttribute('width', '16')
+      svg.setAttribute('height', '20')
+      svg.setAttribute('viewBox', '0 0 16 20')
+      svg.innerHTML = `<path d="M0 0L16 12L8 12L4 20L0 0Z" fill="${color}" stroke="#000" stroke-width="1"/>`
+      el.appendChild(svg)
+
+      const label = document.createElement('span')
+      label.textContent = user.displayName
+      Object.assign(label.style, {
+        position: 'absolute',
+        left: '18px',
+        top: '12px',
+        fontSize: '10px',
+        fontFamily: 'monospace',
+        background: `${color}cc`,
+        color: '#000',
+        padding: '1px 4px',
+        borderRadius: '3px',
+        whiteSpace: 'nowrap',
+        fontWeight: 'bold',
+      } as Partial<CSSStyleDeclaration>)
+      el.appendChild(label)
+
+      cursorOverlay.appendChild(el)
+      remoteCursorElements.set(cursor.identityHex, el)
+    }
+
+    el.style.left = `${screen.x}px`
+    el.style.top = `${screen.y}px`
+  }
+}
+
+// ─── Cursor Broadcasting ──────────────────────────────────────────────────────
+
+let cursorThrottleTimer: ReturnType<typeof setTimeout> | null = null
+const CURSOR_BROADCAST_MS = 100
+
+function broadcastCursorPosition(clientX: number, clientY: number): void {
+  const world = pixiAdapter.getWorldPosition(clientX, clientY)
+  if (cursorThrottleTimer) return
+  cursorThrottleTimer = setTimeout(() => {
+    cursorThrottleTimer = null
+  }, CURSOR_BROADCAST_MS)
+  postToWorker({ type: 'UPDATE_CURSOR', x: world.x, y: world.y })
+}
 
 const sourceItemSearch = createSourceItemSearchIndex()
 
@@ -701,7 +935,9 @@ const pixiAdapter = new PixiBoardAdapter(canvasHost, {
   onMoveNodesToRoot(moves) {
     postToWorker({ type: 'INTENT', intent: { type: 'MOVE_NODES_TO_ROOT', moves } })
   },
-  onZoomChange(_zoom) {},
+  onZoomChange(_zoom) {
+    renderRemoteCursors(currentCursors, currentUsers)
+  },
   onDragSegmentStart(segmentIds) {
     postToWorker({ type: 'INTENT', intent: { type: 'DRAG_SEGMENT_START', segmentIds } })
   },
@@ -836,6 +1072,24 @@ vmWorker.onmessage = (event: MessageEvent<WorkerToMainMessage>) => {
   }
   if (msg.type === 'LOG') {
     console.info('[worker]', msg.message)
+    return
+  }
+  if (msg.type === 'CONNECTION_STATUS') {
+    console.info('[spacetimedb]', msg.status)
+    updateConnectionBadge(msg.status)
+    return
+  }
+  if (msg.type === 'STORE_TOKEN') {
+    try { localStorage.setItem('spacetimedb_vtt_token', msg.token) } catch { /* noop */ }
+    return
+  }
+  if (msg.type === 'PRESENCE_UPDATE') {
+    currentUsers = msg.users
+    currentCursors = msg.cursors
+    myIdentityHex = msg.myIdentityHex
+    updateUsersPanel(msg.users)
+    renderRemoteCursors(msg.cursors, msg.users)
+    return
   }
 }
 
@@ -860,6 +1114,18 @@ postToWorker({
   type: 'INIT',
   worldState: sampleState,
   stonesPerRow: initialStonesPerRow,
+})
+
+try {
+  const savedToken = localStorage.getItem('spacetimedb_vtt_token')
+  if (savedToken) {
+    postToWorker({ type: 'SET_SPACETIMEDB_TOKEN', token: savedToken })
+  }
+} catch { /* noop */ }
+
+canvasHost.addEventListener('pointermove', (e) => {
+  broadcastCursorPosition(e.clientX, e.clientY)
+  if (currentCursors.length > 0) renderRemoteCursors(currentCursors, currentUsers)
 })
 
 const escapeRegex = (v: string): string => v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
