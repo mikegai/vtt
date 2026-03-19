@@ -2151,24 +2151,40 @@ export class PixiBoardAdapter {
       const node = this.currentScene.nodes[nodeId]
       if (!node) continue
       const layoutCols = this.getNodeLayoutCols(node)
-      const pillStripHeight = this.getNodePillStripHeight(node)
       for (const segment of node.segments) {
         if (!selectedIds.has(segment.id)) continue
         const segView = view.segmentViews.get(segment.id)
-        const bounds = segmentBoundsInNodeLocal(segment, layoutCols, pillStripHeight)
-        const pos = segmentPositionInNode(segment, layoutCols)
+        if (!segView) continue
         const liveNodePos = this.nodeViews.get(node.id)?.root.position
         const nodePos = liveNodePos ? { x: liveNodePos.x, y: liveNodePos.y } : this.getNodeDisplayPosition(node)
-        const worldX = nodePos.x + (segView ? segView.container.position.x : pos.x) + bounds.x - pos.x
-        const worldY = nodePos.y + (segView ? segView.container.position.y : pos.y) + bounds.y - pos.y
-        const left = worldX - PAD
-        const top = worldY - PAD
-        const right = worldX + bounds.w + PAD
-        const bottom = worldY + bounds.h + PAD
+        // container.position is always the live, spring-animated node-local origin for this segment.
+        // For pills: the container IS the pill — use its size directly.
+        // For slot segments: the drawing inside the container is offset from the container origin by
+        // (bounds_absolute - unshiftedPos), where unshiftedPos = segmentPositionInNode (no pill shift).
+        // This delta is pill-strip-independent, so we just need unshiftedPos to compute the intra-container offset.
+        let left: number, top: number, bw: number, bh: number
+        if (segment.isWornPill) {
+          const label = segment.fullLabel
+          bw = pillLabelWidth(label)
+          bh = WORN_PILL_H
+          left = nodePos.x + segView.container.position.x - PAD
+          top = nodePos.y + segView.container.position.y - PAD
+        } else {
+          const unshiftedPos = segmentPositionInNode(segment, layoutCols)
+          const bounds = segmentBoundsInNodeLocal(segment, layoutCols)
+          const intraX = bounds.x - unshiftedPos.x
+          const intraY = bounds.y - unshiftedPos.y
+          bw = bounds.w
+          bh = bounds.h
+          left = nodePos.x + segView.container.position.x + intraX - PAD
+          top = nodePos.y + segView.container.position.y + intraY - PAD
+        }
+        const right = left + bw + PAD * 2
+        const bottom = top + bh + PAD * 2
         boxBounds.push({ left, top, right, bottom })
         const g = new Graphics()
         g.eventMode = 'none'
-        g.roundRect(left, top, bounds.w + PAD * 2, bounds.h + PAD * 2, RADIUS)
+        g.roundRect(left, top, bw + PAD * 2, bh + PAD * 2, RADIUS)
         g.stroke({ width: STROKE, color: 0xffffff, alpha: 0.55 })
         this.selectionOverlayLayer.addChild(g)
       }
