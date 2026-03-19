@@ -4686,6 +4686,14 @@ export class PixiBoardAdapter {
   }
 
   applyInit(scene: SceneVM): void {
+    const prevGroups = this.currentScene?.groups ?? {}
+    const moved = new Set<string>()
+    for (const [gid, g] of Object.entries(scene.groups ?? {})) {
+      const prev = prevGroups[gid]
+      if (prev && (prev.x !== g.x || prev.y !== g.y)) moved.add(gid)
+    }
+    this.movedGroupIds = moved
+
     this.currentScene = scene
     this.recomputeDisplayFlow(scene)
     this.paceText.text = `Party ${scene.partyPaceText}`

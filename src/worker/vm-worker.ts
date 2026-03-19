@@ -128,7 +128,7 @@ function applyServerState(
     labels: newLayoutState.labels ?? {},
     stonesPerRow: newLayoutState.stonesPerRow ?? localState.stonesPerRow,
   }
-  recompute(true)
+  recompute()
   scheduleSave()
 }
 
