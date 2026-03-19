@@ -587,25 +587,48 @@ const slotSegmentsOnly = (segments: readonly SceneSegmentVM[]): readonly SceneSe
 const wornPillSegmentsOnly = (segments: readonly SceneSegmentVM[]): readonly SceneSegmentVM[] =>
   segments.filter((segment) => segment.isWornPill)
 
-const wornPillStripHeight = (segments: readonly SceneSegmentVM[]): number => {
-  const count = wornPillSegmentsOnly(segments).length
-  if (count <= 0) return 0
-  return WORN_PILL_STRIP_PAD_TOP + WORN_PILL_H + WORN_PILL_STRIP_PAD_BOTTOM
+const wornPillStripHeight = (segments: readonly SceneSegmentVM[], totalWidth: number, tier: ZoomTier): number => {
+  const pills = wornPillSegmentsOnly(segments)
+  if (pills.length === 0) return 0
+  const positions = layoutWornPills(pills, totalWidth, tier)
+  let maxRow = 0
+  for (const pos of positions.values()) {
+    const row = Math.round((pos.y - TOP_BAND_H - WORN_PILL_STRIP_PAD_TOP) / (WORN_PILL_H + WORN_PILL_ROW_GAP))
+    maxRow = Math.max(maxRow, row)
+  }
+  const rows = maxRow + 1
+  return WORN_PILL_STRIP_PAD_TOP + rows * WORN_PILL_H + (rows - 1) * WORN_PILL_ROW_GAP + WORN_PILL_STRIP_PAD_BOTTOM
 }
 
-const wornPillPositionInNode = (
-  index: number,
+const WORN_PILL_HGAP = 6
+
+const pillLabelWidth = (text: string): number =>
+  Math.max(WORN_PILL_MIN_W, text.length * 6 + WORN_PILL_HPAD * 2)
+
+const layoutWornPills = (
+  pills: readonly SceneSegmentVM[],
   totalWidth: number,
-): { x: number; y: number } => {
-  const usableWidth = Math.max(140, totalWidth - SLOT_START_X - 16)
-  const pillWidth = 72
-  const cols = Math.max(1, Math.floor(usableWidth / (pillWidth + 6)))
-  const col = index % cols
-  const row = Math.floor(index / cols)
-  return {
-    x: SLOT_START_X + col * (pillWidth + 6),
-    y: TOP_BAND_H + WORN_PILL_STRIP_PAD_TOP + row * (WORN_PILL_H + WORN_PILL_ROW_GAP),
+  tier: ZoomTier,
+): Map<string, { x: number; y: number }> => {
+  const usableWidth = Math.max(80, totalWidth - SLOT_START_X - 8)
+  const result = new Map<string, { x: number; y: number }>()
+  let cursorX = 0
+  let row = 0
+  for (const pill of pills) {
+    const label = tier === 'far' ? pill.shortLabel : (tier === 'medium' ? pill.mediumLabel : pill.fullLabel)
+    const text = label.trim().length > 0 ? label : pill.fullLabel
+    const w = pillLabelWidth(text)
+    if (cursorX > 0 && cursorX + w > usableWidth) {
+      cursorX = 0
+      row += 1
+    }
+    result.set(pill.id, {
+      x: SLOT_START_X + cursorX,
+      y: TOP_BAND_H + WORN_PILL_STRIP_PAD_TOP + row * (WORN_PILL_H + WORN_PILL_ROW_GAP),
+    })
+    cursorX += w + WORN_PILL_HGAP
   }
+  return result
 }
 
 type NodeVerticalLayout = {
@@ -621,11 +644,13 @@ const computeNodeVerticalLayout = (
   isExpanded: boolean,
   slotSegments: readonly SceneSegmentVM[],
   slotCount: number,
+  totalWidth: number,
+  tier: ZoomTier,
 ): NodeVerticalLayout => {
   const visibleSlotCount = isExpanded
     ? Math.max(slotCount, node.slotCols * node.slotRows)
     : collapsedVisibleSlotCount(slotSegments, slotCount)
-  const pillStripHeight = wornPillStripHeight(node.segments)
+  const pillStripHeight = wornPillStripHeight(node.segments, totalWidth, tier)
   const slotStartY = TOP_BAND_H + pillStripHeight
   const slotAreaHeight = isExpanded ? slotAreaHeightForRows(node.slotRows) : slotAreaHeightForSlots(visibleSlotCount)
   const totalHeight = TOP_BAND_H + slotAreaHeight + NODE_BOTTOM_PADDING + pillStripHeight
@@ -679,7 +704,8 @@ const redrawNodeSlotFillLayer = (
 }
 
 /** Bounds of segment in node-local space (relative to node root). */
-const segmentBoundsInNodeLocal = (segment: SceneSegmentVM, stonesPerRowOverride = stonesPerRow): { x: number; y: number; w: number; h: number } => {
+const segmentBoundsInNodeLocal = (segment: SceneSegmentVM, stonesPerRowOverride = stonesPerRow, pillStripHeight = 0): { x: number; y: number; w: number; h: number } => {
+  const slotStartY = TOP_BAND_H + pillStripHeight
   const { startStone, endStone } = segmentStoneSpan(segment.startSixth, segment.sizeSixths)
   const isMulti = isMultiStone(segment)
   if (isMulti) {
@@ -687,7 +713,7 @@ const segmentBoundsInNodeLocal = (segment: SceneSegmentVM, stonesPerRowOverride 
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
     chunks.forEach((chunk) => {
       const cx = SLOT_START_X + stoneToX(chunk.start, stonesPerRowOverride)
-      const cy = TOP_BAND_H + stoneToY(chunk.start, stonesPerRowOverride)
+      const cy = slotStartY + stoneToY(chunk.start, stonesPerRowOverride)
       const cw = (chunk.end - chunk.start) * (STONE_W + STONE_GAP) - STONE_GAP
       minX = Math.min(minX, cx)
       minY = Math.min(minY, cy)
@@ -708,7 +734,7 @@ const segmentBoundsInNodeLocal = (segment: SceneSegmentVM, stonesPerRowOverride 
   })
   return {
     x: SLOT_START_X + minX,
-    y: TOP_BAND_H + minY,
+    y: slotStartY + minY,
     w: maxX - minX,
     h: maxY - minY,
   }
@@ -720,7 +746,9 @@ const segmentCenterInNode = (
   nodeX: number,
   nodeY: number,
   stonesPerRowOverride = stonesPerRow,
+  pillStripHeight = 0,
 ): { x: number; y: number } => {
+  const slotStartY = TOP_BAND_H + pillStripHeight
   const { startStone, endStone } = segmentStoneSpan(segment.startSixth, segment.sizeSixths)
   const isMulti = segment.sizeSixths >= 6 && segment.sizeSixths % 6 === 0
   if (isMulti) {
@@ -735,7 +763,7 @@ const segmentCenterInNode = (
     }
     return {
       x: nodeX + SLOT_START_X + (minX + maxX) / 2,
-      y: nodeY + TOP_BAND_H + (minY + maxY) / 2,
+      y: nodeY + slotStartY + (minY + maxY) / 2,
     }
   }
   const groups = groupSixthsByStone(segment.startSixth, segment.sizeSixths)
@@ -750,7 +778,7 @@ const segmentCenterInNode = (
   })
   return {
     x: nodeX + SLOT_START_X + (minX + maxX) / 2,
-    y: nodeY + TOP_BAND_H + (minY + maxY) / 2,
+    y: nodeY + slotStartY + (minY + maxY) / 2,
   }
 }
 
@@ -2123,10 +2151,11 @@ export class PixiBoardAdapter {
       const node = this.currentScene.nodes[nodeId]
       if (!node) continue
       const layoutCols = this.getNodeLayoutCols(node)
+      const pillStripHeight = this.getNodePillStripHeight(node)
       for (const segment of node.segments) {
         if (!selectedIds.has(segment.id)) continue
         const segView = view.segmentViews.get(segment.id)
-        const bounds = segmentBoundsInNodeLocal(segment, layoutCols)
+        const bounds = segmentBoundsInNodeLocal(segment, layoutCols, pillStripHeight)
         const pos = segmentPositionInNode(segment, layoutCols)
         const liveNodePos = this.nodeViews.get(node.id)?.root.position
         const nodePos = liveNodePos ? { x: liveNodePos.x, y: liveNodePos.y } : this.getNodeDisplayPosition(node)
@@ -2300,9 +2329,10 @@ export class PixiBoardAdapter {
     if (!originNode) return selection
     const nodePos = this.getNodeDisplayPosition(originNode)
     const layoutCols = this.getNodeLayoutCols(originNode)
+    const pillStripHeight = this.getNodePillStripHeight(originNode)
     for (const segment of originNode.segments) {
       if (segment.isDropPreview) continue
-      const b = segmentBoundsInNodeLocal(segment, layoutCols)
+      const b = segmentBoundsInNodeLocal(segment, layoutCols, pillStripHeight)
       const x = nodePos.x + b.x
       const y = nodePos.y + b.y
       if (intersects(x, y, b.w, b.h)) selection.segmentIds.push(segment.id)
@@ -3047,9 +3077,10 @@ export class PixiBoardAdapter {
     if (!node) return centers
     const nodePos = this.getNodeDisplayPosition(node)
     const layoutCols = this.getNodeLayoutCols(node)
+    const pillStripHeight = this.getNodePillStripHeight(node)
     const previewSegs = node.segments.filter((s) => s.isDropPreview === true)
     if (previewSegs.length > 0) {
-      previewSegs.forEach((s) => centers.push(segmentCenterInNode(s, nodePos.x, nodePos.y, layoutCols)))
+      previewSegs.forEach((s) => centers.push(segmentCenterInNode(s, nodePos.x, nodePos.y, layoutCols, pillStripHeight)))
       return centers
     }
     let cursorSixth = startSixth
@@ -3058,14 +3089,14 @@ export class PixiBoardAdapter {
       if (isSameAsSource) {
         const actualSeg = node.segments.find((s) => s.id === seg.id)
         if (actualSeg) {
-          centers.push(segmentCenterInNode(actualSeg, nodePos.x, nodePos.y, layoutCols))
+          centers.push(segmentCenterInNode(actualSeg, nodePos.x, nodePos.y, layoutCols, pillStripHeight))
           cursorSixth = actualSeg.startSixth + actualSeg.sizeSixths
         } else {
-          centers.push(segmentCenterInNode({ ...seg, startSixth: cursorSixth, sizeSixths: seg.sizeSixths }, nodePos.x, nodePos.y, layoutCols))
+          centers.push(segmentCenterInNode({ ...seg, startSixth: cursorSixth, sizeSixths: seg.sizeSixths }, nodePos.x, nodePos.y, layoutCols, pillStripHeight))
           cursorSixth += seg.sizeSixths
         }
       } else {
-        centers.push(segmentCenterInNode({ ...seg, startSixth: cursorSixth, sizeSixths: seg.sizeSixths }, nodePos.x, nodePos.y, layoutCols))
+        centers.push(segmentCenterInNode({ ...seg, startSixth: cursorSixth, sizeSixths: seg.sizeSixths }, nodePos.x, nodePos.y, layoutCols, pillStripHeight))
         cursorSixth += seg.sizeSixths
       }
     }
@@ -3079,7 +3110,8 @@ export class PixiBoardAdapter {
       const sourceSegment = sourceNode.segments.find((s) => s.id === segmentId)
       if (!sourceSegment) return null
       const layoutCols = this.getNodeLayoutCols(sourceNode)
-      const b = segmentBoundsInNodeLocal(sourceSegment, layoutCols)
+      const pillStripHeight = this.getNodePillStripHeight(sourceNode)
+      const b = segmentBoundsInNodeLocal(sourceSegment, layoutCols, pillStripHeight)
       const nodePos = this.getNodeDisplayPosition(sourceNode)
       return {
         x: nodePos.x + b.x,
@@ -3539,11 +3571,11 @@ export class PixiBoardAdapter {
     textCompensationScale: number,
     mergedIds: Set<string>,
   ): void {
+    const pillPositions = layoutWornPills(wornPills, totalWidth, tier)
     node.segments.forEach((segment) => {
-      const pillIndex = segment.isWornPill ? wornPills.findIndex((pill) => pill.id === segment.id) : -1
       const unshiftedPos = segment.isWornPill ? null : segmentPositionInNode(segment, layoutCols)
       const pos = segment.isWornPill
-        ? wornPillPositionInNode(Math.max(0, pillIndex), totalWidth)
+        ? (pillPositions.get(segment.id) ?? { x: SLOT_START_X, y: TOP_BAND_H + WORN_PILL_STRIP_PAD_TOP })
         : { x: unshiftedPos!.x, y: unshiftedPos!.y + pillStripHeight }
       let segView = segmentViews.get(segment.id)
       if (!segView) {
@@ -3657,11 +3689,11 @@ export class PixiBoardAdapter {
     const slotSegments = slotSegmentsOnly(node.segments)
     const wornPills = wornPillSegmentsOnly(node.segments)
     const isExpanded = this.isNodeExpanded(node.id)
-    const verticalLayout = computeNodeVerticalLayout(node, isExpanded, slotSegments, slotCount)
-    const visibleSlotCount = verticalLayout.visibleSlotCount
     const layoutCols = this.getNodeLayoutCols(node)
     const totalMeterWidth = meterWidthForCols(layoutCols)
     const totalWidth = SLOT_START_X + totalMeterWidth + 20
+    const verticalLayout = computeNodeVerticalLayout(node, isExpanded, slotSegments, slotCount, totalWidth, tier)
+    const visibleSlotCount = verticalLayout.visibleSlotCount
     const pillStripHeight = verticalLayout.pillStripHeight
     const slotStartY = verticalLayout.slotStartY
     const totalHeight = verticalLayout.totalHeight
@@ -4044,10 +4076,12 @@ export class PixiBoardAdapter {
     const textCompensationScale = getTextCompensationScale(this.zoom)
     const totalSixths = totalSixthsForSlots(node.slotCount)
     const layoutCols = this.getNodeLayoutCols(node)
+    const totalMeterWidth = meterWidthForCols(layoutCols)
+    const totalWidth = SLOT_START_X + totalMeterWidth + 20
     const slotSegments = slotSegmentsOnly(node.segments)
     const wornPills = wornPillSegmentsOnly(node.segments)
     const isExpanded = this.isNodeExpanded(node.id)
-    const verticalLayout = computeNodeVerticalLayout(node, isExpanded, slotSegments, node.slotCount)
+    const verticalLayout = computeNodeVerticalLayout(node, isExpanded, slotSegments, node.slotCount, totalWidth, tier)
     const pillStripHeight = verticalLayout.pillStripHeight
     const slotStartY = verticalLayout.slotStartY
     const visibleSlotCount = verticalLayout.visibleSlotCount
@@ -5139,18 +5173,27 @@ export class PixiBoardAdapter {
       : Math.max(1, Math.min(visibleSlotCount, stonesPerRow))
   }
 
+  private getNodePillStripHeight(node: SceneNodeVM): number {
+    const layoutCols = this.getNodeLayoutCols(node)
+    const totalWidth = SLOT_START_X + meterWidthForCols(layoutCols) + 20
+    const tier = getZoomTier(this.zoom)
+    return wornPillStripHeight(node.segments, totalWidth, tier)
+  }
+
   private getNodeDisplayDimensionsForExpanded(
     node: SceneNodeVM,
     expanded: boolean,
   ): { width: number; height: number } {
     const slotSegments = slotSegmentsOnly(node.segments)
-    const verticalLayout = computeNodeVerticalLayout(node, expanded, slotSegments, node.slotCount)
-    const visibleSlotCount = verticalLayout.visibleSlotCount
+    const visibleSlotCountForWidth = collapsedVisibleSlotCount(slotSegments, node.slotCount)
     const totalMeterWidth = expanded
       ? meterWidthForCols(node.slotCols)
-      : meterWidthForSlots(visibleSlotCount)
+      : meterWidthForSlots(visibleSlotCountForWidth)
+    const totalWidth = SLOT_START_X + totalMeterWidth + 20
+    const tier = getZoomTier(this.zoom)
+    const verticalLayout = computeNodeVerticalLayout(node, expanded, slotSegments, node.slotCount, totalWidth, tier)
     return {
-      width: SLOT_START_X + totalMeterWidth + 20,
+      width: totalWidth,
       height: verticalLayout.totalHeight,
     }
   }
