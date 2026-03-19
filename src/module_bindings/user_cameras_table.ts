@@ -11,7 +11,10 @@ import {
 } from "spacetimedb";
 
 export default __t.row({
-  identityHex: __t.string().primaryKey().name("identity_hex"),
+  id: __t.string().primaryKey(),
+  identityHex: __t.string().name("identity_hex"),
+  worldSlug: __t.string().name("world_slug"),
+  canvasSlug: __t.string().name("canvas_slug"),
   panX: __t.f64().name("pan_x"),
   panY: __t.f64().name("pan_y"),
   zoom: __t.f64(),

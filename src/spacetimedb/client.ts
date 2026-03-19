@@ -14,6 +14,7 @@ import type { Identity } from 'spacetimedb'
 import type { CanonicalState } from '../domain/types'
 import type { PersistedLocalState } from '../persistence/backend'
 import { reconstructCanonicalState, reconstructLayoutState } from './reconstruct'
+import type { WorldCanvasContext } from './context'
 
 export interface ConnectedUser {
   identityHex: string
@@ -55,6 +56,19 @@ let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 let reconnectAttempt = 0
 let shouldReconnect = true
 let myIdentityHex = ''
+let currentContext: WorldCanvasContext = { worldSlug: 'default-world', canvasSlug: 'main' }
+
+function canvasPresenceKey(identityHex: string): string {
+  return `${currentContext.worldSlug}::${currentContext.canvasSlug}::${identityHex}`
+}
+
+function markPresence(): void {
+  if (!conn) return
+  conn.reducers.setPresence({
+    worldSlug: currentContext.worldSlug,
+    canvasSlug: currentContext.canvasSlug,
+  })
+}
 
 function getStoredToken(): string | undefined {
   try {
@@ -73,8 +87,8 @@ function storeToken(token: string): void {
 
 function handleSubscriptionApplied(): void {
   if (!conn || !onServerState) return
-  const worldState = reconstructCanonicalState(conn)
-  const layoutState = reconstructLayoutState(conn)
+  const worldState = reconstructCanonicalState(conn, currentContext)
+  const layoutState = reconstructLayoutState(conn, currentContext)
   initialApplied = true
   onServerState(worldState, layoutState)
   rebuildPresence()
@@ -83,17 +97,26 @@ function handleSubscriptionApplied(): void {
 
 function rebuildPresence(): void {
   if (!conn || !onPresence) return
+  const presentIdentityHexes = new Set<string>()
+  for (const row of conn.db.user_presences.iter()) {
+    if (row.worldSlug === currentContext.worldSlug && row.canvasSlug === currentContext.canvasSlug) {
+      presentIdentityHexes.add(row.identityHex)
+    }
+  }
   const users: ConnectedUser[] = []
-  for (const row of conn.db.users.iter()) {
+  for (const identityHex of presentIdentityHexes) {
+    const row = conn.db.users.identityHex.find(identityHex)
+    if (!row) continue
     users.push({
       identityHex: row.identityHex,
       displayName: row.displayName,
       role: row.role as 'gm' | 'player',
-      online: row.online,
+      online: true,
     })
   }
   const cursors: RemoteCursor[] = []
   for (const row of conn.db.user_cursors.iter()) {
+    if (row.worldSlug !== currentContext.worldSlug || row.canvasSlug !== currentContext.canvasSlug) continue
     if (row.identityHex === myIdentityHex) continue
     cursors.push({ identityHex: row.identityHex, x: row.x, y: row.y })
   }
@@ -102,7 +125,7 @@ function rebuildPresence(): void {
 
 function restoreCamera(): void {
   if (!conn || !onCameraRestore) return
-  const row = conn.db.user_cameras.identityHex.find(myIdentityHex)
+  const row = conn.db.user_cameras.id.find(canvasPresenceKey(myIdentityHex))
   if (row) {
     onCameraRestore(row.panX, row.panY, row.zoom)
   }
@@ -135,6 +158,7 @@ function subscribeToAllTables(): void {
       'SELECT * FROM labels',
       'SELECT * FROM settings',
       'SELECT * FROM users',
+      'SELECT * FROM user_presences',
       'SELECT * FROM user_cursors',
       'SELECT * FROM user_cameras',
     ])
@@ -145,8 +169,8 @@ function registerTableCallbacks(): void {
 
   const rebuild = () => {
     if (!initialApplied || !conn || !onServerState) return
-    const worldState = reconstructCanonicalState(conn)
-    const layoutState = reconstructLayoutState(conn)
+    const worldState = reconstructCanonicalState(conn, currentContext)
+    const layoutState = reconstructLayoutState(conn, currentContext)
     onServerState(worldState, layoutState)
   }
 
@@ -180,7 +204,7 @@ function registerTableCallbacks(): void {
     (table as unknown as { onDelete: (cb: () => void) => void }).onDelete(rebuild)
   }
 
-  const presenceTables = [conn.db.users, conn.db.user_cursors] as const
+  const presenceTables = [conn.db.users, conn.db.user_presences, conn.db.user_cursors, conn.db.user_cameras] as const
   for (const table of presenceTables) {
     (table as unknown as { onInsert: (cb: () => void) => void }).onInsert(rebuildPresence);
     (table as unknown as { onUpdate: (cb: () => void) => void }).onUpdate(rebuildPresence);
@@ -217,6 +241,7 @@ function buildConnection(): void {
       myIdentityHex = identity.toHexString()
       reconnectAttempt = 0
       storeToken(authToken)
+      markPresence()
       onConnectionStatus!('connected')
       subscribeToAllTables()
     })
@@ -249,6 +274,7 @@ export function connect(
   tokenCb: TokenCallback,
   presenceCb: PresenceCallback,
   cameraRestoreCb: CameraRestoreCallback,
+  context: WorldCanvasContext,
   token?: string,
 ): void {
   onServerState = serverStateCb
@@ -256,6 +282,7 @@ export function connect(
   onToken = tokenCb
   onPresence = presenceCb
   onCameraRestore = cameraRestoreCb
+  currentContext = context
   shouldReconnect = true
   reconnectAttempt = 0
 
@@ -266,12 +293,26 @@ export function connect(
 
 export function updateMyCursor(x: number, y: number): void {
   if (!conn || !initialApplied) return
-  conn.reducers.updateCursor({ x, y, viewportScale: undefined })
+  markPresence()
+  conn.reducers.updateCursor({
+    worldSlug: currentContext.worldSlug,
+    canvasSlug: currentContext.canvasSlug,
+    x,
+    y,
+    viewportScale: undefined,
+  })
 }
 
 export function updateMyCamera(panX: number, panY: number, zoom: number): void {
   if (!conn || !initialApplied) return
-  conn.reducers.updateCamera({ panX, panY, zoom })
+  markPresence()
+  conn.reducers.updateCamera({
+    worldSlug: currentContext.worldSlug,
+    canvasSlug: currentContext.canvasSlug,
+    panX,
+    panY,
+    zoom,
+  })
 }
 
 export function setMyDisplayName(name: string): void {

@@ -18,8 +18,10 @@ import { IndexedDBBackend } from '../persistence/indexeddb-backend'
 import { connect as stdbConnect, getConnection, isConnected, updateMyCursor, updateMyCamera, setMyDisplayName } from '../spacetimedb/client'
 import type { ConnectedUser, RemoteCursor } from '../spacetimedb/client'
 import { syncWorldState, syncLocalState } from '../spacetimedb/sync'
+import type { WorldCanvasContext } from '../spacetimedb/context'
 
 let worldState: CanonicalState | null = null
+let currentContext: WorldCanvasContext = { worldSlug: 'default-world', canvasSlug: 'main' }
 let localState: WorkerLocalState = {
   hoveredSegmentId: null,
   groupPositions: {},
@@ -96,11 +98,44 @@ const post = (message: WorkerToMainMessage): void => {
 
 let dragActive = false
 let deferredServerState: { world: CanonicalState; layout: Partial<PersistedLocalState> } | null = null
+let initialWorldTemplate: CanonicalState | null = null
+let hasBootstrappedCurrentContext = false
 
 function applyServerState(
   newWorldState: CanonicalState,
   newLayoutState: Partial<PersistedLocalState>,
 ): void {
+  if (
+    !hasBootstrappedCurrentContext &&
+    initialWorldTemplate &&
+    Object.keys(newWorldState.actors).length === 0 &&
+    Object.keys(newWorldState.inventoryEntries).length === 0
+  ) {
+    hasBootstrappedCurrentContext = true
+    worldState = migrateWieldToActor(initialWorldTemplate)
+    localState = {
+      ...localState,
+      nodePositions: {},
+      groupPositions: {},
+      groupSizeOverrides: {},
+      nodeSizeOverrides: {},
+      groupListViewEnabled: {},
+      nodeGroupOverrides: {},
+      groupNodePositions: {},
+      freeSegmentPositions: {},
+      groupFreeSegmentPositions: {},
+      groupNodeOrders: {},
+      customGroups: {},
+      groupTitleOverrides: {},
+      nodeTitleOverrides: {},
+      nodeContainment: {},
+      labels: {},
+    }
+    recompute()
+    syncToSpacetimeDB(null, localState)
+    return
+  }
+
   worldState = newWorldState
   localState = {
     hoveredSegmentId: localState.hoveredSegmentId,
@@ -171,6 +206,7 @@ function initSpacetimeDB(token?: string): void {
     (panX, panY, zoom) => {
       post({ type: 'CAMERA_RESTORE', panX, panY, zoom })
     },
+    currentContext,
     token,
   )
 }
@@ -2292,6 +2328,8 @@ const applyIntent = (intent: WorkerIntent): void => {
 }
 
 async function initFromPersistence(fallbackWorldState: CanonicalState, stonesPerRow?: number, token?: string): Promise<void> {
+  initialWorldTemplate = fallbackWorldState
+  hasBootstrappedCurrentContext = false
   if (INDEXEDDB_ENABLED) {
     try {
       const [savedWorld, savedLocal] = await Promise.all([
@@ -2327,11 +2365,14 @@ async function initFromPersistence(fallbackWorldState: CanonicalState, stonesPer
 self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
   const message = event.data
   if (message.type === 'INIT') {
+    currentContext = message.context
     void initFromPersistence(message.worldState, message.stonesPerRow, message.token)
     return
   }
   if (message.type === 'RESET') {
     persistence.clear().catch((err) => console.warn('[persistence] clear failed', err))
+    const oldWorld = worldState
+    const oldLocal = localState
     worldState = migrateWieldToActor(message.worldState)
     localState = {
       hoveredSegmentId: null,
@@ -2361,21 +2402,7 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
     }
     previousScene = null
     recompute(true)
-    if (isConnected() && worldState) {
-      const conn = getConnection()
-      if (conn) {
-        conn.reducers.setWorldState({
-          dataJson: JSON.stringify({
-            actors: Object.values(worldState.actors),
-            itemDefinitions: Object.values(worldState.itemDefinitions),
-            inventoryEntries: Object.values(worldState.inventoryEntries),
-            carryGroups: Object.values(worldState.carryGroups),
-            movementGroups: Object.values(worldState.movementGroups),
-          }),
-        })
-        conn.reducers.setLayoutState({ dataJson: JSON.stringify({}) })
-      }
-    }
+    syncToSpacetimeDB(oldWorld, oldLocal)
     return
   }
   if (message.type === 'SET_STONES_PER_ROW') {
@@ -2434,8 +2461,8 @@ function doSync(
 ): void {
   const conn = getConnection()
   if (!conn || !worldState) return
-  syncWorldState(conn, oldWorld, worldState)
-  syncLocalState(conn, oldLocal, localState)
+  syncWorldState(conn, oldWorld, worldState, currentContext)
+  syncLocalState(conn, oldLocal, localState, currentContext)
 }
 
 function flushDragSync(): void {

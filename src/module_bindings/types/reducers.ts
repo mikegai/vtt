@@ -32,6 +32,7 @@ import DeleteNodeTitleOverrideReducer from "../delete_node_title_override_reduce
 import DeleteSettingReducer from "../delete_setting_reducer";
 import SetDisplayNameReducer from "../set_display_name_reducer";
 import SetLayoutStateReducer from "../set_layout_state_reducer";
+import SetPresenceReducer from "../set_presence_reducer";
 import SetUserRoleReducer from "../set_user_role_reducer";
 import SetWorldStateReducer from "../set_world_state_reducer";
 import UpdateCameraReducer from "../update_camera_reducer";
@@ -84,6 +85,7 @@ export type DeleteNodeTitleOverrideParams = __Infer<typeof DeleteNodeTitleOverri
 export type DeleteSettingParams = __Infer<typeof DeleteSettingReducer>;
 export type SetDisplayNameParams = __Infer<typeof SetDisplayNameReducer>;
 export type SetLayoutStateParams = __Infer<typeof SetLayoutStateReducer>;
+export type SetPresenceParams = __Infer<typeof SetPresenceReducer>;
 export type SetUserRoleParams = __Infer<typeof SetUserRoleReducer>;
 export type SetWorldStateParams = __Infer<typeof SetWorldStateReducer>;
 export type UpdateCameraParams = __Infer<typeof UpdateCameraReducer>;

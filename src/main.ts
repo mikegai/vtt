@@ -10,9 +10,16 @@ import { sampleState } from './sample-data'
 import type { ActorKind } from './domain/types'
 import type { ConnectedUser, MainToWorkerMessage, RemoteCursor, SceneSegmentVM, SceneVM, WorkerToMainMessage } from './worker/protocol'
 import type { ItemCategory } from './domain/item-category'
+import { canonicalPathForContext, contextFromPathname } from './spacetimedb/context'
 
 const app = document.querySelector<HTMLDivElement>('#app')
 if (!app) throw new Error('App root missing')
+
+const worldCanvasContext = contextFromPathname(window.location.pathname)
+const canonicalPath = canonicalPathForContext(worldCanvasContext)
+if (window.location.pathname !== canonicalPath) {
+  history.replaceState(null, '', canonicalPath)
+}
 
 // Temporary visual marker to confirm this exact VTT bundle is loaded.
 const debugBuildMarker = 'VTT DEBUG BUILD LOADED (marker: 2026-03-16-01)'
@@ -1620,6 +1627,7 @@ postToWorker({
   worldState: sampleState,
   stonesPerRow: initialStonesPerRow,
   token: savedSpacetimeToken,
+  context: worldCanvasContext,
 })
 
 canvasHost.addEventListener('pointermove', (e) => {

@@ -60,6 +60,7 @@ import DeleteNodeTitleOverrideReducer from "./delete_node_title_override_reducer
 import DeleteSettingReducer from "./delete_setting_reducer";
 import SetDisplayNameReducer from "./set_display_name_reducer";
 import SetLayoutStateReducer from "./set_layout_state_reducer";
+import SetPresenceReducer from "./set_presence_reducer";
 import SetUserRoleReducer from "./set_user_role_reducer";
 import SetWorldStateReducer from "./set_world_state_reducer";
 import UpdateCameraReducer from "./update_camera_reducer";
@@ -112,6 +113,7 @@ import NodeTitleOverridesRow from "./node_title_overrides_table";
 import SettingsRow from "./settings_table";
 import UserCamerasRow from "./user_cameras_table";
 import UserCursorsRow from "./user_cursors_table";
+import UserPresencesRow from "./user_presences_table";
 import UsersRow from "./users_table";
 
 /** Type-only namespace exports for generated type groups. */
@@ -364,25 +366,45 @@ const tablesSchema = __schema({
   user_cameras: __table({
     name: 'user_cameras',
     indexes: [
+      { accessor: 'id', name: 'user_cameras_id_idx_btree', algorithm: 'btree', columns: [
+        'id',
+      ] },
       { accessor: 'identityHex', name: 'user_cameras_identity_hex_idx_btree', algorithm: 'btree', columns: [
         'identityHex',
       ] },
     ],
     constraints: [
-      { name: 'user_cameras_identity_hex_key', constraint: 'unique', columns: ['identityHex'] },
+      { name: 'user_cameras_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, UserCamerasRow),
   user_cursors: __table({
     name: 'user_cursors',
     indexes: [
+      { accessor: 'id', name: 'user_cursors_id_idx_btree', algorithm: 'btree', columns: [
+        'id',
+      ] },
       { accessor: 'identityHex', name: 'user_cursors_identity_hex_idx_btree', algorithm: 'btree', columns: [
         'identityHex',
       ] },
     ],
     constraints: [
-      { name: 'user_cursors_identity_hex_key', constraint: 'unique', columns: ['identityHex'] },
+      { name: 'user_cursors_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, UserCursorsRow),
+  user_presences: __table({
+    name: 'user_presences',
+    indexes: [
+      { accessor: 'id', name: 'user_presences_id_idx_btree', algorithm: 'btree', columns: [
+        'id',
+      ] },
+      { accessor: 'identityHex', name: 'user_presences_identity_hex_idx_btree', algorithm: 'btree', columns: [
+        'identityHex',
+      ] },
+    ],
+    constraints: [
+      { name: 'user_presences_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, UserPresencesRow),
   users: __table({
     name: 'users',
     indexes: [
@@ -424,6 +446,7 @@ const reducersSchema = __reducers(
   __reducerSchema("delete_setting", DeleteSettingReducer),
   __reducerSchema("set_display_name", SetDisplayNameReducer),
   __reducerSchema("set_layout_state", SetLayoutStateReducer),
+  __reducerSchema("set_presence", SetPresenceReducer),
   __reducerSchema("set_user_role", SetUserRoleReducer),
   __reducerSchema("set_world_state", SetWorldStateReducer),
   __reducerSchema("update_camera", UpdateCameraReducer),

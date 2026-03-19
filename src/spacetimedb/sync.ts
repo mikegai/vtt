@@ -10,6 +10,9 @@ import type { DbConnection } from '../module_bindings'
 import type { CanonicalState, Actor, ItemDefinition, InventoryEntry, CarryGroup, MovementGroup } from '../domain/types'
 import type { PersistedLocalState } from '../persistence/backend'
 import type { WorkerLocalState } from '../worker/scene-vm'
+import type { WorldCanvasContext } from './context'
+import { withCanvasPrefix, withWorldPrefix } from './context'
+import { sampleState } from '../sample-data'
 
 function safe(label: string, fn: () => void | Promise<void>): void {
   try {
@@ -38,124 +41,130 @@ export function syncWorldState(
   conn: DbConnection,
   oldWorld: CanonicalState | null,
   newWorld: CanonicalState,
+  context: WorldCanvasContext,
 ): void {
+  const w = (id: string) => withWorldPrefix(context, id)
+  const oldItemOverlay = buildSparseItemCatalogOverlay(oldWorld?.itemDefinitions ?? null)
+  const newItemOverlay = buildSparseItemCatalogOverlay(newWorld.itemDefinitions)
   diffMap(oldWorld?.actors ?? {}, newWorld.actors,
-    (a) => safe(`upsertActor(${a.id})`, () => syncActor(conn, a)),
-    (id) => safe(`deleteActor(${id})`, () => conn.reducers.deleteActor({ id })))
-  diffMap(oldWorld?.itemDefinitions ?? {}, newWorld.itemDefinitions,
-    (d) => safe(`upsertItemDef(${d.id})`, () => syncItemDef(conn, d)),
-    (id) => safe(`deleteItemDef(${id})`, () => conn.reducers.deleteItemDefinition({ id })))
+    (a) => safe(`upsertActor(${a.id})`, () => syncActor(conn, a, w)),
+    (id) => safe(`deleteActor(${id})`, () => conn.reducers.deleteActor({ id: w(id) })))
+  diffGenericMap(oldItemOverlay, newItemOverlay,
+    (id, d) => safe(`upsertItemDef(${id})`, () => syncItemDefOverlay(conn, id, d, w)),
+    (id) => safe(`deleteItemDef(${id})`, () => conn.reducers.deleteItemDefinition({ id: w(id) })))
   diffMap(oldWorld?.inventoryEntries ?? {}, newWorld.inventoryEntries,
-    (e) => safe(`upsertEntry(${e.id})`, () => syncEntry(conn, e)),
-    (id) => safe(`deleteEntry(${id})`, () => conn.reducers.deleteInventoryEntry({ id })))
+    (e) => safe(`upsertEntry(${e.id})`, () => syncEntry(conn, e, w)),
+    (id) => safe(`deleteEntry(${id})`, () => conn.reducers.deleteInventoryEntry({ id: w(id) })))
   diffMap(oldWorld?.carryGroups ?? {}, newWorld.carryGroups,
-    (cg) => safe(`upsertCarryGroup(${cg.id})`, () => syncCarryGroup(conn, cg)),
-    (id) => safe(`deleteCarryGroup(${id})`, () => conn.reducers.deleteCarryGroup({ id })))
+    (cg) => safe(`upsertCarryGroup(${cg.id})`, () => syncCarryGroup(conn, cg, w)),
+    (id) => safe(`deleteCarryGroup(${id})`, () => conn.reducers.deleteCarryGroup({ id: w(id) })))
   diffMap(oldWorld?.movementGroups ?? {}, newWorld.movementGroups,
-    (mg) => safe(`upsertMovementGroup(${mg.id})`, () => syncMovementGroup(conn, mg)),
-    (id) => safe(`deleteMovementGroup(${id})`, () => conn.reducers.deleteMovementGroup({ id })))
+    (mg) => safe(`upsertMovementGroup(${mg.id})`, () => syncMovementGroup(conn, mg, w)),
+    (id) => safe(`deleteMovementGroup(${id})`, () => conn.reducers.deleteMovementGroup({ id: w(id) })))
 }
 
 export function syncLocalState(
   conn: DbConnection,
   oldLocal: WorkerLocalState,
   newLocal: WorkerLocalState,
+  context: WorldCanvasContext,
 ): void {
+  const c = (id: string) => withCanvasPrefix(context, id)
   const oldP = stripEphemeral(oldLocal)
   const newP = stripEphemeral(newLocal)
 
   diffPosMap(oldP.nodePositions, newP.nodePositions,
-    (id, pos) => safe(`upsertNodePos(${id})`, () => conn.reducers.upsertNodePosition({ nodeId: id, x: pos.x, y: pos.y })),
-    (id) => safe(`deleteNodePos(${id})`, () => conn.reducers.deleteNodePosition({ nodeId: id })))
+    (id, pos) => safe(`upsertNodePos(${id})`, () => conn.reducers.upsertNodePosition({ nodeId: c(id), x: pos.x, y: pos.y })),
+    (id) => safe(`deleteNodePos(${id})`, () => conn.reducers.deleteNodePosition({ nodeId: c(id) })))
 
   diffPosMap(oldP.groupPositions, newP.groupPositions,
-    (id, pos) => safe(`upsertGroupPos(${id})`, () => conn.reducers.upsertGroupPosition({ groupId: id, x: pos.x, y: pos.y })),
-    (id) => safe(`deleteGroupPos(${id})`, () => conn.reducers.deleteGroupPosition({ groupId: id })))
+    (id, pos) => safe(`upsertGroupPos(${id})`, () => conn.reducers.upsertGroupPosition({ groupId: c(id), x: pos.x, y: pos.y })),
+    (id) => safe(`deleteGroupPos(${id})`, () => conn.reducers.deleteGroupPosition({ groupId: c(id) })))
 
   diffGenericMap(oldP.groupSizeOverrides, newP.groupSizeOverrides,
-    (id, v) => safe(`upsertGroupSize(${id})`, () => conn.reducers.upsertGroupSizeOverride({ groupId: id, width: v.width, height: v.height })),
-    (id) => safe(`deleteGroupSize(${id})`, () => conn.reducers.deleteGroupSizeOverride({ groupId: id })))
+    (id, v) => safe(`upsertGroupSize(${id})`, () => conn.reducers.upsertGroupSizeOverride({ groupId: c(id), width: v.width, height: v.height })),
+    (id) => safe(`deleteGroupSize(${id})`, () => conn.reducers.deleteGroupSizeOverride({ groupId: c(id) })))
 
   diffGenericMap(oldP.nodeSizeOverrides, newP.nodeSizeOverrides,
-    (id, v) => safe(`upsertNodeSize(${id})`, () => conn.reducers.upsertNodeSizeOverride({ nodeId: id, slotCols: v.slotCols, slotRows: v.slotRows })),
-    (id) => safe(`deleteNodeSize(${id})`, () => conn.reducers.deleteNodeSizeOverride({ nodeId: id })))
+    (id, v) => safe(`upsertNodeSize(${id})`, () => conn.reducers.upsertNodeSizeOverride({ nodeId: c(id), slotCols: v.slotCols, slotRows: v.slotRows })),
+    (id) => safe(`deleteNodeSize(${id})`, () => conn.reducers.deleteNodeSizeOverride({ nodeId: c(id) })))
 
   diffScalarMap(oldP.groupListViewEnabled, newP.groupListViewEnabled,
-    (id, v) => safe(`upsertGroupListView(${id})`, () => conn.reducers.upsertGroupListView({ groupId: id, enabled: v })),
-    (id) => safe(`deleteGroupListView(${id})`, () => conn.reducers.deleteGroupListView({ groupId: id })))
+    (id, v) => safe(`upsertGroupListView(${id})`, () => conn.reducers.upsertGroupListView({ groupId: c(id), enabled: v })),
+    (id) => safe(`deleteGroupListView(${id})`, () => conn.reducers.deleteGroupListView({ groupId: c(id) })))
 
   diffScalarMap(oldP.nodeGroupOverrides, newP.nodeGroupOverrides,
-    (id, v) => safe(`upsertNodeGroupOverride(${id})`, () => conn.reducers.upsertNodeGroupOverride({ nodeId: id, groupId: v ?? undefined })),
-    (id) => safe(`deleteNodeGroupOverride(${id})`, () => conn.reducers.deleteNodeGroupOverride({ nodeId: id })))
+    (id, v) => safe(`upsertNodeGroupOverride(${id})`, () => conn.reducers.upsertNodeGroupOverride({ nodeId: c(id), groupId: v != null ? c(v) : undefined })),
+    (id) => safe(`deleteNodeGroupOverride(${id})`, () => conn.reducers.deleteNodeGroupOverride({ nodeId: c(id) })))
 
   diffNestedPosMap(oldP.groupNodePositions, newP.groupNodePositions,
-    (gid, nid, pos) => safe(`upsertGroupNodePos(${gid}/${nid})`, () => conn.reducers.upsertGroupNodePosition({ groupId: gid, nodeId: nid, x: pos.x, y: pos.y })),
-    (gid, nid) => safe(`deleteGroupNodePos(${gid}/${nid})`, () => conn.reducers.deleteGroupNodePosition({ groupId: gid, nodeId: nid })),
-    (gid) => safe(`deleteGroupNodePosByGroup(${gid})`, () => conn.reducers.deleteGroupNodePositionsByGroup({ groupId: gid })))
+    (gid, nid, pos) => safe(`upsertGroupNodePos(${gid}/${nid})`, () => conn.reducers.upsertGroupNodePosition({ groupId: c(gid), nodeId: c(nid), x: pos.x, y: pos.y })),
+    (gid, nid) => safe(`deleteGroupNodePos(${gid}/${nid})`, () => conn.reducers.deleteGroupNodePosition({ groupId: c(gid), nodeId: c(nid) })),
+    (gid) => safe(`deleteGroupNodePosByGroup(${gid})`, () => conn.reducers.deleteGroupNodePositionsByGroup({ groupId: c(gid) })))
 
   diffPosMap(oldP.freeSegmentPositions, newP.freeSegmentPositions,
-    (id, pos) => safe(`upsertFreeSegPos(${id})`, () => conn.reducers.upsertFreeSegmentPosition({ segmentId: id, x: pos.x, y: pos.y })),
-    (id) => safe(`deleteFreeSegPos(${id})`, () => conn.reducers.deleteFreeSegmentPosition({ segmentId: id })))
+    (id, pos) => safe(`upsertFreeSegPos(${id})`, () => conn.reducers.upsertFreeSegmentPosition({ segmentId: c(id), x: pos.x, y: pos.y })),
+    (id) => safe(`deleteFreeSegPos(${id})`, () => conn.reducers.deleteFreeSegmentPosition({ segmentId: c(id) })))
 
   diffNestedPosMap(oldP.groupFreeSegmentPositions, newP.groupFreeSegmentPositions,
-    (gid, sid, pos) => safe(`upsertGroupFreeSegPos(${gid}/${sid})`, () => conn.reducers.upsertGroupFreeSegmentPosition({ groupId: gid, segmentId: sid, x: pos.x, y: pos.y })),
-    (gid, sid) => safe(`deleteGroupFreeSegPos(${gid}/${sid})`, () => conn.reducers.deleteGroupFreeSegmentPosition({ groupId: gid, segmentId: sid })),
-    (gid) => safe(`deleteGroupFreeSegPosByGroup(${gid})`, () => conn.reducers.deleteGroupFreeSegmentPositionsByGroup({ groupId: gid })))
+    (gid, sid, pos) => safe(`upsertGroupFreeSegPos(${gid}/${sid})`, () => conn.reducers.upsertGroupFreeSegmentPosition({ groupId: c(gid), segmentId: c(sid), x: pos.x, y: pos.y })),
+    (gid, sid) => safe(`deleteGroupFreeSegPos(${gid}/${sid})`, () => conn.reducers.deleteGroupFreeSegmentPosition({ groupId: c(gid), segmentId: c(sid) })),
+    (gid) => safe(`deleteGroupFreeSegPosByGroup(${gid})`, () => conn.reducers.deleteGroupFreeSegmentPositionsByGroup({ groupId: c(gid) })))
 
   diffGenericMap(oldP.groupNodeOrders, newP.groupNodeOrders,
-    (id, v) => safe(`upsertGroupNodeOrder(${id})`, () => conn.reducers.upsertGroupNodeOrder({ groupId: id, nodeIdsJson: JSON.stringify(v) })),
-    (id) => safe(`deleteGroupNodeOrder(${id})`, () => conn.reducers.deleteGroupNodeOrder({ groupId: id })))
+    (id, v) => safe(`upsertGroupNodeOrder(${id})`, () => conn.reducers.upsertGroupNodeOrder({ groupId: c(id), nodeIdsJson: JSON.stringify(v.map(c)) })),
+    (id) => safe(`deleteGroupNodeOrder(${id})`, () => conn.reducers.deleteGroupNodeOrder({ groupId: c(id) })))
 
   diffGenericMap(oldP.customGroups, newP.customGroups,
-    (id, v) => safe(`upsertCustomGroup(${id})`, () => conn.reducers.upsertCustomGroup({ groupId: id, title: v.title })),
-    (id) => safe(`deleteCustomGroup(${id})`, () => conn.reducers.deleteCustomGroup({ groupId: id })))
+    (id, v) => safe(`upsertCustomGroup(${id})`, () => conn.reducers.upsertCustomGroup({ groupId: c(id), title: v.title })),
+    (id) => safe(`deleteCustomGroup(${id})`, () => conn.reducers.deleteCustomGroup({ groupId: c(id) })))
 
   diffScalarMap(oldP.groupTitleOverrides, newP.groupTitleOverrides,
-    (id, v) => safe(`upsertGroupTitle(${id})`, () => conn.reducers.upsertGroupTitleOverride({ groupId: id, title: v })),
-    (id) => safe(`deleteGroupTitle(${id})`, () => conn.reducers.deleteGroupTitleOverride({ groupId: id })))
+    (id, v) => safe(`upsertGroupTitle(${id})`, () => conn.reducers.upsertGroupTitleOverride({ groupId: c(id), title: v })),
+    (id) => safe(`deleteGroupTitle(${id})`, () => conn.reducers.deleteGroupTitleOverride({ groupId: c(id) })))
 
   diffScalarMap(oldP.nodeTitleOverrides, newP.nodeTitleOverrides,
-    (id, v) => safe(`upsertNodeTitle(${id})`, () => conn.reducers.upsertNodeTitleOverride({ nodeId: id, title: v })),
-    (id) => safe(`deleteNodeTitle(${id})`, () => conn.reducers.deleteNodeTitleOverride({ nodeId: id })))
+    (id, v) => safe(`upsertNodeTitle(${id})`, () => conn.reducers.upsertNodeTitleOverride({ nodeId: c(id), title: v })),
+    (id) => safe(`deleteNodeTitle(${id})`, () => conn.reducers.deleteNodeTitleOverride({ nodeId: c(id) })))
 
   diffScalarMap(oldP.nodeContainment, newP.nodeContainment,
-    (id, v) => safe(`upsertNodeContainment(${id})`, () => conn.reducers.upsertNodeContainment({ nodeId: id, containerNodeId: v })),
-    (id) => safe(`deleteNodeContainment(${id})`, () => conn.reducers.deleteNodeContainment({ nodeId: id })))
+    (id, v) => safe(`upsertNodeContainment(${id})`, () => conn.reducers.upsertNodeContainment({ nodeId: c(id), containerNodeId: c(v) })),
+    (id) => safe(`deleteNodeContainment(${id})`, () => conn.reducers.deleteNodeContainment({ nodeId: c(id) })))
 
   diffGenericMap(oldP.labels, newP.labels,
-    (id, v) => safe(`upsertLabel(${id})`, () => conn.reducers.upsertLabel({ labelId: id, text: v.text, x: v.x, y: v.y })),
-    (id) => safe(`deleteLabel(${id})`, () => conn.reducers.deleteLabel({ labelId: id })))
+    (id, v) => safe(`upsertLabel(${id})`, () => conn.reducers.upsertLabel({ labelId: c(id), text: v.text, x: v.x, y: v.y })),
+    (id) => safe(`deleteLabel(${id})`, () => conn.reducers.deleteLabel({ labelId: c(id) })))
 
   if (oldP.stonesPerRow !== newP.stonesPerRow) {
-    safe('upsertStonesPerRow', () => conn.reducers.upsertSetting({ key: 'stonesPerRow', valueNum: newP.stonesPerRow }))
+    safe('upsertStonesPerRow', () => conn.reducers.upsertSetting({ key: `${c('settings:stonesPerRow')}`, valueNum: newP.stonesPerRow }))
   }
 }
 
 // ─── Domain entity sync helpers ───────────────────────────────────────────────
 
-function syncActor(conn: DbConnection, a: Actor): void {
+function syncActor(conn: DbConnection, a: Actor, w: (id: string) => string): void {
   conn.reducers.upsertActor({
-    id: a.id,
+    id: w(a.id),
     name: a.name,
     kind: a.kind,
     strengthMod: a.stats.strengthMod,
     hasLoadBearing: a.stats.hasLoadBearing,
-    movementGroupId: a.movementGroupId,
+    movementGroupId: w(a.movementGroupId),
     active: a.active,
-    ownerActorId: a.ownerActorId,
+    ownerActorId: a.ownerActorId ? w(a.ownerActorId) : undefined,
     capacityStone: a.capacityStone,
     baseExplorationFeet: a.baseSpeedProfile?.explorationFeet,
     baseCombatFeet: a.baseSpeedProfile?.combatFeet,
     baseRunningFeet: a.baseSpeedProfile?.runningFeet,
     baseMilesPerDay: a.baseSpeedProfile?.milesPerDay,
-    leftWieldingEntryId: a.leftWieldingEntryId,
-    rightWieldingEntryId: a.rightWieldingEntryId,
+    leftWieldingEntryId: a.leftWieldingEntryId ? w(a.leftWieldingEntryId) : undefined,
+    rightWieldingEntryId: a.rightWieldingEntryId ? w(a.rightWieldingEntryId) : undefined,
   })
 }
 
-function syncItemDef(conn: DbConnection, d: ItemDefinition): void {
+function syncItemDef(conn: DbConnection, d: ItemDefinition, w: (id: string) => string): void {
   conn.reducers.upsertItemDefinition({
-    id: d.id,
+    id: w(d.id),
     canonicalName: d.canonicalName,
     kind: d.kind,
     sixthsPerUnit: d.sixthsPerUnit,
@@ -165,11 +174,63 @@ function syncItemDef(conn: DbConnection, d: ItemDefinition): void {
   })
 }
 
-function syncEntry(conn: DbConnection, e: InventoryEntry): void {
+type ItemCatalogOverlayEntry =
+  | { deleted: true }
+  | { deleted?: false; definition: ItemDefinition }
+
+function buildSparseItemCatalogOverlay(
+  defs: Record<string, ItemDefinition> | null,
+): Record<string, ItemCatalogOverlayEntry> {
+  const baseDefs = sampleState.itemDefinitions
+  const resolved = defs ?? {}
+  const out: Record<string, ItemCatalogOverlayEntry> = {}
+
+  for (const [id, baseDef] of Object.entries(baseDefs)) {
+    const cur = resolved[id]
+    if (!cur) {
+      out[id] = { deleted: true }
+      continue
+    }
+    if (JSON.stringify(cur) !== JSON.stringify(baseDef)) {
+      out[id] = { definition: cur }
+    }
+  }
+
+  for (const [id, def] of Object.entries(resolved)) {
+    if (!(id in baseDefs)) {
+      out[id] = { definition: def }
+    }
+  }
+
+  return out
+}
+
+function syncItemDefOverlay(
+  conn: DbConnection,
+  id: string,
+  overlay: ItemCatalogOverlayEntry,
+  w: (id: string) => string,
+): void {
+  if (overlay.deleted) {
+    conn.reducers.upsertItemDefinition({
+      id: w(id),
+      canonicalName: id,
+      kind: '__deleted__',
+      sixthsPerUnit: undefined,
+      armorClass: undefined,
+      priceInGp: undefined,
+      isFungibleVisual: undefined,
+    })
+    return
+  }
+  syncItemDef(conn, overlay.definition, w)
+}
+
+function syncEntry(conn: DbConnection, e: InventoryEntry, w: (id: string) => string): void {
   conn.reducers.upsertInventoryEntry({
-    id: e.id,
-    actorId: e.actorId,
-    itemDefId: e.itemDefId,
+    id: w(e.id),
+    actorId: w(e.actorId),
+    itemDefId: w(e.itemDefId),
     quantity: e.quantity,
     zone: e.zone,
     stateWorn: e.state?.worn,
@@ -177,22 +238,22 @@ function syncEntry(conn: DbConnection, e: InventoryEntry): void {
     stateHeldHands: e.state?.heldHands,
     stateDropped: e.state?.dropped,
     stateInaccessible: e.state?.inaccessible,
-    carryGroupId: e.carryGroupId,
+    carryGroupId: e.carryGroupId ? w(e.carryGroupId) : undefined,
   })
 }
 
-function syncCarryGroup(conn: DbConnection, cg: CarryGroup): void {
+function syncCarryGroup(conn: DbConnection, cg: CarryGroup, w: (id: string) => string): void {
   conn.reducers.upsertCarryGroup({
-    id: cg.id,
-    ownerActorId: cg.ownerActorId,
+    id: w(cg.id),
+    ownerActorId: w(cg.ownerActorId),
     name: cg.name,
     dropped: cg.dropped,
   })
 }
 
-function syncMovementGroup(conn: DbConnection, mg: MovementGroup): void {
+function syncMovementGroup(conn: DbConnection, mg: MovementGroup, w: (id: string) => string): void {
   conn.reducers.upsertMovementGroup({
-    id: mg.id,
+    id: w(mg.id),
     name: mg.name,
     active: mg.active,
   })

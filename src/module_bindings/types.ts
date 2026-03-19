@@ -180,7 +180,10 @@ export const Settings = __t.object("Settings", {
 export type Settings = __Infer<typeof Settings>;
 
 export const UserCameras = __t.object("UserCameras", {
+  id: __t.string(),
   identityHex: __t.string(),
+  worldSlug: __t.string(),
+  canvasSlug: __t.string(),
   panX: __t.f64(),
   panY: __t.f64(),
   zoom: __t.f64(),
@@ -188,12 +191,24 @@ export const UserCameras = __t.object("UserCameras", {
 export type UserCameras = __Infer<typeof UserCameras>;
 
 export const UserCursors = __t.object("UserCursors", {
+  id: __t.string(),
   identityHex: __t.string(),
+  worldSlug: __t.string(),
+  canvasSlug: __t.string(),
   x: __t.f64(),
   y: __t.f64(),
   viewportScale: __t.option(__t.f64()),
 });
 export type UserCursors = __Infer<typeof UserCursors>;
+
+export const UserPresences = __t.object("UserPresences", {
+  id: __t.string(),
+  identityHex: __t.string(),
+  worldSlug: __t.string(),
+  canvasSlug: __t.string(),
+  lastSeenMs: __t.f64(),
+});
+export type UserPresences = __Infer<typeof UserPresences>;
 
 export const Users = __t.object("Users", {
   identityHex: __t.string(),

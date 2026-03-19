@@ -1,5 +1,6 @@
 import type { ActorKind, CanonicalState, CarryZone, EquipmentState, ItemKind, WieldGrip } from '../domain/types'
 import type { ItemCategory } from '../domain/item-category'
+import type { WorldCanvasContext } from '../spacetimedb/context'
 
 export type SceneSegmentVM = {
   readonly id: string
@@ -251,7 +252,13 @@ export interface RemoteCursor {
 }
 
 export type MainToWorkerMessage =
-  | { readonly type: 'INIT'; readonly worldState: CanonicalState; readonly stonesPerRow?: number; readonly token?: string }
+  | {
+      readonly type: 'INIT'
+      readonly worldState: CanonicalState
+      readonly stonesPerRow?: number
+      readonly token?: string
+      readonly context: WorldCanvasContext
+    }
   | { readonly type: 'RESET'; readonly worldState: CanonicalState; readonly stonesPerRow?: number }
   | { readonly type: 'SET_STONES_PER_ROW'; readonly stonesPerRow: number }
   | { readonly type: 'INTENT'; readonly intent: WorkerIntent }

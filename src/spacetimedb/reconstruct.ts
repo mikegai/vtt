@@ -10,10 +10,16 @@
 import type { CanonicalState, Actor, ItemDefinition, InventoryEntry, CarryGroup, MovementGroup, EquipmentState, ActorKind, ItemKind, CarryZone } from '../domain/types'
 import type { PersistedLocalState } from '../persistence/backend'
 import type { DbConnection } from '../module_bindings'
+import type { WorldCanvasContext } from './context'
+import { canvasPrefix, withoutPrefix, worldPrefix } from './context'
+import { sampleState } from '../sample-data'
 
-export function reconstructCanonicalState(conn: DbConnection): CanonicalState {
+export function reconstructCanonicalState(conn: DbConnection, context: WorldCanvasContext): CanonicalState {
+  const wp = worldPrefix(context)
   const actors: Record<string, Actor> = {}
   for (const row of conn.db.actors.iter()) {
+    const localActorId = withoutPrefix(row.id, wp)
+    if (!localActorId) continue
     const baseSpeedProfile =
       row.baseExplorationFeet != null &&
       row.baseCombatFeet != null &&
@@ -27,25 +33,31 @@ export function reconstructCanonicalState(conn: DbConnection): CanonicalState {
           }
         : undefined
 
-    actors[row.id] = {
-      id: row.id,
+    actors[localActorId] = {
+      id: localActorId,
       name: row.name,
       kind: row.kind as ActorKind,
       stats: { strengthMod: row.strengthMod, hasLoadBearing: row.hasLoadBearing },
-      movementGroupId: row.movementGroupId,
+      movementGroupId: withoutPrefix(row.movementGroupId, wp) ?? row.movementGroupId,
       active: row.active,
-      ownerActorId: row.ownerActorId ?? undefined,
+      ownerActorId: row.ownerActorId ? (withoutPrefix(row.ownerActorId, wp) ?? undefined) : undefined,
       capacityStone: row.capacityStone ?? undefined,
       baseSpeedProfile,
-      leftWieldingEntryId: row.leftWieldingEntryId ?? undefined,
-      rightWieldingEntryId: row.rightWieldingEntryId ?? undefined,
+      leftWieldingEntryId: row.leftWieldingEntryId ? (withoutPrefix(row.leftWieldingEntryId, wp) ?? undefined) : undefined,
+      rightWieldingEntryId: row.rightWieldingEntryId ? (withoutPrefix(row.rightWieldingEntryId, wp) ?? undefined) : undefined,
     }
   }
 
-  const itemDefinitions: Record<string, ItemDefinition> = {}
+  const itemDefinitions: Record<string, ItemDefinition> = { ...sampleState.itemDefinitions }
   for (const row of conn.db.item_definitions.iter()) {
-    itemDefinitions[row.id] = {
-      id: row.id,
+    const localItemId = withoutPrefix(row.id, wp)
+    if (!localItemId) continue
+    if (row.kind === '__deleted__') {
+      delete itemDefinitions[localItemId]
+      continue
+    }
+    itemDefinitions[localItemId] = {
+      id: localItemId,
       canonicalName: row.canonicalName,
       kind: row.kind as ItemKind,
       sixthsPerUnit: row.sixthsPerUnit ?? undefined,
@@ -57,6 +69,10 @@ export function reconstructCanonicalState(conn: DbConnection): CanonicalState {
 
   const inventoryEntries: Record<string, InventoryEntry> = {}
   for (const row of conn.db.inventory_entries.iter()) {
+    const localEntryId = withoutPrefix(row.id, wp)
+    const localActorId = withoutPrefix(row.actorId, wp)
+    const localItemDefId = withoutPrefix(row.itemDefId, wp)
+    if (!localEntryId || !localActorId || !localItemDefId) continue
     const state: EquipmentState = {
       ...(row.stateWorn ? { worn: true } : {}),
       ...(row.stateAttached ? { attached: true } : {}),
@@ -65,22 +81,25 @@ export function reconstructCanonicalState(conn: DbConnection): CanonicalState {
       ...(row.stateInaccessible ? { inaccessible: true } : {}),
     }
 
-    inventoryEntries[row.id] = {
-      id: row.id,
-      actorId: row.actorId,
-      itemDefId: row.itemDefId,
+    inventoryEntries[localEntryId] = {
+      id: localEntryId,
+      actorId: localActorId,
+      itemDefId: localItemDefId,
       quantity: row.quantity,
       zone: row.zone as CarryZone,
       state: Object.keys(state).length > 0 ? state : undefined,
-      carryGroupId: row.carryGroupId ?? undefined,
+      carryGroupId: row.carryGroupId ? (withoutPrefix(row.carryGroupId, wp) ?? undefined) : undefined,
     }
   }
 
   const carryGroups: Record<string, CarryGroup> = {}
   for (const row of conn.db.carry_groups.iter()) {
-    carryGroups[row.id] = {
-      id: row.id,
-      ownerActorId: row.ownerActorId,
+    const localCarryGroupId = withoutPrefix(row.id, wp)
+    const localOwnerActorId = withoutPrefix(row.ownerActorId, wp)
+    if (!localCarryGroupId || !localOwnerActorId) continue
+    carryGroups[localCarryGroupId] = {
+      id: localCarryGroupId,
+      ownerActorId: localOwnerActorId,
       name: row.name,
       dropped: row.dropped,
     }
@@ -88,8 +107,10 @@ export function reconstructCanonicalState(conn: DbConnection): CanonicalState {
 
   const movementGroups: Record<string, MovementGroup> = {}
   for (const row of conn.db.movement_groups.iter()) {
-    movementGroups[row.id] = {
-      id: row.id,
+    const localMovementGroupId = withoutPrefix(row.id, wp)
+    if (!localMovementGroupId) continue
+    movementGroups[localMovementGroupId] = {
+      id: localMovementGroupId,
       name: row.name,
       active: row.active,
     }
@@ -98,91 +119,128 @@ export function reconstructCanonicalState(conn: DbConnection): CanonicalState {
   return { actors, itemDefinitions, inventoryEntries, carryGroups, movementGroups }
 }
 
-export function reconstructLayoutState(conn: DbConnection): Partial<PersistedLocalState> {
+export function reconstructLayoutState(conn: DbConnection, context: WorldCanvasContext): Partial<PersistedLocalState> {
+  const cp = canvasPrefix(context)
   const nodePositions: Record<string, { x: number; y: number }> = {}
   for (const row of conn.db.node_positions.iter()) {
-    nodePositions[row.nodeId] = { x: row.x, y: row.y }
+    const nodeId = withoutPrefix(row.nodeId, cp)
+    if (!nodeId) continue
+    nodePositions[nodeId] = { x: row.x, y: row.y }
   }
 
   const groupPositions: Record<string, { x: number; y: number }> = {}
   for (const row of conn.db.group_positions.iter()) {
-    groupPositions[row.groupId] = { x: row.x, y: row.y }
+    const groupId = withoutPrefix(row.groupId, cp)
+    if (!groupId) continue
+    groupPositions[groupId] = { x: row.x, y: row.y }
   }
 
   const groupSizeOverrides: Record<string, { width: number; height: number }> = {}
   for (const row of conn.db.group_size_overrides.iter()) {
-    groupSizeOverrides[row.groupId] = { width: row.width, height: row.height }
+    const groupId = withoutPrefix(row.groupId, cp)
+    if (!groupId) continue
+    groupSizeOverrides[groupId] = { width: row.width, height: row.height }
   }
 
   const nodeSizeOverrides: Record<string, { slotCols: number; slotRows: number }> = {}
   for (const row of conn.db.node_size_overrides.iter()) {
-    nodeSizeOverrides[row.nodeId] = { slotCols: row.slotCols, slotRows: row.slotRows }
+    const nodeId = withoutPrefix(row.nodeId, cp)
+    if (!nodeId) continue
+    nodeSizeOverrides[nodeId] = { slotCols: row.slotCols, slotRows: row.slotRows }
   }
 
   const groupListViewEnabled: Record<string, boolean> = {}
   for (const row of conn.db.group_list_view.iter()) {
-    groupListViewEnabled[row.groupId] = row.enabled
+    const groupId = withoutPrefix(row.groupId, cp)
+    if (!groupId) continue
+    groupListViewEnabled[groupId] = row.enabled
   }
 
   const nodeGroupOverrides: Record<string, string | null> = {}
   for (const row of conn.db.node_group_overrides.iter()) {
-    nodeGroupOverrides[row.nodeId] = row.groupId ?? null
+    const nodeId = withoutPrefix(row.nodeId, cp)
+    if (!nodeId) continue
+    nodeGroupOverrides[nodeId] = row.groupId ? (withoutPrefix(row.groupId, cp) ?? null) : null
   }
 
   const groupNodePositions: Record<string, Record<string, { x: number; y: number }>> = {}
   for (const row of conn.db.group_node_positions.iter()) {
-    if (!groupNodePositions[row.groupId]) groupNodePositions[row.groupId] = {}
-    groupNodePositions[row.groupId][row.nodeId] = { x: row.x, y: row.y }
+    const groupId = withoutPrefix(row.groupId, cp)
+    const nodeId = withoutPrefix(row.nodeId, cp)
+    if (!groupId || !nodeId) continue
+    if (!groupNodePositions[groupId]) groupNodePositions[groupId] = {}
+    groupNodePositions[groupId][nodeId] = { x: row.x, y: row.y }
   }
 
   const freeSegmentPositions: Record<string, { x: number; y: number }> = {}
   for (const row of conn.db.free_segment_positions.iter()) {
-    freeSegmentPositions[row.segmentId] = { x: row.x, y: row.y }
+    const segmentId = withoutPrefix(row.segmentId, cp)
+    if (!segmentId) continue
+    freeSegmentPositions[segmentId] = { x: row.x, y: row.y }
   }
 
   const groupFreeSegmentPositions: Record<string, Record<string, { x: number; y: number }>> = {}
   for (const row of conn.db.group_free_segment_positions.iter()) {
-    if (!groupFreeSegmentPositions[row.groupId]) groupFreeSegmentPositions[row.groupId] = {}
-    groupFreeSegmentPositions[row.groupId][row.segmentId] = { x: row.x, y: row.y }
+    const groupId = withoutPrefix(row.groupId, cp)
+    const segmentId = withoutPrefix(row.segmentId, cp)
+    if (!groupId || !segmentId) continue
+    if (!groupFreeSegmentPositions[groupId]) groupFreeSegmentPositions[groupId] = {}
+    groupFreeSegmentPositions[groupId][segmentId] = { x: row.x, y: row.y }
   }
 
   const groupNodeOrders: Record<string, readonly string[]> = {}
   for (const row of conn.db.group_node_orders.iter()) {
+    const groupId = withoutPrefix(row.groupId, cp)
+    if (!groupId) continue
     try {
-      groupNodeOrders[row.groupId] = JSON.parse(row.nodeIdsJson) as string[]
+      const ids = JSON.parse(row.nodeIdsJson) as string[]
+      groupNodeOrders[groupId] = ids
+        .map((id) => withoutPrefix(id, cp))
+        .filter((id): id is string => id != null)
     } catch {
-      groupNodeOrders[row.groupId] = []
+      groupNodeOrders[groupId] = []
     }
   }
 
   const customGroups: Record<string, { title: string }> = {}
   for (const row of conn.db.custom_groups.iter()) {
-    customGroups[row.groupId] = { title: row.title }
+    const groupId = withoutPrefix(row.groupId, cp)
+    if (!groupId) continue
+    customGroups[groupId] = { title: row.title }
   }
 
   const groupTitleOverrides: Record<string, string> = {}
   for (const row of conn.db.group_title_overrides.iter()) {
-    groupTitleOverrides[row.groupId] = row.title
+    const groupId = withoutPrefix(row.groupId, cp)
+    if (!groupId) continue
+    groupTitleOverrides[groupId] = row.title
   }
 
   const nodeTitleOverrides: Record<string, string> = {}
   for (const row of conn.db.node_title_overrides.iter()) {
-    nodeTitleOverrides[row.nodeId] = row.title
+    const nodeId = withoutPrefix(row.nodeId, cp)
+    if (!nodeId) continue
+    nodeTitleOverrides[nodeId] = row.title
   }
 
   const nodeContainment: Record<string, string> = {}
   for (const row of conn.db.node_containment.iter()) {
-    nodeContainment[row.nodeId] = row.containerNodeId
+    const nodeId = withoutPrefix(row.nodeId, cp)
+    const containerNodeId = withoutPrefix(row.containerNodeId, cp)
+    if (!nodeId || !containerNodeId) continue
+    nodeContainment[nodeId] = containerNodeId
   }
 
   const labels: Record<string, { text: string; x: number; y: number }> = {}
   for (const row of conn.db.labels.iter()) {
-    labels[row.labelId] = { text: row.text, x: row.x, y: row.y }
+    const labelId = withoutPrefix(row.labelId, cp)
+    if (!labelId) continue
+    labels[labelId] = { text: row.text, x: row.x, y: row.y }
   }
 
   let stonesPerRow: number | undefined
   for (const row of conn.db.settings.iter()) {
-    if (row.key === 'stonesPerRow' && row.valueNum != null) stonesPerRow = row.valueNum
+    if (row.key === `${cp}settings:stonesPerRow` && row.valueNum != null) stonesPerRow = row.valueNum
   }
 
   return {

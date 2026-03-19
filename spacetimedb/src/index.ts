@@ -250,10 +250,32 @@ const users = table(
   }
 );
 
-const user_cursors = table(
-  { name: 'user_cursors', public: true },
+const user_presences = table(
   {
-    identityHex: t.string().primaryKey(),
+    name: 'user_presences',
+    public: true,
+    indexes: [{ accessor: 'identityHex', name: 'idx_presence_identity', algorithm: 'btree' as const, columns: ['identityHex'] }],
+  },
+  {
+    id: t.string().primaryKey(),
+    identityHex: t.string(),
+    worldSlug: t.string(),
+    canvasSlug: t.string(),
+    lastSeenMs: t.f64(),
+  }
+);
+
+const user_cursors = table(
+  {
+    name: 'user_cursors',
+    public: true,
+    indexes: [{ accessor: 'identityHex', name: 'idx_cursor_identity', algorithm: 'btree' as const, columns: ['identityHex'] }],
+  },
+  {
+    id: t.string().primaryKey(),
+    identityHex: t.string(),
+    worldSlug: t.string(),
+    canvasSlug: t.string(),
     x: t.f64(),
     y: t.f64(),
     viewportScale: t.f64().optional(),
@@ -261,9 +283,16 @@ const user_cursors = table(
 );
 
 const user_cameras = table(
-  { name: 'user_cameras', public: true },
   {
-    identityHex: t.string().primaryKey(),
+    name: 'user_cameras',
+    public: true,
+    indexes: [{ accessor: 'identityHex', name: 'idx_camera_identity', algorithm: 'btree' as const, columns: ['identityHex'] }],
+  },
+  {
+    id: t.string().primaryKey(),
+    identityHex: t.string(),
+    worldSlug: t.string(),
+    canvasSlug: t.string(),
     panX: t.f64(),
     panY: t.f64(),
     zoom: t.f64(),
@@ -295,6 +324,7 @@ const spacetimedb = schema({
   labels,
   settings,
   users,
+  user_presences,
   user_cursors,
   user_cameras,
 });
@@ -329,7 +359,15 @@ export const onDisconnect = spacetimedb.clientDisconnected((ctx) => {
   if (existing) {
     ctx.db.users.identityHex.update({ ...existing, online: false, lastSeenMs: nowMs });
   }
-  ctx.db.user_cursors.identityHex.delete(hex);
+  for (const row of ctx.db.user_presences.iter()) {
+    if (row.identityHex === hex) ctx.db.user_presences.id.delete(row.id);
+  }
+  for (const row of ctx.db.user_cursors.iter()) {
+    if (row.identityHex === hex) ctx.db.user_cursors.id.delete(row.id);
+  }
+  for (const row of ctx.db.user_cameras.iter()) {
+    if (row.identityHex === hex) ctx.db.user_cameras.id.delete(row.id);
+  }
 });
 
 // ─── Identity & Presence Reducers ─────────────────────────────────────────────
@@ -365,28 +403,59 @@ export const set_user_role = spacetimedb.reducer(
   }
 );
 
-export const update_cursor = spacetimedb.reducer(
-  { x: t.f64(), y: t.f64(), viewportScale: t.f64().optional() },
-  (ctx, { x, y, viewportScale }) => {
+export const set_presence = spacetimedb.reducer(
+  { worldSlug: t.string(), canvasSlug: t.string() },
+  (ctx, { worldSlug, canvasSlug }) => {
     const hex = ctx.sender.toHexString();
-    const existing = ctx.db.user_cursors.identityHex.find(hex);
+    const id = compoundKey(compoundKey(worldSlug, canvasSlug), hex);
+    const nowMs = Number(ctx.timestamp.toMillis());
+    const existing = ctx.db.user_presences.id.find(id);
     if (existing) {
-      ctx.db.user_cursors.identityHex.update({ identityHex: hex, x, y, viewportScale });
+      ctx.db.user_presences.id.update({ ...existing, lastSeenMs: nowMs });
     } else {
-      ctx.db.user_cursors.insert({ identityHex: hex, x, y, viewportScale });
+      ctx.db.user_presences.insert({ id, identityHex: hex, worldSlug, canvasSlug, lastSeenMs: nowMs });
+    }
+  }
+);
+
+export const update_cursor = spacetimedb.reducer(
+  { worldSlug: t.string(), canvasSlug: t.string(), x: t.f64(), y: t.f64(), viewportScale: t.f64().optional() },
+  (ctx, { worldSlug, canvasSlug, x, y, viewportScale }) => {
+    const hex = ctx.sender.toHexString();
+    const id = compoundKey(compoundKey(worldSlug, canvasSlug), hex);
+    const existing = ctx.db.user_cursors.id.find(id);
+    if (existing) {
+      ctx.db.user_cursors.id.update({ id, identityHex: hex, worldSlug, canvasSlug, x, y, viewportScale });
+    } else {
+      ctx.db.user_cursors.insert({ id, identityHex: hex, worldSlug, canvasSlug, x, y, viewportScale });
+    }
+    const presenceExisting = ctx.db.user_presences.id.find(id);
+    const nowMs = Number(ctx.timestamp.toMillis());
+    if (presenceExisting) {
+      ctx.db.user_presences.id.update({ ...presenceExisting, lastSeenMs: nowMs });
+    } else {
+      ctx.db.user_presences.insert({ id, identityHex: hex, worldSlug, canvasSlug, lastSeenMs: nowMs });
     }
   }
 );
 
 export const update_camera = spacetimedb.reducer(
-  { panX: t.f64(), panY: t.f64(), zoom: t.f64() },
-  (ctx, { panX, panY, zoom }) => {
+  { worldSlug: t.string(), canvasSlug: t.string(), panX: t.f64(), panY: t.f64(), zoom: t.f64() },
+  (ctx, { worldSlug, canvasSlug, panX, panY, zoom }) => {
     const hex = ctx.sender.toHexString();
-    const existing = ctx.db.user_cameras.identityHex.find(hex);
+    const id = compoundKey(compoundKey(worldSlug, canvasSlug), hex);
+    const existing = ctx.db.user_cameras.id.find(id);
     if (existing) {
-      ctx.db.user_cameras.identityHex.update({ identityHex: hex, panX, panY, zoom });
+      ctx.db.user_cameras.id.update({ id, identityHex: hex, worldSlug, canvasSlug, panX, panY, zoom });
     } else {
-      ctx.db.user_cameras.insert({ identityHex: hex, panX, panY, zoom });
+      ctx.db.user_cameras.insert({ id, identityHex: hex, worldSlug, canvasSlug, panX, panY, zoom });
+    }
+    const presenceExisting = ctx.db.user_presences.id.find(id);
+    const nowMs = Number(ctx.timestamp.toMillis());
+    if (presenceExisting) {
+      ctx.db.user_presences.id.update({ ...presenceExisting, lastSeenMs: nowMs });
+    } else {
+      ctx.db.user_presences.insert({ id, identityHex: hex, worldSlug, canvasSlug, lastSeenMs: nowMs });
     }
   }
 );
