@@ -9,6 +9,8 @@ import { diffSceneVM } from './scene-diff'
 import { addInventoryNodeToState, createInventoryActorId, nextInventoryName } from './inventory-node'
 import { buildSceneVM, type WorkerLocalState } from './scene-vm'
 import type { MainToWorkerMessage, SceneVM, WorkerIntent, WorkerToMainMessage } from './protocol'
+import type { PersistenceBackend, PersistedLocalState } from '../persistence/backend'
+import { IndexedDBBackend } from '../persistence/indexeddb-backend'
 
 let worldState: CanonicalState | null = null
 let localState: WorkerLocalState = {
@@ -40,6 +42,38 @@ let localState: WorkerLocalState = {
 let previousScene: SceneVM | null = null
 let batchDepth = 0
 let pendingRecomputeAfterBatch = false
+
+const persistence: PersistenceBackend = new IndexedDBBackend()
+let saveTimer: ReturnType<typeof setTimeout> | null = null
+const SAVE_DEBOUNCE_MS = 500
+
+function stripEphemeralLocalState(state: WorkerLocalState): PersistedLocalState {
+  const {
+    hoveredSegmentId: _1,
+    dropIntent: _2,
+    filterCategory: _3,
+    selectedSegmentIds: _4,
+    selectedNodeIds: _5,
+    selectedGroupIds: _6,
+    selectedLabelIds: _7,
+    selectedLabelId: _8,
+    ...persisted
+  } = state
+  return persisted
+}
+
+function scheduleSave(): void {
+  if (saveTimer != null) clearTimeout(saveTimer)
+  saveTimer = setTimeout(() => {
+    saveTimer = null
+    if (worldState) {
+      persistence.saveWorldState(worldState).catch((err) => console.warn('[persistence] saveWorldState failed', err))
+    }
+    persistence
+      .saveLocalState(stripEphemeralLocalState(localState))
+      .catch((err) => console.warn('[persistence] saveLocalState failed', err))
+  }, SAVE_DEBOUNCE_MS)
+}
 
 const post = (message: WorkerToMainMessage): void => {
   self.postMessage(message)
@@ -396,6 +430,7 @@ const recompute = (sendInitIfFirst = false): void => {
   if (sendInitIfFirst || !previousScene) {
     previousScene = nextScene
     post({ type: 'SCENE_INIT', scene: nextScene })
+    scheduleSave()
     return
   }
 
@@ -404,6 +439,7 @@ const recompute = (sendInitIfFirst = false): void => {
   if (patches.length > 0) {
     post({ type: 'SCENE_PATCHES', patches, scene: nextScene })
   }
+  scheduleSave()
 }
 
 const runIntentBatch = (intents: readonly WorkerIntent[]): void => {
@@ -1976,13 +2012,66 @@ const applyIntent = (intent: WorkerIntent): void => {
   }
 }
 
+async function initFromPersistence(fallbackWorldState: CanonicalState, stonesPerRow?: number): Promise<void> {
+  try {
+    const [savedWorld, savedLocal] = await Promise.all([
+      persistence.loadWorldState(),
+      persistence.loadLocalState(),
+    ])
+    if (savedWorld) {
+      worldState = migrateWieldToActor(savedWorld)
+    } else {
+      worldState = migrateWieldToActor(fallbackWorldState)
+    }
+    if (savedLocal) {
+      localState = { ...localState, ...savedLocal }
+    }
+  } catch (err) {
+    console.warn('[persistence] load failed, using fallback state', err)
+    worldState = migrateWieldToActor(fallbackWorldState)
+  }
+  if (stonesPerRow != null) {
+    localState = { ...localState, stonesPerRow }
+  }
+  recompute(true)
+}
+
 self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
   const message = event.data
   if (message.type === 'INIT') {
+    void initFromPersistence(message.worldState, message.stonesPerRow)
+    return
+  }
+  if (message.type === 'RESET') {
+    persistence.clear().catch((err) => console.warn('[persistence] clear failed', err))
     worldState = migrateWieldToActor(message.worldState)
-    if (message.stonesPerRow != null) {
-      localState = { ...localState, stonesPerRow: message.stonesPerRow }
+    localState = {
+      hoveredSegmentId: null,
+      groupPositions: {},
+      groupSizeOverrides: {},
+      groupListViewEnabled: {},
+      nodeGroupOverrides: {},
+      nodePositions: {},
+      groupNodePositions: {},
+      nodeSizeOverrides: {},
+      freeSegmentPositions: {},
+      groupFreeSegmentPositions: {},
+      groupNodeOrders: {},
+      customGroups: {},
+      groupTitleOverrides: {},
+      nodeTitleOverrides: {},
+      dropIntent: null,
+      stonesPerRow: message.stonesPerRow ?? 25,
+      filterCategory: null,
+      selectedSegmentIds: [],
+      selectedNodeIds: [],
+      selectedGroupIds: [],
+      selectedLabelIds: [],
+      nodeContainment: {},
+      labels: {},
+      selectedLabelId: null,
     }
+    previousScene = null
     recompute(true)
     return
   }

@@ -131,6 +131,7 @@ app.innerHTML = `
           <option value="40">Stones per row: 40</option>
           <option value="50">Stones per row: 50</option>
         </select>
+        <button id="reset-data-btn" class="tool-button tool-button-danger" type="button" style="margin-top: 12px">Reset to Sample Data</button>
       </section>
 
       <div class="tool-meta">
@@ -1137,6 +1138,12 @@ stonesPerRowEl.addEventListener('change', () => {
   const v = Number(stonesPerRowEl.value)
   pixiAdapter.setStonesPerRow(v)
   postToWorker({ type: 'SET_STONES_PER_ROW', stonesPerRow: v })
+})
+
+document.querySelector<HTMLButtonElement>('#reset-data-btn')!.addEventListener('click', () => {
+  if (!confirm('Reset all data to sample state? This cannot be undone.')) return
+  const stonesPerRow = Number(stonesPerRowEl.value ?? 25)
+  postToWorker({ type: 'RESET', worldState: sampleState, stonesPerRow })
 })
 
 const syncLabelEditor = (): void => {

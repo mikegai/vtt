@@ -2476,6 +2476,14 @@ export class PixiBoardAdapter {
     }
   }
 
+  /** Converts world coordinates to canvas/screen coordinates (for HUD layer drawing). */
+  private worldToScreen(worldX: number, worldY: number): { x: number; y: number } {
+    return {
+      x: worldX * this.zoom + this.pan.x,
+      y: worldY * this.zoom + this.pan.y,
+    }
+  }
+
   setEditingTitle(target: { type: 'node' | 'group'; id: string } | null): void {
     this.editingTitle = target
     if (this.currentScene) this.rebuildAllNodes(this.currentScene)
@@ -4411,9 +4419,11 @@ export class PixiBoardAdapter {
     if (this.activeDrag.type !== 'connector' || !this.currentScene) return
     const drag = this.activeDrag.state
     const world = this.screenToWorld(clientX, clientY)
+    const fromScreen = this.worldToScreen(drag.fromX, drag.fromY)
+    const toScreen = this.worldToScreen(world.x, world.y)
     this.connectorDragLine.clear()
-    this.connectorDragLine.moveTo(drag.fromX, drag.fromY)
-    this.connectorDragLine.lineTo(world.x, world.y)
+    this.connectorDragLine.moveTo(fromScreen.x, fromScreen.y)
+    this.connectorDragLine.lineTo(toScreen.x, toScreen.y)
     this.connectorDragLine.stroke({ width: 2, color: 0x9ecfff, alpha: 0.95 })
     let targetNodeId: string | null = null
     for (const node of Object.values(this.currentScene.nodes)) {

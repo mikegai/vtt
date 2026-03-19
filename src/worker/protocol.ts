@@ -204,6 +204,7 @@ export type WorkerIntent =
 
 export type MainToWorkerMessage =
   | { readonly type: 'INIT'; readonly worldState: CanonicalState; readonly stonesPerRow?: number }
+  | { readonly type: 'RESET'; readonly worldState: CanonicalState; readonly stonesPerRow?: number }
   | { readonly type: 'SET_STONES_PER_ROW'; readonly stonesPerRow: number }
   | { readonly type: 'INTENT'; readonly intent: WorkerIntent }
 
