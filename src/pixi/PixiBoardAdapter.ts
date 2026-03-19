@@ -3452,6 +3452,188 @@ export class PixiBoardAdapter {
     this.endDrag()
   }
 
+  private drawWornPill(
+    container: Container,
+    segment: SceneSegmentVM,
+    nodeId: string,
+    hovered: boolean,
+    tier: ZoomTier,
+    textCompensationScale: number,
+  ): void {
+    const label = tier === 'far' ? segment.shortLabel : (tier === 'medium' ? segment.mediumLabel : segment.fullLabel)
+    const text = label.trim().length > 0 ? label : segment.fullLabel
+    const pillWidth = Math.max(WORN_PILL_MIN_W, text.length * 6 + WORN_PILL_HPAD * 2)
+    const body = new Graphics()
+    body.eventMode = 'none'
+    body.roundRect(0, 0, pillWidth, WORN_PILL_H, WORN_PILL_H / 2)
+    body.fill({ color: hovered ? 0x5cadee : 0x3d9ac9, alpha: 0.96 })
+    body.stroke({ width: 1, color: 0x8ed8ff, alpha: 0.95 })
+    container.addChild(body)
+    const textSprite = new BitmapText({
+      text,
+      style: { fill: '#e8f0ff', fontSize: 9, fontFamily: FONT_SEMIBOLD },
+    })
+    textSprite.eventMode = 'none'
+    textSprite.anchor.set(0, 0.5)
+    textSprite.scale.set(textCompensationScale)
+    textSprite.position.set(8, WORN_PILL_H / 2)
+    container.addChild(textSprite)
+    const hit = new Graphics()
+    hit.eventMode = 'static'
+    hit.cursor = 'pointer'
+    hit.roundRect(0, 0, pillWidth, WORN_PILL_H, WORN_PILL_H / 2)
+    hit.fill({ color: 0xffffff, alpha: 0.001 })
+    hit.on('pointerover', (event: any) => {
+      this.handlers.onHoverSegment(segment.id)
+      const canvasRect = this.app.canvas.getBoundingClientRect()
+      const clientX = typeof event.clientX === 'number' ? event.clientX : event.global.x + canvasRect.left
+      const clientY = typeof event.clientY === 'number' ? event.clientY : event.global.y + canvasRect.top
+      this.showTooltip(segment, clientX, clientY)
+    })
+    hit.on('pointermove', (event: any) => {
+      const canvasRect = this.app.canvas.getBoundingClientRect()
+      const clientX = typeof event.clientX === 'number' ? event.clientX : event.global.x + canvasRect.left
+      const clientY = typeof event.clientY === 'number' ? event.clientY : event.global.y + canvasRect.top
+      this.moveTooltip(clientX, clientY)
+    })
+    hit.on('pointerout', () => {
+      this.handlers.onHoverSegment(null)
+      this.hideTooltip()
+    })
+    hit.on('pointerdown', (event: any) => {
+      if (event.button !== 0) return
+      const canvasRect = this.app.canvas.getBoundingClientRect()
+      const clientX = typeof event.clientX === 'number' ? event.clientX : event.global.x + canvasRect.left
+      const clientY = typeof event.clientY === 'number' ? event.clientY : event.global.y + canvasRect.top
+      const addToSelection = !!(event.originalEvent?.shiftKey ?? event.shiftKey)
+      this.onSegmentPointerDown(segment, nodeId, clientX, clientY, addToSelection)
+      event.stopPropagation()
+    })
+    hit.on('pointertap', (event: any) => {
+      if (event.button !== 0) return
+      const addToSelection = !!(event.originalEvent?.shiftKey ?? event.shiftKey)
+      if (this.shouldTreatAsDoubleTap(`segment:${segment.id}`)) {
+        this.handlers.onSegmentDoubleClick?.(segment.id, segment.itemDefId, nodeId)
+      } else {
+        this.handlers.onSegmentClick?.(segment.id, nodeId, addToSelection)
+      }
+      event.stopPropagation()
+    })
+    ;(hit as Container & { __segmentContext?: SegmentContext }).__segmentContext = { segmentId: segment.id, nodeId }
+    container.addChild(hit)
+  }
+
+  private reconcileSegmentViews(
+    node: SceneNodeVM,
+    segmentViews: Map<string, SegmentView>,
+    parentContainer: Container,
+    wornPills: readonly SceneSegmentVM[],
+    layoutCols: number,
+    totalWidth: number,
+    pillStripHeight: number,
+    totalSixths: number,
+    hoveredSegmentId: string | null,
+    filterCategory: string | null,
+    selectedSegmentIds: readonly string[],
+    tier: ZoomTier,
+    textCompensationScale: number,
+    mergedIds: Set<string>,
+  ): void {
+    node.segments.forEach((segment) => {
+      const pillIndex = segment.isWornPill ? wornPills.findIndex((pill) => pill.id === segment.id) : -1
+      const unshiftedPos = segment.isWornPill ? null : segmentPositionInNode(segment, layoutCols)
+      const pos = segment.isWornPill
+        ? wornPillPositionInNode(Math.max(0, pillIndex), totalWidth)
+        : { x: unshiftedPos!.x, y: unshiftedPos!.y + pillStripHeight }
+      let segView = segmentViews.get(segment.id)
+      if (!segView) {
+        const segContainer = new Container()
+        segContainer.position.set(pos.x, pos.y)
+        const spring = createSpring2D(pos.x, pos.y)
+        spring.targetX = pos.x
+        spring.targetY = pos.y
+        segView = { container: segContainer, spring }
+        segmentViews.set(segment.id, segView)
+        const hovered = segment.id === hoveredSegmentId
+        if (segment.isWornPill) {
+          this.drawWornPill(segContainer, segment, node.id, hovered, tier, textCompensationScale)
+        } else {
+          drawSegmentBlock(
+            segContainer,
+            segment,
+            tier,
+            this.zoom,
+            hovered,
+            this.handlers,
+            textCompensationScale,
+            this.minVisibleLabelPx,
+            this.maxVisibleLabelPx,
+            totalSixths,
+            (seg, x, y) => this.showTooltip(seg, x, y),
+            (x, y) => this.moveTooltip(x, y),
+            () => this.hideTooltip(),
+            node.id,
+            (seg, nodeId, x, y, addToSel) => this.onSegmentPointerDown(seg, nodeId, x, y, addToSel),
+            unshiftedPos!,
+            filterCategory,
+            selectedSegmentIds,
+            this.handlers.onSegmentClick,
+            this.handlers.onSegmentDoubleClick,
+            () => this.lastDragEndTime,
+            () => this.activeDrag.type === 'idle' || this.activeDrag.type === 'pendingSegment',
+            mergedIds.has(segment.id),
+            layoutCols,
+          )
+        }
+        parentContainer.addChild(segContainer)
+      } else {
+        setSpringTarget(segView.spring, pos.x, pos.y)
+        if (this.skipSegmentAnimationOnce.delete(segment.id)) {
+          segView.spring.x = pos.x
+          segView.spring.y = pos.y
+          segView.spring.targetX = pos.x
+          segView.spring.targetY = pos.y
+          segView.spring.vx = 0
+          segView.spring.vy = 0
+          segView.spring.active = false
+          segView.container.position.set(pos.x, pos.y)
+        }
+        const hovered = segment.id === hoveredSegmentId
+        segView.container.removeChildren()
+        if (segment.isWornPill) {
+          this.drawWornPill(segView.container, segment, node.id, hovered, tier, textCompensationScale)
+        } else {
+          drawSegmentBlock(
+            segView.container,
+            segment,
+            tier,
+            this.zoom,
+            hovered,
+            this.handlers,
+            textCompensationScale,
+            this.minVisibleLabelPx,
+            this.maxVisibleLabelPx,
+            totalSixths,
+            (seg, x, y) => this.showTooltip(seg, x, y),
+            (x, y) => this.moveTooltip(x, y),
+            () => this.hideTooltip(),
+            node.id,
+            (seg, nodeId, x, y, addToSel) => this.onSegmentPointerDown(seg, nodeId, x, y, addToSel),
+            unshiftedPos!,
+            filterCategory,
+            selectedSegmentIds,
+            this.handlers.onSegmentClick,
+            this.handlers.onSegmentDoubleClick,
+            () => this.lastDragEndTime,
+            () => this.activeDrag.type === 'idle' || this.activeDrag.type === 'pendingSegment',
+            mergedIds.has(segment.id),
+            layoutCols,
+          )
+        }
+      }
+    })
+  }
+
   private createNode(
     node: SceneNodeVM,
     hoveredSegmentId: string | null,
@@ -3705,119 +3887,12 @@ export class PixiBoardAdapter {
     }
 
     const segmentViews = new Map<string, SegmentView>()
-    const drawWornPill = (
-      container: Container,
-      segment: SceneSegmentVM,
-      hovered: boolean,
-    ): void => {
-      const label = tier === 'far' ? segment.shortLabel : (tier === 'medium' ? segment.mediumLabel : segment.fullLabel)
-      const text = label.trim().length > 0 ? label : segment.fullLabel
-      const pillWidth = Math.max(WORN_PILL_MIN_W, text.length * 6 + WORN_PILL_HPAD * 2)
-      const body = new Graphics()
-      body.eventMode = 'none'
-      body.roundRect(0, 0, pillWidth, WORN_PILL_H, WORN_PILL_H / 2)
-      body.fill({ color: hovered ? 0x5cadee : 0x3d9ac9, alpha: 0.96 })
-      body.stroke({ width: 1, color: 0x8ed8ff, alpha: 0.95 })
-      container.addChild(body)
-      const textSprite = new BitmapText({
-        text,
-        style: { fill: '#e8f0ff', fontSize: 9, fontFamily: FONT_SEMIBOLD },
-      })
-      textSprite.eventMode = 'none'
-      textSprite.anchor.set(0, 0.5)
-      textSprite.scale.set(textCompensationScale)
-      textSprite.position.set(8, WORN_PILL_H / 2)
-      container.addChild(textSprite)
-      const hit = new Graphics()
-      hit.eventMode = 'static'
-      hit.cursor = 'pointer'
-      hit.roundRect(0, 0, pillWidth, WORN_PILL_H, WORN_PILL_H / 2)
-      hit.fill({ color: 0xffffff, alpha: 0.001 })
-      hit.on('pointerover', (event: any) => {
-        this.handlers.onHoverSegment(segment.id)
-        const canvasRect = this.app.canvas.getBoundingClientRect()
-        const clientX = typeof event.clientX === 'number' ? event.clientX : event.global.x + canvasRect.left
-        const clientY = typeof event.clientY === 'number' ? event.clientY : event.global.y + canvasRect.top
-        this.showTooltip(segment, clientX, clientY)
-      })
-      hit.on('pointermove', (event: any) => {
-        const canvasRect = this.app.canvas.getBoundingClientRect()
-        const clientX = typeof event.clientX === 'number' ? event.clientX : event.global.x + canvasRect.left
-        const clientY = typeof event.clientY === 'number' ? event.clientY : event.global.y + canvasRect.top
-        this.moveTooltip(clientX, clientY)
-      })
-      hit.on('pointerout', () => {
-        this.handlers.onHoverSegment(null)
-        this.hideTooltip()
-      })
-      hit.on('pointerdown', (event: any) => {
-        if (event.button !== 0) return
-        const canvasRect = this.app.canvas.getBoundingClientRect()
-        const clientX = typeof event.clientX === 'number' ? event.clientX : event.global.x + canvasRect.left
-        const clientY = typeof event.clientY === 'number' ? event.clientY : event.global.y + canvasRect.top
-        const addToSelection = !!(event.originalEvent?.shiftKey ?? event.shiftKey)
-        this.onSegmentPointerDown(segment, node.id, clientX, clientY, addToSelection)
-        event.stopPropagation()
-      })
-      hit.on('pointertap', (event: any) => {
-        if (event.button !== 0) return
-        const addToSelection = !!(event.originalEvent?.shiftKey ?? event.shiftKey)
-        if (this.shouldTreatAsDoubleTap(`segment:${segment.id}`)) {
-          this.handlers.onSegmentDoubleClick?.(segment.id, segment.itemDefId, node.id)
-        } else {
-          this.handlers.onSegmentClick?.(segment.id, node.id, addToSelection)
-        }
-        event.stopPropagation()
-      })
-      ;(hit as Container & { __segmentContext?: SegmentContext }).__segmentContext = { segmentId: segment.id, nodeId: node.id }
-      container.addChild(hit)
-    }
-
-    node.segments.forEach((segment) => {
-      const pillIndex = segment.isWornPill ? wornPills.findIndex((pill) => pill.id === segment.id) : -1
-      const unshiftedPos = segment.isWornPill ? null : segmentPositionInNode(segment, layoutCols)
-      const pos = segment.isWornPill
-        ? wornPillPositionInNode(Math.max(0, pillIndex), totalWidth)
-        : { x: unshiftedPos!.x, y: unshiftedPos!.y + pillStripHeight }
-      const segContainer = new Container()
-      segContainer.position.set(pos.x, pos.y)
-      const spring = createSpring2D(pos.x, pos.y)
-      spring.targetX = pos.x
-      spring.targetY = pos.y
-      segmentViews.set(segment.id, { container: segContainer, spring })
-      const hovered = segment.id === hoveredSegmentId
-      if (segment.isWornPill) {
-        drawWornPill(segContainer, segment, hovered)
-      } else {
-        drawSegmentBlock(
-          segContainer,
-          segment,
-          tier,
-          this.zoom,
-          hovered,
-          this.handlers,
-          textCompensationScale,
-          this.minVisibleLabelPx,
-          this.maxVisibleLabelPx,
-          totalSixths,
-          (seg, x, y) => this.showTooltip(seg, x, y),
-          (x, y) => this.moveTooltip(x, y),
-          () => this.hideTooltip(),
-          node.id,
-          (seg, nodeId, x, y, addToSel) => this.onSegmentPointerDown(seg, nodeId, x, y, addToSel),
-          unshiftedPos!,
-          filterCategory,
-          selectedSegmentIds,
-          this.handlers.onSegmentClick,
-          this.handlers.onSegmentDoubleClick,
-          () => this.lastDragEndTime,
-          () => this.activeDrag.type === 'idle' || this.activeDrag.type === 'pendingSegment',
-          mergedIds.has(segment.id),
-          layoutCols,
-        )
-      }
-      segmentContainer.addChild(segContainer)
-    })
+    this.reconcileSegmentViews(
+      node, segmentViews, segmentContainer,
+      wornPills, layoutCols, totalWidth, pillStripHeight, totalSixths,
+      hoveredSegmentId, filterCategory, selectedSegmentIds,
+      tier, textCompensationScale, mergedIds,
+    )
     contentContainer.addChild(segmentContainer)
 
     const owningGroup = node.groupId ? this.currentScene?.groups?.[node.groupId] : null
@@ -4015,70 +4090,6 @@ export class PixiBoardAdapter {
         layoutCols,
       )
     }
-    const drawWornPill = (container: Container, segment: SceneSegmentVM, hovered: boolean): void => {
-      const label = tier === 'far' ? segment.shortLabel : (tier === 'medium' ? segment.mediumLabel : segment.fullLabel)
-      const text = label.trim().length > 0 ? label : segment.fullLabel
-      const pillWidth = Math.max(WORN_PILL_MIN_W, text.length * 6 + WORN_PILL_HPAD * 2)
-      const body = new Graphics()
-      body.eventMode = 'none'
-      body.roundRect(0, 0, pillWidth, WORN_PILL_H, WORN_PILL_H / 2)
-      body.fill({ color: hovered ? 0x5cadee : 0x3d9ac9, alpha: 0.96 })
-      body.stroke({ width: 1, color: 0x8ed8ff, alpha: 0.95 })
-      container.addChild(body)
-      const textSprite = new BitmapText({
-        text,
-        style: { fill: '#e8f0ff', fontSize: 11, fontFamily: FONT_SEMIBOLD },
-      })
-      textSprite.eventMode = 'none'
-      textSprite.anchor.set(0, 0.5)
-      textSprite.scale.set(textCompensationScale)
-      textSprite.position.set(8, WORN_PILL_H / 2)
-      container.addChild(textSprite)
-      const hit = new Graphics()
-      hit.eventMode = 'static'
-      hit.cursor = 'pointer'
-      hit.roundRect(0, 0, pillWidth, WORN_PILL_H, WORN_PILL_H / 2)
-      hit.fill({ color: 0xffffff, alpha: 0.001 })
-      hit.on('pointerover', (event: any) => {
-        this.handlers.onHoverSegment(segment.id)
-        const canvasRect = this.app.canvas.getBoundingClientRect()
-        const clientX = typeof event.clientX === 'number' ? event.clientX : event.global.x + canvasRect.left
-        const clientY = typeof event.clientY === 'number' ? event.clientY : event.global.y + canvasRect.top
-        this.showTooltip(segment, clientX, clientY)
-      })
-      hit.on('pointermove', (event: any) => {
-        const canvasRect = this.app.canvas.getBoundingClientRect()
-        const clientX = typeof event.clientX === 'number' ? event.clientX : event.global.x + canvasRect.left
-        const clientY = typeof event.clientY === 'number' ? event.clientY : event.global.y + canvasRect.top
-        this.moveTooltip(clientX, clientY)
-      })
-      hit.on('pointerout', () => {
-        this.handlers.onHoverSegment(null)
-        this.hideTooltip()
-      })
-      hit.on('pointerdown', (event: any) => {
-        if (event.button !== 0) return
-        const canvasRect = this.app.canvas.getBoundingClientRect()
-        const clientX = typeof event.clientX === 'number' ? event.clientX : event.global.x + canvasRect.left
-        const clientY = typeof event.clientY === 'number' ? event.clientY : event.global.y + canvasRect.top
-        const addToSelection = !!(event.originalEvent?.shiftKey ?? event.shiftKey)
-        this.onSegmentPointerDown(segment, node.id, clientX, clientY, addToSelection)
-        event.stopPropagation()
-      })
-      hit.on('pointertap', (event: any) => {
-        if (event.button !== 0) return
-        const addToSelection = !!(event.originalEvent?.shiftKey ?? event.shiftKey)
-        if (this.shouldTreatAsDoubleTap(`segment:${segment.id}`)) {
-          this.handlers.onSegmentDoubleClick?.(segment.id, segment.itemDefId, node.id)
-        } else {
-          this.handlers.onSegmentClick?.(segment.id, node.id, addToSelection)
-        }
-        event.stopPropagation()
-      })
-      ;(hit as Container & { __segmentContext?: SegmentContext }).__segmentContext = { segmentId: segment.id, nodeId: node.id }
-      container.addChild(hit)
-    }
-
     const nextIds = new Set(node.segments.map((s) => s.id))
     for (const [id, segView] of view.segmentViews) {
       if (!nextIds.has(id)) {
@@ -4087,99 +4098,12 @@ export class PixiBoardAdapter {
         view.segmentViews.delete(id)
       }
     }
-    node.segments.forEach((segment) => {
-      const pillIndex = segment.isWornPill ? wornPills.findIndex((pill) => pill.id === segment.id) : -1
-      const unshiftedPos = segment.isWornPill ? null : segmentPositionInNode(segment, layoutCols)
-      const pos = segment.isWornPill
-        ? wornPillPositionInNode(Math.max(0, pillIndex), view.totalWidth)
-        : { x: unshiftedPos!.x, y: unshiftedPos!.y + pillStripHeight }
-      let segView = view.segmentViews.get(segment.id)
-      if (!segView) {
-        const segContainer = new Container()
-        segContainer.position.set(pos.x, pos.y)
-        const spring = createSpring2D(pos.x, pos.y)
-        spring.targetX = pos.x
-        spring.targetY = pos.y
-        segView = { container: segContainer, spring }
-        view.segmentViews.set(segment.id, segView)
-        const hovered = segment.id === hoveredSegmentId
-        if (segment.isWornPill) {
-          drawWornPill(segContainer, segment, hovered)
-        } else {
-          drawSegmentBlock(
-            segContainer,
-            segment,
-            tier,
-            this.zoom,
-            hovered,
-            this.handlers,
-            textCompensationScale,
-            this.minVisibleLabelPx,
-            this.maxVisibleLabelPx,
-            totalSixths,
-            (seg, x, y) => this.showTooltip(seg, x, y),
-            (x, y) => this.moveTooltip(x, y),
-            () => this.hideTooltip(),
-            node.id,
-            (seg, nodeId, x, y, addToSel) => this.onSegmentPointerDown(seg, nodeId, x, y, addToSel),
-            unshiftedPos!,
-            filterCategory,
-            selectedSegmentIds,
-            this.handlers.onSegmentClick,
-            this.handlers.onSegmentDoubleClick,
-            () => this.lastDragEndTime,
-            () => this.activeDrag.type === 'idle' || this.activeDrag.type === 'pendingSegment',
-            mergedIds.has(segment.id),
-            layoutCols,
-          )
-        }
-        view.segmentContainer.addChild(segContainer)
-      } else {
-        setSpringTarget(segView.spring, pos.x, pos.y)
-        if (this.skipSegmentAnimationOnce.delete(segment.id)) {
-          segView.spring.x = pos.x
-          segView.spring.y = pos.y
-          segView.spring.targetX = pos.x
-          segView.spring.targetY = pos.y
-          segView.spring.vx = 0
-          segView.spring.vy = 0
-          segView.spring.active = false
-          segView.container.position.set(pos.x, pos.y)
-        }
-        const hovered = segment.id === hoveredSegmentId
-        segView.container.removeChildren()
-        if (segment.isWornPill) {
-          drawWornPill(segView.container, segment, hovered)
-        } else {
-          drawSegmentBlock(
-            segView.container,
-            segment,
-            tier,
-            this.zoom,
-            hovered,
-            this.handlers,
-            textCompensationScale,
-            this.minVisibleLabelPx,
-            this.maxVisibleLabelPx,
-            totalSixths,
-            (seg, x, y) => this.showTooltip(seg, x, y),
-            (x, y) => this.moveTooltip(x, y),
-            () => this.hideTooltip(),
-            node.id,
-            (seg, nodeId, x, y, addToSel) => this.onSegmentPointerDown(seg, nodeId, x, y, addToSel),
-            unshiftedPos!,
-            filterCategory,
-            selectedSegmentIds,
-            this.handlers.onSegmentClick,
-            this.handlers.onSegmentDoubleClick,
-            () => this.lastDragEndTime,
-            () => this.activeDrag.type === 'idle' || this.activeDrag.type === 'pendingSegment',
-            mergedIds.has(segment.id),
-            layoutCols,
-          )
-        }
-      }
-    })
+    this.reconcileSegmentViews(
+      node, view.segmentViews, view.segmentContainer,
+      wornPills, layoutCols, view.totalWidth, pillStripHeight, totalSixths,
+      hoveredSegmentId, filterCategory, selectedSegmentIds,
+      tier, textCompensationScale, mergedIds,
+    )
   }
 
   private enableDrag(handleView: Container, nodeContainer: Container, nodeId: string): void {
