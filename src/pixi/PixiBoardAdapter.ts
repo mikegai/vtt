@@ -603,7 +603,7 @@ const wornPillStripHeight = (segments: readonly SceneSegmentVM[], totalWidth: nu
 const WORN_PILL_HGAP = 6
 
 const pillLabelWidth = (text: string): number =>
-  Math.max(WORN_PILL_MIN_W, text.length * 6 + WORN_PILL_HPAD * 2)
+  Math.max(WORN_PILL_MIN_W, Math.ceil(text.length * 5.5) + WORN_PILL_HPAD * 2)
 
 const layoutWornPills = (
   pills: readonly SceneSegmentVM[],
@@ -3071,30 +3071,39 @@ export class PixiBoardAdapter {
       if (!pos) continue
       const relX = pos.x - grabbed.x
       const relY = pos.y - grabbed.y
-      const color = segment.isOverflow ? 0xa83f62 : isMultiStone(segment) ? 0x61b5ff : 0x7bd7cf
-      const alpha = 0.75
-      if (isMultiStone(segment)) {
-        const w = (segment.sizeSixths / 6) * (STONE_W + STONE_GAP) - STONE_GAP
-        const rect = new Graphics()
-        rect.roundRect(relX, relY, w, STONE_H, 6)
-        rect.fill({ color, alpha })
-        rect.stroke({ width: 1.5, color: 0xd3ebff, alpha: 0.9 })
-        proxy.addChild(rect)
+      if (segment.isWornPill) {
+        const w = pillLabelWidth(segment.fullLabel)
+        const pill = new Graphics()
+        pill.roundRect(relX, relY, w, WORN_PILL_H, WORN_PILL_H / 2)
+        pill.fill({ color: 0x3d9ac9, alpha: 0.75 })
+        pill.stroke({ width: 1, color: 0x8ed8ff, alpha: 0.9 })
+        proxy.addChild(pill)
       } else {
-        drawGhostCells(proxy, 0, relX, relY, segment.sizeSixths, color, alpha)
-        const groups = groupSixthsByStone(0, segment.sizeSixths)
-        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
-        groups.forEach((g) => {
-          const gy = relY + stoneToY(g.stone) + g.startRow * CELL_H
-          minX = Math.min(minX, relX + stoneToX(g.stone))
-          minY = Math.min(minY, gy)
-          maxX = Math.max(maxX, relX + stoneToX(g.stone) + STONE_W)
-          maxY = Math.max(maxY, gy + g.count * CELL_H)
-        })
-        const stroke = new Graphics()
-        stroke.roundRect(minX, minY, maxX - minX, maxY - minY, 4)
-        stroke.stroke({ width: 1.5, color: 0xd3ebff, alpha: 0.85 })
-        proxy.addChild(stroke)
+        const color = segment.isOverflow ? 0xa83f62 : isMultiStone(segment) ? 0x61b5ff : 0x7bd7cf
+        const alpha = 0.75
+        if (isMultiStone(segment)) {
+          const w = (segment.sizeSixths / 6) * (STONE_W + STONE_GAP) - STONE_GAP
+          const rect = new Graphics()
+          rect.roundRect(relX, relY, w, STONE_H, 6)
+          rect.fill({ color, alpha })
+          rect.stroke({ width: 1.5, color: 0xd3ebff, alpha: 0.9 })
+          proxy.addChild(rect)
+        } else {
+          drawGhostCells(proxy, 0, relX, relY, segment.sizeSixths, color, alpha)
+          const groups = groupSixthsByStone(0, segment.sizeSixths)
+          let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+          groups.forEach((g) => {
+            const gy = relY + stoneToY(g.stone) + g.startRow * CELL_H
+            minX = Math.min(minX, relX + stoneToX(g.stone))
+            minY = Math.min(minY, gy)
+            maxX = Math.max(maxX, relX + stoneToX(g.stone) + STONE_W)
+            maxY = Math.max(maxY, gy + g.count * CELL_H)
+          })
+          const stroke = new Graphics()
+          stroke.roundRect(minX, minY, maxX - minX, maxY - minY, 4)
+          stroke.stroke({ width: 1.5, color: 0xd3ebff, alpha: 0.85 })
+          proxy.addChild(stroke)
+        }
       }
     }
     return proxy
@@ -3142,15 +3151,27 @@ export class PixiBoardAdapter {
     if (sourceNode) {
       const sourceSegment = sourceNode.segments.find((s) => s.id === segmentId)
       if (!sourceSegment) return null
-      const layoutCols = this.getNodeLayoutCols(sourceNode)
-      const pillStripHeight = this.getNodePillStripHeight(sourceNode)
-      const b = segmentBoundsInNodeLocal(sourceSegment, layoutCols, pillStripHeight)
       const nodePos = this.getNodeDisplayPosition(sourceNode)
+      const view = this.nodeViews.get(sourceNodeId)
+      const segView = view?.segmentViews.get(segmentId)
+      if (sourceSegment.isWornPill) {
+        const w = pillLabelWidth(sourceSegment.fullLabel)
+        const containerX = segView ? segView.container.position.x : 0
+        const containerY = segView ? segView.container.position.y : 0
+        return { x: nodePos.x + containerX, y: nodePos.y + containerY, w, h: WORN_PILL_H }
+      }
+      const layoutCols = this.getNodeLayoutCols(sourceNode)
+      const unshiftedPos = segmentPositionInNode(sourceSegment, layoutCols)
+      const bounds = segmentBoundsInNodeLocal(sourceSegment, layoutCols)
+      const intraX = bounds.x - unshiftedPos.x
+      const intraY = bounds.y - unshiftedPos.y
+      const containerX = segView ? segView.container.position.x : (unshiftedPos.x + this.getNodePillStripHeight(sourceNode))
+      const containerY = segView ? segView.container.position.y : (unshiftedPos.y + this.getNodePillStripHeight(sourceNode))
       return {
-        x: nodePos.x + b.x,
-        y: nodePos.y + b.y,
-        w: b.w,
-        h: b.h,
+        x: nodePos.x + containerX + intraX,
+        y: nodePos.y + containerY + intraY,
+        w: bounds.w,
+        h: bounds.h,
       }
     }
     const free = Object.values(this.currentScene.freeSegments ?? {}).find((fs) => fs.segment.id === segmentId)
@@ -3527,7 +3548,7 @@ export class PixiBoardAdapter {
   ): void {
     const label = tier === 'far' ? segment.shortLabel : (tier === 'medium' ? segment.mediumLabel : segment.fullLabel)
     const text = label.trim().length > 0 ? label : segment.fullLabel
-    const pillWidth = Math.max(WORN_PILL_MIN_W, text.length * 6 + WORN_PILL_HPAD * 2)
+    const pillWidth = pillLabelWidth(text)
     const body = new Graphics()
     body.eventMode = 'none'
     body.roundRect(0, 0, pillWidth, WORN_PILL_H, WORN_PILL_H / 2)
