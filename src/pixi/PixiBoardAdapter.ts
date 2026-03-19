@@ -3,6 +3,24 @@ import { createSpring1D, createSpring2D, setSpring1DTarget, setSpringTarget, upd
 import type { SceneFreeSegmentVM, SceneGroupVM, SceneLabelVM, SceneNodeVM, ScenePatch, SceneVM, SceneSegmentVM } from '../worker/protocol'
 import { resolveNodeGroupDropMode } from './node-drop-mode'
 import { canShowNodeResizeHandles } from './node-resize-availability'
+
+// ---------------------------------------------------------------------------
+// Last-one-wins memoize: caches last call result; re-runs if any arg changes
+// by reference identity (===). Primitive args also compared by value via ===.
+// ---------------------------------------------------------------------------
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const memoizeLast = <T extends (...args: any[]) => any>(fn: T): T => {
+  let lastArgs: unknown[] | null = null
+  let lastResult: ReturnType<T>
+  return ((...args: unknown[]) => {
+    if (lastArgs !== null && args.length === lastArgs.length && args.every((a, i) => a === lastArgs![i])) {
+      return lastResult
+    }
+    lastArgs = args
+    lastResult = fn(...args) as ReturnType<T>
+    return lastResult
+  }) as T
+}
 import { groupContiguousSameType } from './group-contiguous-same-type'
 import { resolveDragStartFromSegment } from './drag-start-resolution'
 import { decideNodeMotion } from './drag-motion-policy'
@@ -581,13 +599,13 @@ const segmentPositionInNode = (segment: SceneSegmentVM, stonesPerRowOverride = s
   }
 }
 
-const slotSegmentsOnly = (segments: readonly SceneSegmentVM[]): readonly SceneSegmentVM[] =>
-  segments.filter((segment) => !segment.isWornPill)
+const slotSegmentsOnly = memoizeLast((segments: readonly SceneSegmentVM[]): readonly SceneSegmentVM[] =>
+  segments.filter((segment) => !segment.isWornPill))
 
-const wornPillSegmentsOnly = (segments: readonly SceneSegmentVM[]): readonly SceneSegmentVM[] =>
-  segments.filter((segment) => segment.isWornPill)
+const wornPillSegmentsOnly = memoizeLast((segments: readonly SceneSegmentVM[]): readonly SceneSegmentVM[] =>
+  segments.filter((segment) => segment.isWornPill))
 
-const wornPillStripHeight = (segments: readonly SceneSegmentVM[], totalWidth: number, tier: ZoomTier): number => {
+const wornPillStripHeight = memoizeLast((segments: readonly SceneSegmentVM[], totalWidth: number, tier: ZoomTier): number => {
   const pills = wornPillSegmentsOnly(segments)
   if (pills.length === 0) return 0
   const positions = layoutWornPills(pills, totalWidth, tier)
@@ -598,14 +616,14 @@ const wornPillStripHeight = (segments: readonly SceneSegmentVM[], totalWidth: nu
   }
   const rows = maxRow + 1
   return WORN_PILL_STRIP_PAD_TOP + rows * WORN_PILL_H + (rows - 1) * WORN_PILL_ROW_GAP + WORN_PILL_STRIP_PAD_BOTTOM
-}
+})
 
 const WORN_PILL_HGAP = 6
 
 const pillLabelWidth = (text: string): number =>
   Math.max(WORN_PILL_MIN_W, Math.ceil(text.length * 5.5) + WORN_PILL_HPAD * 2)
 
-const layoutWornPills = (
+const layoutWornPills = memoizeLast((
   pills: readonly SceneSegmentVM[],
   totalWidth: number,
   tier: ZoomTier,
@@ -629,7 +647,7 @@ const layoutWornPills = (
     cursorX += w + WORN_PILL_HGAP
   }
   return result
-}
+})
 
 type NodeVerticalLayout = {
   readonly visibleSlotCount: number
@@ -639,7 +657,7 @@ type NodeVerticalLayout = {
   readonly totalHeight: number
 }
 
-const computeNodeVerticalLayout = (
+const computeNodeVerticalLayout = memoizeLast((
   node: SceneNodeVM,
   isExpanded: boolean,
   slotSegments: readonly SceneSegmentVM[],
@@ -661,7 +679,7 @@ const computeNodeVerticalLayout = (
     slotStartY,
     totalHeight,
   }
-}
+})
 
 const redrawNodeSlotFillLayer = (
   slotFillLayer: Graphics,
