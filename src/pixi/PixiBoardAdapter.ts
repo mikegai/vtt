@@ -6,6 +6,7 @@ import { canShowNodeResizeHandles } from './node-resize-availability'
 import { groupContiguousSameType } from './group-contiguous-same-type'
 import { resolveDragStartFromSegment } from './drag-start-resolution'
 import { decideNodeMotion } from './drag-motion-policy'
+import { nodeHeightForRows as vmNodeHeightForRows, nodeWidthForCols as vmNodeWidthForCols } from '../shared/node-layout'
 
 /** Stored on segment blocks for context-menu hit testing. */
 type SegmentContext = { segmentId: string; nodeId: string }
@@ -160,6 +161,7 @@ type SegmentView = {
 type NodeView = {
   readonly root: Container
   readonly positionSpring: ReturnType<typeof createSpring2D>
+  readonly slotFillLayer: Graphics
   readonly segmentContainer: Container
   readonly runVisualsContainer: Container
   readonly contentContainer: Container
@@ -603,6 +605,76 @@ const wornPillPositionInNode = (
   return {
     x: SLOT_START_X + col * (pillWidth + 6),
     y: TOP_BAND_H + WORN_PILL_STRIP_PAD_TOP + row * (WORN_PILL_H + WORN_PILL_ROW_GAP),
+  }
+}
+
+type NodeVerticalLayout = {
+  readonly visibleSlotCount: number
+  readonly slotAreaHeight: number
+  readonly pillStripHeight: number
+  readonly slotStartY: number
+  readonly totalHeight: number
+}
+
+const computeNodeVerticalLayout = (
+  node: SceneNodeVM,
+  isExpanded: boolean,
+  slotSegments: readonly SceneSegmentVM[],
+  slotCount: number,
+): NodeVerticalLayout => {
+  const visibleSlotCount = isExpanded
+    ? Math.max(slotCount, node.slotCols * node.slotRows)
+    : collapsedVisibleSlotCount(slotSegments, slotCount)
+  const pillStripHeight = wornPillStripHeight(node.segments)
+  const slotStartY = TOP_BAND_H + pillStripHeight
+  const slotAreaHeight = isExpanded ? slotAreaHeightForRows(node.slotRows) : slotAreaHeightForSlots(visibleSlotCount)
+  const totalHeight = TOP_BAND_H + slotAreaHeight + NODE_BOTTOM_PADDING + pillStripHeight
+  return {
+    visibleSlotCount,
+    slotAreaHeight,
+    pillStripHeight,
+    slotStartY,
+    totalHeight,
+  }
+}
+
+const redrawNodeSlotFillLayer = (
+  slotFillLayer: Graphics,
+  node: SceneNodeVM,
+  visibleSlotCount: number,
+  layoutCols: number,
+  slotStartY: number,
+  totalSixths: number,
+  slotSegments: readonly SceneSegmentVM[],
+  tier: ZoomTier,
+): void => {
+  slotFillLayer.clear()
+  const occupiedSixths = occupiedSixthsFromSegments(slotSegments, totalSixths)
+  const dimAlpha = tier === 'far' ? 0.1 : 0.14
+  const brightAlpha = tier === 'far' ? 0.36 : 0.48
+  const slotColorFn = node.twoBandSlots ? twoBandSlotColor : fixedSlotBandColor
+  for (let stone = 0; stone < visibleSlotCount; stone += 1) {
+    const sx = SLOT_START_X + (stone % layoutCols) * (STONE_W + STONE_GAP)
+    const sy = slotStartY + Math.floor(stone / layoutCols) * (STONE_H + STONE_ROW_GAP)
+    if (stone >= node.slotCount) {
+      for (let row = 0; row < SIXTH_ROWS; row += 1) {
+        const cy = sy + row * CELL_H
+        slotFillLayer.roundRect(sx + 1.6, cy + 0.8, STONE_W - 3.2, CELL_H - 1.6, 1.6)
+        slotFillLayer.fill({ color: 0x111111, alpha: 0.55 })
+      }
+      continue
+    }
+    const slotBandColor = slotColorFn(stone, node.fixedGreenStoneSlots)
+    for (let row = 0; row < SIXTH_ROWS; row += 1) {
+      const sixth = stone * 6 + row
+      const filled = occupiedSixths.has(sixth)
+      const cy = sy + row * CELL_H
+      slotFillLayer.roundRect(sx + 1.6, cy + 0.8, STONE_W - 3.2, CELL_H - 1.6, 1.6)
+      slotFillLayer.fill({
+        color: slotBandColor,
+        alpha: filled ? brightAlpha : dimAlpha,
+      })
+    }
   }
 }
 
@@ -2545,8 +2617,9 @@ export class PixiBoardAdapter {
     const mutableNode = this.currentScene.nodes[nodeId] as SceneNodeVM & { slotCols: number; slotRows: number; width: number; height: number }
     mutableNode.slotCols = Math.max(1, Math.floor(slotCols))
     mutableNode.slotRows = Math.max(1, Math.floor(slotRows))
-    mutableNode.width = SLOT_START_X + meterWidthForCols(mutableNode.slotCols) + 20
-    mutableNode.height = TOP_BAND_H + slotAreaHeightForRows(mutableNode.slotRows) + NODE_BOTTOM_PADDING
+    const hasWornPills = mutableNode.segments.some((segment) => segment.isWornPill)
+    mutableNode.width = vmNodeWidthForCols(mutableNode.slotCols)
+    mutableNode.height = vmNodeHeightForRows(mutableNode.slotRows, hasWornPills)
     this.recomputeDisplayFlow(this.currentScene)
     this.rebuildAllNodes(this.currentScene)
   }
@@ -3402,16 +3475,14 @@ export class PixiBoardAdapter {
     const slotSegments = slotSegmentsOnly(node.segments)
     const wornPills = wornPillSegmentsOnly(node.segments)
     const isExpanded = this.isNodeExpanded(node.id)
-    const visibleSlotCount = isExpanded
-      ? Math.max(slotCount, node.slotCols * node.slotRows)
-      : collapsedVisibleSlotCount(slotSegments, slotCount)
+    const verticalLayout = computeNodeVerticalLayout(node, isExpanded, slotSegments, slotCount)
+    const visibleSlotCount = verticalLayout.visibleSlotCount
     const layoutCols = this.getNodeLayoutCols(node)
     const totalMeterWidth = meterWidthForCols(layoutCols)
     const totalWidth = SLOT_START_X + totalMeterWidth + 20
-    const pillStripHeight = wornPillStripHeight(node.segments)
-    const slotStartY = TOP_BAND_H + pillStripHeight
-    const slotAreaHeight = isExpanded ? slotAreaHeightForRows(node.slotRows) : slotAreaHeightForSlots(visibleSlotCount)
-    const totalHeight = TOP_BAND_H + slotAreaHeight + NODE_BOTTOM_PADDING + pillStripHeight
+    const pillStripHeight = verticalLayout.pillStripHeight
+    const slotStartY = verticalLayout.slotStartY
+    const totalHeight = verticalLayout.totalHeight
     const totalSixths = totalSixthsForSlots(slotCount)
 
     let moveToRootBtn: Graphics | undefined
@@ -3589,36 +3660,8 @@ export class PixiBoardAdapter {
       contentContainer.addChild(compact)
     }
 
-    const occupiedSixths = occupiedSixthsFromSegments(slotSegments, totalSixths)
-
     const slotFillLayer = new Graphics()
-    const dimAlpha = tier === 'far' ? 0.1 : 0.14
-    const brightAlpha = tier === 'far' ? 0.36 : 0.48
-    const slotColorFn = node.twoBandSlots ? twoBandSlotColor : fixedSlotBandColor
-    for (let stone = 0; stone < visibleSlotCount; stone += 1) {
-      const sx = SLOT_START_X + (stone % layoutCols) * (STONE_W + STONE_GAP)
-      const sy = slotStartY + Math.floor(stone / layoutCols) * (STONE_H + STONE_ROW_GAP)
-      if (stone >= slotCount) {
-        // Dead zone: visual grid cells beyond the node's actual allocated capacity
-        for (let row = 0; row < SIXTH_ROWS; row += 1) {
-          const cy = sy + row * CELL_H
-          slotFillLayer.roundRect(sx + 1.6, cy + 0.8, STONE_W - 3.2, CELL_H - 1.6, 1.6)
-          slotFillLayer.fill({ color: 0x111111, alpha: 0.55 })
-        }
-        continue
-      }
-      const slotBandColor = slotColorFn(stone, node.fixedGreenStoneSlots)
-      for (let row = 0; row < SIXTH_ROWS; row += 1) {
-        const sixth = stone * 6 + row
-        const filled = occupiedSixths.has(sixth)
-        const cy = sy + row * CELL_H
-        slotFillLayer.roundRect(sx + 1.6, cy + 0.8, STONE_W - 3.2, CELL_H - 1.6, 1.6)
-        slotFillLayer.fill({
-          color: slotBandColor,
-          alpha: filled ? brightAlpha : dimAlpha,
-        })
-      }
-    }
+    redrawNodeSlotFillLayer(slotFillLayer, node, visibleSlotCount, layoutCols, slotStartY, totalSixths, slotSegments, tier)
     contentContainer.addChild(slotFillLayer)
 
     const segmentContainer = new Container()
@@ -3732,12 +3775,10 @@ export class PixiBoardAdapter {
 
     node.segments.forEach((segment) => {
       const pillIndex = segment.isWornPill ? wornPills.findIndex((pill) => pill.id === segment.id) : -1
+      const unshiftedPos = segment.isWornPill ? null : segmentPositionInNode(segment, layoutCols)
       const pos = segment.isWornPill
         ? wornPillPositionInNode(Math.max(0, pillIndex), totalWidth)
-        : (() => {
-            const p = segmentPositionInNode(segment, layoutCols)
-            return { x: p.x, y: p.y + pillStripHeight }
-          })()
+        : { x: unshiftedPos!.x, y: unshiftedPos!.y + pillStripHeight }
       const segContainer = new Container()
       segContainer.position.set(pos.x, pos.y)
       const spring = createSpring2D(pos.x, pos.y)
@@ -3764,7 +3805,7 @@ export class PixiBoardAdapter {
           () => this.hideTooltip(),
           node.id,
           (seg, nodeId, x, y, addToSel) => this.onSegmentPointerDown(seg, nodeId, x, y, addToSel),
-          pos,
+          unshiftedPos!,
           filterCategory,
           selectedSegmentIds,
           this.handlers.onSegmentClick,
@@ -3838,6 +3879,7 @@ export class PixiBoardAdapter {
     return {
       root,
       positionSpring,
+      slotFillLayer,
       segmentContainer,
       runVisualsContainer,
       contentContainer,
@@ -3929,8 +3971,21 @@ export class PixiBoardAdapter {
     const layoutCols = this.getNodeLayoutCols(node)
     const slotSegments = slotSegmentsOnly(node.segments)
     const wornPills = wornPillSegmentsOnly(node.segments)
-    const pillStripHeight = wornPillStripHeight(node.segments)
-    const slotStartY = TOP_BAND_H + pillStripHeight
+    const isExpanded = this.isNodeExpanded(node.id)
+    const verticalLayout = computeNodeVerticalLayout(node, isExpanded, slotSegments, node.slotCount)
+    const pillStripHeight = verticalLayout.pillStripHeight
+    const slotStartY = verticalLayout.slotStartY
+    const visibleSlotCount = verticalLayout.visibleSlotCount
+    redrawNodeSlotFillLayer(
+      view.slotFillLayer,
+      node,
+      visibleSlotCount,
+      layoutCols,
+      slotStartY,
+      totalSixths,
+      slotSegments,
+      tier,
+    )
 
     view.runVisualsContainer.removeChildren()
     const runs = groupContiguousSameType(slotSegments)
@@ -4034,12 +4089,10 @@ export class PixiBoardAdapter {
     }
     node.segments.forEach((segment) => {
       const pillIndex = segment.isWornPill ? wornPills.findIndex((pill) => pill.id === segment.id) : -1
+      const unshiftedPos = segment.isWornPill ? null : segmentPositionInNode(segment, layoutCols)
       const pos = segment.isWornPill
         ? wornPillPositionInNode(Math.max(0, pillIndex), view.totalWidth)
-        : (() => {
-            const p = segmentPositionInNode(segment, layoutCols)
-            return { x: p.x, y: p.y + pillStripHeight }
-          })()
+        : { x: unshiftedPos!.x, y: unshiftedPos!.y + pillStripHeight }
       let segView = view.segmentViews.get(segment.id)
       if (!segView) {
         const segContainer = new Container()
@@ -4069,7 +4122,7 @@ export class PixiBoardAdapter {
             () => this.hideTooltip(),
             node.id,
             (seg, nodeId, x, y, addToSel) => this.onSegmentPointerDown(seg, nodeId, x, y, addToSel),
-            pos,
+            unshiftedPos!,
             filterCategory,
             selectedSegmentIds,
             this.handlers.onSegmentClick,
@@ -4114,7 +4167,7 @@ export class PixiBoardAdapter {
             () => this.hideTooltip(),
             node.id,
             (seg, nodeId, x, y, addToSel) => this.onSegmentPointerDown(seg, nodeId, x, y, addToSel),
-            pos,
+            unshiftedPos!,
             filterCategory,
             selectedSegmentIds,
             this.handlers.onSegmentClick,
@@ -5167,19 +5220,14 @@ export class PixiBoardAdapter {
     expanded: boolean,
   ): { width: number; height: number } {
     const slotSegments = slotSegmentsOnly(node.segments)
-    const visibleSlotCount = expanded
-      ? Math.max(node.slotCount, node.slotCols * node.slotRows)
-      : collapsedVisibleSlotCount(slotSegments, node.slotCount)
+    const verticalLayout = computeNodeVerticalLayout(node, expanded, slotSegments, node.slotCount)
+    const visibleSlotCount = verticalLayout.visibleSlotCount
     const totalMeterWidth = expanded
       ? meterWidthForCols(node.slotCols)
       : meterWidthForSlots(visibleSlotCount)
     return {
       width: SLOT_START_X + totalMeterWidth + 20,
-      height:
-        TOP_BAND_H +
-        (expanded ? slotAreaHeightForRows(node.slotRows) : slotAreaHeightForSlots(visibleSlotCount)) +
-        NODE_BOTTOM_PADDING +
-        wornPillStripHeight(node.segments),
+      height: verticalLayout.totalHeight,
     }
   }
 

@@ -19,6 +19,14 @@ import { connect as stdbConnect, getConnection, isConnected, updateMyCursor, upd
 import type { ConnectedUser, RemoteCursor } from '../spacetimedb/client'
 import { syncWorldState, syncLocalState } from '../spacetimedb/sync'
 import type { WorldCanvasContext } from '../spacetimedb/context'
+import {
+  NODE_VM_TOP_BAND_H as TOP_BAND_H,
+  SLOT_START_X,
+  STONE_GAP,
+  STONE_H,
+  STONE_ROW_GAP,
+  STONE_W,
+} from '../shared/node-layout'
 
 let worldState: CanonicalState | null = null
 let currentContext: WorldCanvasContext = { worldSlug: 'default-world', canvasSlug: 'main' }
@@ -399,13 +407,6 @@ const removeSegmentsFromGroupPositions = (
   }
   return next
 }
-
-const STONE_W = 36
-const STONE_H = 54
-const STONE_GAP = 3
-const STONE_ROW_GAP = 3
-const SLOT_START_X = 10
-const TOP_BAND_H = 34
 
 const stoneToX = (stoneIndex: number, stonesPerRow: number): number =>
   (stoneIndex % stonesPerRow) * (STONE_W + STONE_GAP)

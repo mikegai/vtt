@@ -1,5 +1,15 @@
 import type { ItemCategory } from '../domain/item-category'
 import { SIXTHS_PER_STONE } from '../domain/types'
+import {
+  SLOT_START_X,
+  STONE_GAP,
+  STONE_H,
+  STONE_ROW_GAP,
+  STONE_W,
+  NODE_VM_TOP_BAND_H as TOP_BAND_H,
+  nodeHeightForRows,
+  nodeWidthForCols,
+} from '../shared/node-layout'
 import { applyDropIntentToState } from '../vm/drop-intent'
 import { buildBoardVM } from '../vm/vm'
 import type { ActorRowVM } from '../vm/vm-types'
@@ -34,27 +44,6 @@ export type WorkerLocalState = {
   readonly labels: Record<string, { text: string; x: number; y: number }>
   readonly selectedLabelId: string | null
 }
-
-const STONE_W = 36
-const STONE_GAP = 3
-const STONE_H = 54
-const STONE_ROW_GAP = 3
-const SLOT_START_X = 10
-const TOP_BAND_H = 34
-const NODE_BOTTOM_PADDING = 6
-const WORN_PILL_STRIP_H = 18
-
-const meterWidthForCols = (slotCols: number): number =>
-  Math.max(1, slotCols) * (STONE_W + STONE_GAP) - STONE_GAP
-
-const slotAreaHeightForRows = (slotRows: number): number =>
-  Math.max(1, slotRows) * (STONE_H + STONE_ROW_GAP) - STONE_ROW_GAP
-
-const nodeHeightForRows = (slotRows: number): number =>
-  TOP_BAND_H + slotAreaHeightForRows(slotRows) + NODE_BOTTOM_PADDING
-
-const nodeWidthForCols = (slotCols: number): number =>
-  SLOT_START_X + meterWidthForCols(slotCols) + 20
 
 const GROUP_X = 80
 const GROUP_STACK_GAP = 28
@@ -404,7 +393,7 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
       x: 0,
       y: 0,
       width: nodeWidthForCols(slotCols),
-      height: nodeHeightForRows(slotRows) + (hasWornPills ? WORN_PILL_STRIP_H : 0),
+      height: nodeHeightForRows(slotRows, hasWornPills),
       speedFeet: row.speed.explorationFeet,
       speedBand: row.speedBand.band,
       fixedGreenStoneSlots: clampedGreenSlots,
