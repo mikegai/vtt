@@ -62,6 +62,7 @@ import SetDisplayNameReducer from "./set_display_name_reducer";
 import SetLayoutStateReducer from "./set_layout_state_reducer";
 import SetUserRoleReducer from "./set_user_role_reducer";
 import SetWorldStateReducer from "./set_world_state_reducer";
+import UpdateCameraReducer from "./update_camera_reducer";
 import UpdateCursorReducer from "./update_cursor_reducer";
 import UpsertActorReducer from "./upsert_actor_reducer";
 import UpsertCarryGroupReducer from "./upsert_carry_group_reducer";
@@ -109,6 +110,7 @@ import NodePositionsRow from "./node_positions_table";
 import NodeSizeOverridesRow from "./node_size_overrides_table";
 import NodeTitleOverridesRow from "./node_title_overrides_table";
 import SettingsRow from "./settings_table";
+import UserCamerasRow from "./user_cameras_table";
 import UserCursorsRow from "./user_cursors_table";
 import UsersRow from "./users_table";
 
@@ -359,6 +361,17 @@ const tablesSchema = __schema({
       { name: 'settings_key_key', constraint: 'unique', columns: ['key'] },
     ],
   }, SettingsRow),
+  user_cameras: __table({
+    name: 'user_cameras',
+    indexes: [
+      { accessor: 'identityHex', name: 'user_cameras_identity_hex_idx_btree', algorithm: 'btree', columns: [
+        'identityHex',
+      ] },
+    ],
+    constraints: [
+      { name: 'user_cameras_identity_hex_key', constraint: 'unique', columns: ['identityHex'] },
+    ],
+  }, UserCamerasRow),
   user_cursors: __table({
     name: 'user_cursors',
     indexes: [
@@ -413,6 +426,7 @@ const reducersSchema = __reducers(
   __reducerSchema("set_layout_state", SetLayoutStateReducer),
   __reducerSchema("set_user_role", SetUserRoleReducer),
   __reducerSchema("set_world_state", SetWorldStateReducer),
+  __reducerSchema("update_camera", UpdateCameraReducer),
   __reducerSchema("update_cursor", UpdateCursorReducer),
   __reducerSchema("upsert_actor", UpsertActorReducer),
   __reducerSchema("upsert_carry_group", UpsertCarryGroupReducer),

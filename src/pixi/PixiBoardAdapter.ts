@@ -111,6 +111,7 @@ type AdapterHandlers = {
   onMoveNodeToRoot?(nodeId: string, x: number, y: number): void
   onMoveNodesToRoot?(moves: readonly { nodeId: string; x: number; y: number }[]): void
   onZoomChange(zoom: number): void
+  onCameraChange?(panX: number, panY: number, zoom: number): void
   onDragSegmentStart(segmentIds: string[]): void
   onDragSegmentUpdate(targetNodeId: string | null): void
   onDragSegmentEnd(
@@ -1529,6 +1530,7 @@ export class PixiBoardAdapter {
     | null = null
   private lastPointerPosition: { clientX: number; clientY: number } | null = null
   private autoPanRafId: number | null = null
+  private cameraSaveTimer: ReturnType<typeof setTimeout> | null = null
 
   constructor(host: HTMLElement, handlers: AdapterHandlers) {
     this.handlers = handlers
@@ -1714,6 +1716,7 @@ export class PixiBoardAdapter {
         }
       }
       panning = false
+      this.notifyCameraChange()
     }
 
     const onMove = (event: PointerEvent): void => {
@@ -1780,6 +1783,7 @@ export class PixiBoardAdapter {
       this.pan.y = event.offsetY - (event.offsetY - this.pan.y) * ratio
       this.applyCamera()
       this.handlers.onZoomChange(this.zoom)
+      this.notifyCameraChange()
       if (this.currentScene) this.rebuildAllNodes(this.currentScene)
     }
 
@@ -1792,6 +1796,84 @@ export class PixiBoardAdapter {
   private applyCamera(): void {
     this.sceneRoot.position.set(this.pan.x, this.pan.y)
     this.sceneRoot.scale.set(this.zoom, this.zoom)
+  }
+
+  private notifyCameraChange(): void {
+    if (this.cameraSaveTimer) clearTimeout(this.cameraSaveTimer)
+    this.cameraSaveTimer = setTimeout(() => {
+      this.cameraSaveTimer = null
+      this.handlers.onCameraChange?.(this.pan.x, this.pan.y, this.zoom)
+    }, 500)
+  }
+
+  setCamera(panX: number, panY: number, zoom: number): void {
+    this.pan.x = panX
+    this.pan.y = panY
+    this.zoom = Math.min(3.0, Math.max(0.18, zoom))
+    this.applyCamera()
+    this.handlers.onZoomChange(this.zoom)
+    if (this.currentScene) this.rebuildAllNodes(this.currentScene)
+  }
+
+  fitAll(): void {
+    if (!this.currentScene) return
+    const nodes = Object.values(this.currentScene.nodes)
+    const groups = Object.values(this.currentScene.groups ?? {})
+    const labels = Object.values(this.currentScene.labels ?? {})
+    const freeSegs = Object.values(this.currentScene.freeSegments ?? {})
+    if (nodes.length === 0 && groups.length === 0 && labels.length === 0 && freeSegs.length === 0) return
+
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+    for (const n of nodes) {
+      minX = Math.min(minX, n.x)
+      minY = Math.min(minY, n.y)
+      maxX = Math.max(maxX, n.x + n.width)
+      maxY = Math.max(maxY, n.y + n.height)
+    }
+    for (const g of groups) {
+      minX = Math.min(minX, g.x)
+      minY = Math.min(minY, g.y)
+      maxX = Math.max(maxX, g.x + g.width)
+      maxY = Math.max(maxY, g.y + g.height)
+    }
+    for (const l of labels) {
+      minX = Math.min(minX, l.x)
+      minY = Math.min(minY, l.y)
+      maxX = Math.max(maxX, l.x + 100)
+      maxY = Math.max(maxY, l.y + 20)
+    }
+    for (const f of freeSegs) {
+      minX = Math.min(minX, f.x)
+      minY = Math.min(minY, f.y)
+      maxX = Math.max(maxX, f.x + 40)
+      maxY = Math.max(maxY, f.y + 20)
+    }
+
+    if (!isFinite(minX)) return
+    const worldW = maxX - minX
+    const worldH = maxY - minY
+    if (worldW <= 0 || worldH <= 0) return
+
+    const canvasW = this.app.canvas.width
+    const canvasH = this.app.canvas.height
+    const PADDING = 60
+    const zoom = Math.min(
+      3.0,
+      Math.max(0.18, Math.min(
+        (canvasW - PADDING * 2) / worldW,
+        (canvasH - PADDING * 2) / worldH,
+      ))
+    )
+    const panX = (canvasW - worldW * zoom) / 2 - minX * zoom
+    const panY = (canvasH - worldH * zoom) / 2 - minY * zoom
+
+    this.pan.x = panX
+    this.pan.y = panY
+    this.zoom = zoom
+    this.applyCamera()
+    this.handlers.onZoomChange(this.zoom)
+    this.rebuildAllNodes(this.currentScene)
+    this.notifyCameraChange()
   }
 
   /** Returns pan delta (dx, dy) when pointer is in margin zone. Positive dx = pan right, positive dy = pan down. */

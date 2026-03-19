@@ -15,7 +15,7 @@ import { buildSceneVM, type WorkerLocalState } from './scene-vm'
 import type { MainToWorkerMessage, SceneVM, WorkerIntent, WorkerToMainMessage } from './protocol'
 import type { PersistenceBackend, PersistedLocalState } from '../persistence/backend'
 import { IndexedDBBackend } from '../persistence/indexeddb-backend'
-import { connect as stdbConnect, getConnection, isConnected, updateMyCursor, setMyDisplayName } from '../spacetimedb/client'
+import { connect as stdbConnect, getConnection, isConnected, updateMyCursor, updateMyCamera, setMyDisplayName } from '../spacetimedb/client'
 import type { ConnectedUser, RemoteCursor } from '../spacetimedb/client'
 import { syncWorldState, syncLocalState } from '../spacetimedb/sync'
 
@@ -168,6 +168,9 @@ function initSpacetimeDB(token?: string): void {
       post({ type: 'STORE_TOKEN', token: newToken })
     },
     onPresenceUpdate,
+    (panX, panY, zoom) => {
+      post({ type: 'CAMERA_RESTORE', panX, panY, zoom })
+    },
     token,
   )
 }
@@ -2126,7 +2129,7 @@ const applyIntent = (intent: WorkerIntent): void => {
   }
 }
 
-async function initFromPersistence(fallbackWorldState: CanonicalState, stonesPerRow?: number): Promise<void> {
+async function initFromPersistence(fallbackWorldState: CanonicalState, stonesPerRow?: number, token?: string): Promise<void> {
   if (INDEXEDDB_ENABLED) {
     try {
       const [savedWorld, savedLocal] = await Promise.all([
@@ -2156,13 +2159,13 @@ async function initFromPersistence(fallbackWorldState: CanonicalState, stonesPer
     }
   }
 
-  initSpacetimeDB()
+  initSpacetimeDB(token)
 }
 
 self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
   const message = event.data
   if (message.type === 'INIT') {
-    void initFromPersistence(message.worldState, message.stonesPerRow)
+    void initFromPersistence(message.worldState, message.stonesPerRow, message.token)
     return
   }
   if (message.type === 'RESET') {
@@ -2228,6 +2231,10 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
   }
   if (message.type === 'SET_DISPLAY_NAME') {
     setMyDisplayName(message.name)
+    return
+  }
+  if (message.type === 'UPDATE_CAMERA') {
+    updateMyCamera(message.panX, message.panY, message.zoom)
     return
   }
   if (message.type === 'INTENT') {

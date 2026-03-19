@@ -689,3 +689,23 @@ html, body {
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
+
+/* --- Identity Dialog --- */
+#identity-dialog {
+  inset: 0;
+  margin: auto;
+}
+#identity-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+}
+#identity-dialog:focus {
+  outline: none;
+}
+#identity-dialog input:focus {
+  border-color: #2b6cb0;
+  box-shadow: 0 0 0 2px rgba(43, 108, 176, 0.3);
+}
+#identity-dialog button:hover {
+  filter: brightness(1.1);
+}

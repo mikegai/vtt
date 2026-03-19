@@ -260,6 +260,16 @@ const user_cursors = table(
   }
 );
 
+const user_cameras = table(
+  { name: 'user_cameras', public: true },
+  {
+    identityHex: t.string().primaryKey(),
+    panX: t.f64(),
+    panY: t.f64(),
+    zoom: t.f64(),
+  }
+);
+
 // ─── Schema ───────────────────────────────────────────────────────────────────
 
 const spacetimedb = schema({
@@ -286,6 +296,7 @@ const spacetimedb = schema({
   settings,
   users,
   user_cursors,
+  user_cameras,
 });
 export default spacetimedb;
 
@@ -363,6 +374,19 @@ export const update_cursor = spacetimedb.reducer(
       ctx.db.user_cursors.identityHex.update({ identityHex: hex, x, y, viewportScale });
     } else {
       ctx.db.user_cursors.insert({ identityHex: hex, x, y, viewportScale });
+    }
+  }
+);
+
+export const update_camera = spacetimedb.reducer(
+  { panX: t.f64(), panY: t.f64(), zoom: t.f64() },
+  (ctx, { panX, panY, zoom }) => {
+    const hex = ctx.sender.toHexString();
+    const existing = ctx.db.user_cameras.identityHex.find(hex);
+    if (existing) {
+      ctx.db.user_cameras.identityHex.update({ identityHex: hex, panX, panY, zoom });
+    } else {
+      ctx.db.user_cameras.insert({ identityHex: hex, panX, panY, zoom });
     }
   }
 );

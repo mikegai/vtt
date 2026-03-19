@@ -218,13 +218,14 @@ export interface RemoteCursor {
 }
 
 export type MainToWorkerMessage =
-  | { readonly type: 'INIT'; readonly worldState: CanonicalState; readonly stonesPerRow?: number }
+  | { readonly type: 'INIT'; readonly worldState: CanonicalState; readonly stonesPerRow?: number; readonly token?: string }
   | { readonly type: 'RESET'; readonly worldState: CanonicalState; readonly stonesPerRow?: number }
   | { readonly type: 'SET_STONES_PER_ROW'; readonly stonesPerRow: number }
   | { readonly type: 'INTENT'; readonly intent: WorkerIntent }
   | { readonly type: 'SET_SPACETIMEDB_TOKEN'; readonly token: string }
   | { readonly type: 'UPDATE_CURSOR'; readonly x: number; readonly y: number }
   | { readonly type: 'SET_DISPLAY_NAME'; readonly name: string }
+  | { readonly type: 'UPDATE_CAMERA'; readonly panX: number; readonly panY: number; readonly zoom: number }
 
 export type WorkerToMainMessage =
   | { readonly type: 'SCENE_INIT'; readonly scene: SceneVM }
@@ -233,4 +234,5 @@ export type WorkerToMainMessage =
   | { readonly type: 'CONNECTION_STATUS'; readonly status: 'connected' | 'disconnected' | 'error' }
   | { readonly type: 'STORE_TOKEN'; readonly token: string }
   | { readonly type: 'PRESENCE_UPDATE'; readonly users: ConnectedUser[]; readonly cursors: RemoteCursor[]; readonly myIdentityHex: string }
+  | { readonly type: 'CAMERA_RESTORE'; readonly panX: number; readonly panY: number; readonly zoom: number }
 

@@ -29,6 +29,7 @@ export interface RemoteCursor {
 }
 
 export type PresenceCallback = (users: ConnectedUser[], cursors: RemoteCursor[], myIdentityHex: string) => void
+export type CameraRestoreCallback = (panX: number, panY: number, zoom: number) => void
 
 const STDB_HOST = 'wss://maincloud.spacetimedb.com'
 const STDB_DATABASE = 'vtt'
@@ -48,6 +49,7 @@ let onServerState: ServerStateCallback | null = null
 let onConnectionStatus: ConnectionStatusCallback | null = null
 let onToken: TokenCallback | null = null
 let onPresence: PresenceCallback | null = null
+let onCameraRestore: CameraRestoreCallback | null = null
 let initialApplied = false
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 let reconnectAttempt = 0
@@ -76,6 +78,7 @@ function handleSubscriptionApplied(): void {
   initialApplied = true
   onServerState(worldState, layoutState)
   rebuildPresence()
+  restoreCamera()
 }
 
 function rebuildPresence(): void {
@@ -95,6 +98,14 @@ function rebuildPresence(): void {
     cursors.push({ identityHex: row.identityHex, x: row.x, y: row.y })
   }
   onPresence(users, cursors, myIdentityHex)
+}
+
+function restoreCamera(): void {
+  if (!conn || !onCameraRestore) return
+  const row = conn.db.user_cameras.identityHex.find(myIdentityHex)
+  if (row) {
+    onCameraRestore(row.panX, row.panY, row.zoom)
+  }
 }
 
 function subscribeToAllTables(): void {
@@ -125,6 +136,7 @@ function subscribeToAllTables(): void {
       'SELECT * FROM settings',
       'SELECT * FROM users',
       'SELECT * FROM user_cursors',
+      'SELECT * FROM user_cameras',
     ])
 }
 
@@ -236,12 +248,14 @@ export function connect(
   connectionStatusCb: ConnectionStatusCallback,
   tokenCb: TokenCallback,
   presenceCb: PresenceCallback,
+  cameraRestoreCb: CameraRestoreCallback,
   token?: string,
 ): void {
   onServerState = serverStateCb
   onConnectionStatus = connectionStatusCb
   onToken = tokenCb
   onPresence = presenceCb
+  onCameraRestore = cameraRestoreCb
   shouldReconnect = true
   reconnectAttempt = 0
 
@@ -253,6 +267,11 @@ export function connect(
 export function updateMyCursor(x: number, y: number): void {
   if (!conn || !initialApplied) return
   conn.reducers.updateCursor({ x, y, viewportScale: undefined })
+}
+
+export function updateMyCamera(panX: number, panY: number, zoom: number): void {
+  if (!conn || !initialApplied) return
+  conn.reducers.updateCamera({ panX, panY, zoom })
 }
 
 export function setMyDisplayName(name: string): void {

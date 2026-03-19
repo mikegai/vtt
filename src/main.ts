@@ -71,6 +71,121 @@ function updateConnectionBadge(status: 'connected' | 'disconnected' | 'error'): 
   }
 }
 
+// ─── Identity Dialog ─────────────────────────────────────────────────────────
+
+const identityDialog = document.createElement('dialog')
+identityDialog.id = 'identity-dialog'
+Object.assign(identityDialog.style, {
+  border: '1px solid #334455',
+  borderRadius: '10px',
+  background: '#151e2b',
+  color: '#d0dae8',
+  padding: '0',
+  maxWidth: '340px',
+  width: '100%',
+  fontFamily: 'system-ui, -apple-system, sans-serif',
+  boxShadow: '0 20px 60px rgba(0,0,0,0.6)',
+} as Partial<CSSStyleDeclaration>)
+
+function getInitials(name: string): string {
+  const parts = name.trim().split(/\s+/)
+  if (parts.length >= 2) return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
+  return name.slice(0, 2).toUpperCase()
+}
+
+function initialsColor(name: string): string {
+  let hash = 0
+  for (let i = 0; i < name.length; i++) hash = ((hash << 5) - hash + name.charCodeAt(i)) | 0
+  const hue = Math.abs(hash) % 360
+  return `hsl(${hue}, 55%, 45%)`
+}
+
+function renderIdentityDialog(currentName: string, isFirstTime: boolean): void {
+  const initials = getInitials(currentName || 'U')
+  const color = initialsColor(currentName || 'User')
+  identityDialog.innerHTML = `
+    <form method="dialog" style="padding: 24px;">
+      <div style="text-align:center;margin-bottom:20px;">
+        <div id="id-avatar-preview" style="
+          width:64px;height:64px;border-radius:50%;
+          background:${color};
+          display:inline-flex;align-items:center;justify-content:center;
+          font-size:24px;font-weight:700;color:#fff;
+          letter-spacing:0.04em;margin-bottom:8px;
+        ">${initials}</div>
+        <div style="font-size:16px;font-weight:600;">${isFirstTime ? 'Welcome! Who are you?' : 'Edit Profile'}</div>
+        ${isFirstTime ? '<div style="font-size:12px;color:#6b7d90;margin-top:4px;">Pick a display name so others can see you.</div>' : ''}
+      </div>
+      <label style="display:block;margin-bottom:16px;">
+        <span style="font-size:11px;text-transform:uppercase;letter-spacing:0.05em;color:#6b7d90;display:block;margin-bottom:6px;">Display Name</span>
+        <input id="id-name-input" type="text" value="${currentName.replace(/"/g, '&quot;')}" 
+          placeholder="Your name" autocomplete="off"
+          style="
+            width:100%;box-sizing:border-box;padding:8px 12px;
+            background:#0c1118;border:1px solid #334455;border-radius:6px;
+            color:#d0dae8;font-size:14px;outline:none;
+          " />
+      </label>
+      <div style="display:flex;gap:8px;justify-content:flex-end;">
+        ${isFirstTime ? '' : '<button type="button" id="id-cancel-btn" style="padding:8px 16px;border-radius:6px;border:1px solid #334455;background:transparent;color:#8899aa;cursor:pointer;font-size:13px;">Cancel</button>'}
+        <button type="submit" id="id-save-btn" style="padding:8px 16px;border-radius:6px;border:none;background:#2b6cb0;color:#fff;cursor:pointer;font-size:13px;font-weight:600;">Save</button>
+      </div>
+    </form>
+  `
+
+  const nameInput = identityDialog.querySelector<HTMLInputElement>('#id-name-input')!
+  const avatarPreview = identityDialog.querySelector<HTMLElement>('#id-avatar-preview')!
+  const saveBtn = identityDialog.querySelector<HTMLButtonElement>('#id-save-btn')!
+
+  const updatePreview = () => {
+    const val = nameInput.value.trim()
+    avatarPreview.textContent = getInitials(val || 'U')
+    avatarPreview.style.background = initialsColor(val || 'User')
+    saveBtn.disabled = val.length === 0
+    saveBtn.style.opacity = val.length === 0 ? '0.4' : '1'
+  }
+  nameInput.addEventListener('input', updatePreview)
+  updatePreview()
+
+  const cancelBtn = identityDialog.querySelector<HTMLButtonElement>('#id-cancel-btn')
+  cancelBtn?.addEventListener('click', () => identityDialog.close())
+
+  const form = identityDialog.querySelector('form')!
+  form.addEventListener('submit', (e) => {
+    e.preventDefault()
+    const newName = nameInput.value.trim()
+    if (!newName) return
+    postToWorker({ type: 'SET_DISPLAY_NAME', name: newName })
+    identityDialog.close()
+  })
+
+  if (isFirstTime) {
+    identityDialog.addEventListener('cancel', (e) => e.preventDefault(), { once: true })
+  }
+}
+
+document.body.appendChild(identityDialog)
+
+let identityDialogShown = false
+
+function maybeShowIdentityDialog(users: ConnectedUser[], myHex: string): void {
+  if (identityDialogShown) return
+  const me = users.find(u => u.identityHex === myHex)
+  if (!me) return
+  const isDefaultName = /^User-[0-9a-f]{6}$/.test(me.displayName)
+  if (isDefaultName) {
+    identityDialogShown = true
+    showIdentityDialog('', true)
+  }
+}
+
+function showIdentityDialog(currentName: string, isFirstTime: boolean): void {
+  renderIdentityDialog(currentName, isFirstTime)
+  identityDialog.showModal()
+  const input = identityDialog.querySelector<HTMLInputElement>('#id-name-input')
+  input?.select()
+}
+
 // ─── Users Panel ──────────────────────────────────────────────────────────────
 
 const usersPanel = document.createElement('div')
@@ -126,26 +241,36 @@ function updateUsersPanel(users: ConnectedUser[]): void {
 
   for (const user of online) {
     const row = document.createElement('div')
+    const isMe = user.identityHex === myIdentityHex
     Object.assign(row.style, {
       display: 'flex',
       alignItems: 'center',
       gap: '6px',
-      padding: '2px 0',
+      padding: '3px 0',
+      cursor: isMe ? 'pointer' : 'default',
     } as Partial<CSSStyleDeclaration>)
 
-    const dot = document.createElement('span')
-    const color = user.identityHex === myIdentityHex ? '#8ff7bf' : cursorColorForUser(user.identityHex)
-    Object.assign(dot.style, {
-      width: '6px',
-      height: '6px',
+    const avatar = document.createElement('span')
+    const avatarColor = initialsColor(user.displayName)
+    Object.assign(avatar.style, {
+      width: '20px',
+      height: '20px',
       borderRadius: '50%',
-      background: color,
+      background: avatarColor,
+      display: 'inline-flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      fontSize: '9px',
+      fontWeight: '700',
+      color: '#fff',
       flexShrink: '0',
+      letterSpacing: '0.02em',
     } as Partial<CSSStyleDeclaration>)
-    row.appendChild(dot)
+    avatar.textContent = getInitials(user.displayName)
+    row.appendChild(avatar)
 
     const name = document.createElement('span')
-    name.textContent = user.displayName + (user.identityHex === myIdentityHex ? ' (you)' : '')
+    name.textContent = user.displayName + (isMe ? ' (you)' : '')
     name.style.overflow = 'hidden'
     name.style.textOverflow = 'ellipsis'
     name.style.whiteSpace = 'nowrap'
@@ -164,6 +289,12 @@ function updateUsersPanel(users: ConnectedUser[]): void {
       flexShrink: '0',
     } as Partial<CSSStyleDeclaration>)
     row.appendChild(roleBadge)
+
+    if (isMe) {
+      row.addEventListener('click', () => {
+        showIdentityDialog(user.displayName, false)
+      })
+    }
 
     usersPanel.appendChild(row)
   }
@@ -945,6 +1076,9 @@ const pixiAdapter = new PixiBoardAdapter(canvasHost, {
   onZoomChange(_zoom) {
     renderRemoteCursors(currentCursors, currentUsers)
   },
+  onCameraChange(panX, panY, zoom) {
+    postToWorker({ type: 'UPDATE_CAMERA', panX, panY, zoom })
+  },
   onDragSegmentStart(segmentIds) {
     postToWorker({ type: 'INTENT', intent: { type: 'DRAG_SEGMENT_START', segmentIds } })
   },
@@ -1065,6 +1199,8 @@ const pixiAdapter = new PixiBoardAdapter(canvasHost, {
   },
 })
 
+let pendingCameraRestore: { panX: number; panY: number; zoom: number } | null = null
+
 vmWorker.onmessage = (event: MessageEvent<WorkerToMainMessage>) => {
   const msg = event.data
   if (msg.type === 'SCENE_INIT') {
@@ -1073,6 +1209,12 @@ vmWorker.onmessage = (event: MessageEvent<WorkerToMainMessage>) => {
     currentScene = msg.scene
     selectedLabelId = msg.scene.selectedLabelId ?? null
     pixiAdapter.applyInit(msg.scene)
+    if (pendingCameraRestore) {
+      pixiAdapter.setCamera(pendingCameraRestore.panX, pendingCameraRestore.panY, pendingCameraRestore.zoom)
+      pendingCameraRestore = null
+    } else {
+      pixiAdapter.fitAll()
+    }
     syncLabelEditor()
     return
   }
@@ -1103,6 +1245,15 @@ vmWorker.onmessage = (event: MessageEvent<WorkerToMainMessage>) => {
     myIdentityHex = msg.myIdentityHex
     updateUsersPanel(msg.users)
     renderRemoteCursors(msg.cursors, msg.users)
+    maybeShowIdentityDialog(msg.users, msg.myIdentityHex)
+    return
+  }
+  if (msg.type === 'CAMERA_RESTORE') {
+    if (currentScene) {
+      pixiAdapter.setCamera(msg.panX, msg.panY, msg.zoom)
+    } else {
+      pendingCameraRestore = { panX: msg.panX, panY: msg.panY, zoom: msg.zoom }
+    }
     return
   }
 }
@@ -1124,18 +1275,16 @@ let focusLabelEditorOnSelect = false
 
 const initialStonesPerRow = Number(stonesPerRowEl.value ?? 25)
 pixiAdapter.setStonesPerRow(initialStonesPerRow)
+let savedSpacetimeToken: string | undefined
+try {
+  savedSpacetimeToken = localStorage.getItem('spacetimedb_vtt_token') ?? undefined
+} catch { /* noop */ }
 postToWorker({
   type: 'INIT',
   worldState: sampleState,
   stonesPerRow: initialStonesPerRow,
+  token: savedSpacetimeToken,
 })
-
-try {
-  const savedToken = localStorage.getItem('spacetimedb_vtt_token')
-  if (savedToken) {
-    postToWorker({ type: 'SET_SPACETIMEDB_TOKEN', token: savedToken })
-  }
-} catch { /* noop */ }
 
 canvasHost.addEventListener('pointermove', (e) => {
   broadcastCursorPosition(e.clientX, e.clientY)

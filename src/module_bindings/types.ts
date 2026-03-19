@@ -179,6 +179,14 @@ export const Settings = __t.object("Settings", {
 });
 export type Settings = __Infer<typeof Settings>;
 
+export const UserCameras = __t.object("UserCameras", {
+  identityHex: __t.string(),
+  panX: __t.f64(),
+  panY: __t.f64(),
+  zoom: __t.f64(),
+});
+export type UserCameras = __Infer<typeof UserCameras>;
+
 export const UserCursors = __t.object("UserCursors", {
   identityHex: __t.string(),
   x: __t.f64(),
