@@ -1,5 +1,9 @@
 /// <reference lib="webworker" />
 
+self.addEventListener('unhandledrejection', (event: PromiseRejectionEvent) => {
+  console.error('[worker] unhandled promise rejection:', event.reason)
+})
+
 import type { Actor, CanonicalState, InventoryEntry, ItemDefinition, ItemKind } from '../domain/types'
 import { getWieldOptions, isTwoHandedOnly } from '../domain/weapon-metadata'
 import { parseNodeId, segmentIdToEntryId } from '../vm/drop-intent'
@@ -46,9 +50,15 @@ let previousScene: SceneVM | null = null
 let batchDepth = 0
 let pendingRecomputeAfterBatch = false
 
+// ─── IndexedDB persistence is DISABLED ─────────────────────────────────────
+// SpacetimeDB is the sole source of truth. Loading from IndexedDB on startup
+// caused a flash of stale state before the server data arrived, and saving to
+// it created a divergent local copy that masked sync bugs. The implementation
+// is kept intact so it can be re-enabled as an offline fallback later.
 const persistence: PersistenceBackend = new IndexedDBBackend()
 let saveTimer: ReturnType<typeof setTimeout> | null = null
 const SAVE_DEBOUNCE_MS = 500
+const INDEXEDDB_ENABLED = false
 
 function stripEphemeralLocalState(state: WorkerLocalState): PersistedLocalState {
   const {
@@ -66,6 +76,8 @@ function stripEphemeralLocalState(state: WorkerLocalState): PersistedLocalState 
 }
 
 function scheduleSave(): void {
+  if (!INDEXEDDB_ENABLED) return
+  if (isConnected()) return
   if (saveTimer != null) clearTimeout(saveTimer)
   saveTimer = setTimeout(() => {
     saveTimer = null
@@ -82,14 +94,60 @@ const post = (message: WorkerToMainMessage): void => {
   self.postMessage(message)
 }
 
-function onServerState(
+let dragActive = false
+let deferredServerState: { world: CanonicalState; layout: Partial<PersistedLocalState> } | null = null
+
+function applyServerState(
   newWorldState: CanonicalState,
   newLayoutState: Partial<PersistedLocalState>,
 ): void {
   worldState = newWorldState
-  localState = { ...localState, ...newLayoutState }
+  localState = {
+    hoveredSegmentId: localState.hoveredSegmentId,
+    dropIntent: localState.dropIntent,
+    filterCategory: localState.filterCategory,
+    selectedSegmentIds: localState.selectedSegmentIds,
+    selectedNodeIds: localState.selectedNodeIds,
+    selectedGroupIds: localState.selectedGroupIds,
+    selectedLabelIds: localState.selectedLabelIds,
+    selectedLabelId: localState.selectedLabelId,
+    nodePositions: newLayoutState.nodePositions ?? {},
+    groupPositions: newLayoutState.groupPositions ?? {},
+    groupSizeOverrides: newLayoutState.groupSizeOverrides ?? {},
+    nodeSizeOverrides: newLayoutState.nodeSizeOverrides ?? {},
+    groupListViewEnabled: newLayoutState.groupListViewEnabled ?? {},
+    nodeGroupOverrides: newLayoutState.nodeGroupOverrides ?? {},
+    groupNodePositions: newLayoutState.groupNodePositions ?? {},
+    freeSegmentPositions: newLayoutState.freeSegmentPositions ?? {},
+    groupFreeSegmentPositions: newLayoutState.groupFreeSegmentPositions ?? {},
+    groupNodeOrders: newLayoutState.groupNodeOrders ?? {},
+    customGroups: newLayoutState.customGroups ?? {},
+    groupTitleOverrides: newLayoutState.groupTitleOverrides ?? {},
+    nodeTitleOverrides: newLayoutState.nodeTitleOverrides ?? {},
+    nodeContainment: newLayoutState.nodeContainment ?? {},
+    labels: newLayoutState.labels ?? {},
+    stonesPerRow: newLayoutState.stonesPerRow ?? localState.stonesPerRow,
+  }
   recompute(true)
   scheduleSave()
+}
+
+function onServerState(
+  newWorldState: CanonicalState,
+  newLayoutState: Partial<PersistedLocalState>,
+): void {
+  if (dragActive) {
+    deferredServerState = { world: newWorldState, layout: newLayoutState }
+    return
+  }
+  applyServerState(newWorldState, newLayoutState)
+}
+
+function flushDeferredServerState(): void {
+  if (!deferredServerState) return
+  const { world, layout } = deferredServerState
+  deferredServerState = null
+  applyServerState(world, layout)
 }
 
 function onPresenceUpdate(
@@ -2044,31 +2102,59 @@ const applyIntent = (intent: WorkerIntent): void => {
   if (intent.type === 'SET_WORLD_STATE') {
     worldState = migrateWieldToActor(intent.worldState)
     recompute()
+    return
+  }
+
+  if (intent.type === 'DRAG_START') {
+    dragActive = true
+    return
+  }
+
+  if (intent.type === 'DRAG_END') {
+    dragActive = false
+    if (dragSyncTimer) {
+      clearTimeout(dragSyncTimer)
+      dragSyncTimer = null
+    }
+    if (pendingSyncSnapshot) {
+      const { oldWorld, oldLocal } = pendingSyncSnapshot
+      pendingSyncSnapshot = null
+      doSync(oldWorld, oldLocal)
+    }
+    flushDeferredServerState()
+    return
   }
 }
 
 async function initFromPersistence(fallbackWorldState: CanonicalState, stonesPerRow?: number): Promise<void> {
-  try {
-    const [savedWorld, savedLocal] = await Promise.all([
-      persistence.loadWorldState(),
-      persistence.loadLocalState(),
-    ])
-    if (savedWorld) {
-      worldState = migrateWieldToActor(savedWorld)
-    } else {
+  if (INDEXEDDB_ENABLED) {
+    try {
+      const [savedWorld, savedLocal] = await Promise.all([
+        persistence.loadWorldState(),
+        persistence.loadLocalState(),
+      ])
+      if (savedWorld) {
+        worldState = migrateWieldToActor(savedWorld)
+      } else {
+        worldState = migrateWieldToActor(fallbackWorldState)
+      }
+      if (savedLocal) {
+        localState = { ...localState, ...savedLocal }
+      }
+    } catch (err) {
+      console.warn('[persistence] load failed, using fallback state', err)
       worldState = migrateWieldToActor(fallbackWorldState)
     }
-    if (savedLocal) {
-      localState = { ...localState, ...savedLocal }
+    if (stonesPerRow != null) {
+      localState = { ...localState, stonesPerRow }
     }
-  } catch (err) {
-    console.warn('[persistence] load failed, using fallback state', err)
+    recompute(true)
+  } else {
     worldState = migrateWieldToActor(fallbackWorldState)
+    if (stonesPerRow != null) {
+      localState = { ...localState, stonesPerRow }
+    }
   }
-  if (stonesPerRow != null) {
-    localState = { ...localState, stonesPerRow }
-  }
-  recompute(true)
 
   initSpacetimeDB()
 }
@@ -2152,15 +2238,43 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
   }
 }
 
+const DRAG_SYNC_INTERVAL_MS = 80
+let dragSyncTimer: ReturnType<typeof setTimeout> | null = null
+let pendingSyncSnapshot: { oldWorld: CanonicalState | null; oldLocal: WorkerLocalState } | null = null
+
 function syncToSpacetimeDB(
   oldWorld: CanonicalState | null,
   oldLocal: WorkerLocalState,
 ): void {
   if (!isConnected()) return
+  if (dragActive) {
+    if (!pendingSyncSnapshot) {
+      pendingSyncSnapshot = { oldWorld, oldLocal }
+    }
+    if (!dragSyncTimer) {
+      dragSyncTimer = setTimeout(flushDragSync, DRAG_SYNC_INTERVAL_MS)
+    }
+    return
+  }
+  doSync(oldWorld, oldLocal)
+}
+
+function doSync(
+  oldWorld: CanonicalState | null,
+  oldLocal: WorkerLocalState,
+): void {
   const conn = getConnection()
   if (!conn || !worldState) return
   syncWorldState(conn, oldWorld, worldState)
   syncLocalState(conn, oldLocal, localState)
+}
+
+function flushDragSync(): void {
+  dragSyncTimer = null
+  if (!pendingSyncSnapshot) return
+  const { oldWorld, oldLocal } = pendingSyncSnapshot
+  pendingSyncSnapshot = null
+  doSync(oldWorld, oldLocal)
 }
 
 

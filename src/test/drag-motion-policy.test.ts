@@ -8,6 +8,7 @@ describe('decideNodeMotion', () => {
         isDraggedNode: true,
         isInListViewGroup: true,
         positionChanged: true,
+        isGroupTranslation: false,
       }),
     ).toBe('snap')
   })
@@ -18,6 +19,7 @@ describe('decideNodeMotion', () => {
         isDraggedNode: false,
         isInListViewGroup: true,
         positionChanged: true,
+        isGroupTranslation: false,
       }),
     ).toBe('animate')
   })
@@ -28,8 +30,31 @@ describe('decideNodeMotion', () => {
         isDraggedNode: false,
         isInListViewGroup: false,
         positionChanged: false,
+        isGroupTranslation: false,
       }),
     ).toBe('none')
+  })
+
+  it('snaps nodes when their group translated', () => {
+    expect(
+      decideNodeMotion({
+        isDraggedNode: false,
+        isInListViewGroup: false,
+        positionChanged: true,
+        isGroupTranslation: true,
+      }),
+    ).toBe('snap')
+  })
+
+  it('snaps list-view nodes when their group translated', () => {
+    expect(
+      decideNodeMotion({
+        isDraggedNode: false,
+        isInListViewGroup: true,
+        positionChanged: true,
+        isGroupTranslation: true,
+      }),
+    ).toBe('snap')
   })
 })
 

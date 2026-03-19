@@ -147,6 +147,8 @@ type AdapterHandlers = {
     cancelled: boolean,
     freeSegmentPositions?: Readonly<Record<string, { x: number; y: number }>>,
   ): void
+  onDragStart?(): void
+  onDragEnd?(): void
 }
 
 type SegmentView = {
@@ -1477,13 +1479,28 @@ export class PixiBoardAdapter {
   private readonly tooltipBg: Graphics
   private readonly tooltipText: BitmapText
   private currentScene: SceneVM | null = null
-  private activeDrag: ActiveDrag = { type: 'idle' }
+  private _activeDrag: ActiveDrag = { type: 'idle' }
+  private get activeDrag(): ActiveDrag {
+    return this._activeDrag
+  }
+  private set activeDrag(next: ActiveDrag) {
+    const prev = this._activeDrag
+    this._activeDrag = next
+    const prevReal = prev.type !== 'idle' && prev.type !== 'pendingSegment'
+    const nextReal = next.type !== 'idle' && next.type !== 'pendingSegment'
+    if (!prevReal && nextReal) {
+      this.handlers.onDragStart?.()
+    } else if (prevReal && !nextReal) {
+      this.handlers.onDragEnd?.()
+    }
+  }
   private groupDropIndicator: Graphics
   private nestConnectorGraphics: Graphics
   private connectorDragLine: Graphics
   private lastDragEndTime = 0
   private segmentDragHoveredGroupId: string | null = null
   private pendingRebuild = false
+  private movedGroupIds: ReadonlySet<string> = new Set()
   private marqueeGraphics: Graphics | null = null
   /** During marquee drag: typed IDs that would be selected (live preview). */
   private marqueePreviewSelection: {
@@ -3650,10 +3667,12 @@ export class PixiBoardAdapter {
     const currentPos = { x: view.root.position.x, y: view.root.position.y }
     const positionChanged = currentPos.x !== displayPos.x || currentPos.y !== displayPos.y
     const isInListViewGroup = !!(node.groupId && this.currentScene?.groups?.[node.groupId]?.listViewEnabled)
+    const isGroupTranslation = !!(node.groupId && this.movedGroupIds.has(node.groupId))
     const motion = decideNodeMotion({
       isDraggedNode: skipNodeAnimation,
       isInListViewGroup,
       positionChanged,
+      isGroupTranslation,
     })
     if (motion === 'snap') {
       view.positionSpring.x = displayPos.x
@@ -4584,10 +4603,12 @@ export class PixiBoardAdapter {
         : false
       const skipNodeAnimation = this.shouldSuppressNodeAnimation(node.id, consumeSkipNodeAnimation)
       const isInListViewGroup = !!(node.groupId && scene.groups?.[node.groupId]?.listViewEnabled)
+      const isGroupTranslation = !!(node.groupId && this.movedGroupIds.has(node.groupId))
       const motion = decideNodeMotion({
         isDraggedNode: skipNodeAnimation,
         isInListViewGroup,
         positionChanged,
+        isGroupTranslation,
       })
       if (motion === 'snap' || motion === 'none') {
         view.positionSpring.x = displayPos.x
@@ -5107,6 +5128,14 @@ export class PixiBoardAdapter {
   }
 
   applyPatches(patches: readonly ScenePatch[], scene: SceneVM): void {
+    const prevGroups = this.currentScene?.groups ?? {}
+    const moved = new Set<string>()
+    for (const [gid, g] of Object.entries(scene.groups ?? {})) {
+      const prev = prevGroups[gid]
+      if (prev && (prev.x !== g.x || prev.y !== g.y)) moved.add(gid)
+    }
+    this.movedGroupIds = moved
+
     this.currentScene = scene
     this.recomputeDisplayFlow(scene)
     let needsFullRebuild = false

@@ -302,7 +302,14 @@ app.innerHTML = `
       </section>
     </div>
   </div>
-  <div id="canvas-host"></div>
+  <div id="canvas-host">
+    <div id="loading-overlay" style="position:absolute;inset:0;z-index:100;display:flex;align-items:center;justify-content:center;background:#10161f">
+      <div style="text-align:center;color:#8899aa;font-family:monospace">
+        <div style="font-size:28px;margin-bottom:12px;animation:spin 1s linear infinite;display:inline-block">&#9881;</div>
+        <div style="font-size:13px;letter-spacing:0.05em">Connecting&hellip;</div>
+      </div>
+    </div>
+  </div>
 
   <button id="drawer-toggle" class="drawer-toggle" aria-label="Toggle tools panel">
     <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><rect y="3" width="20" height="2" rx="1" fill="currentColor"/><rect y="9" width="20" height="2" rx="1" fill="currentColor"/><rect y="15" width="20" height="2" rx="1" fill="currentColor"/></svg>
@@ -1050,11 +1057,18 @@ const pixiAdapter = new PixiBoardAdapter(canvasHost, {
     consumedParsedIds.add(item.id)
     renderParsed(parseInputEl.value)
   },
+  onDragStart() {
+    postToWorker({ type: 'INTENT', intent: { type: 'DRAG_START' } })
+  },
+  onDragEnd() {
+    postToWorker({ type: 'INTENT', intent: { type: 'DRAG_END' } })
+  },
 })
 
 vmWorker.onmessage = (event: MessageEvent<WorkerToMainMessage>) => {
   const msg = event.data
   if (msg.type === 'SCENE_INIT') {
+    document.getElementById('loading-overlay')?.remove()
     closeInlineTitleEditor()
     currentScene = msg.scene
     selectedLabelId = msg.scene.selectedLabelId ?? null

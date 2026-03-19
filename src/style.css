@@ -685,3 +685,7 @@ html, body {
   color: var(--text-muted);
   pointer-events: none;
 }
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}

@@ -388,7 +388,6 @@ export const upsert_actor = spacetimedb.reducer(
     rightWieldingEntryId: t.string().optional(),
   },
   (ctx, args) => {
-    requireGm(ctx);
     const existing = ctx.db.actors.id.find(args.id);
     if (existing) {
       ctx.db.actors.id.update(args);
@@ -401,7 +400,6 @@ export const upsert_actor = spacetimedb.reducer(
 export const delete_actor = spacetimedb.reducer(
   { id: t.string() },
   (ctx, { id }) => {
-    requireGm(ctx);
     for (const entry of ctx.db.inventory_entries.iter()) {
       if (entry.actorId === id) ctx.db.inventory_entries.id.delete(entry.id);
     }
@@ -446,7 +444,6 @@ export const upsert_item_definition = spacetimedb.reducer(
     isFungibleVisual: t.bool().optional(),
   },
   (ctx, args) => {
-    requireGm(ctx);
     const existing = ctx.db.item_definitions.id.find(args.id);
     if (existing) {
       ctx.db.item_definitions.id.update(args);
@@ -459,7 +456,6 @@ export const upsert_item_definition = spacetimedb.reducer(
 export const delete_item_definition = spacetimedb.reducer(
   { id: t.string() },
   (ctx, { id }) => {
-    requireGm(ctx);
     ctx.db.item_definitions.id.delete(id);
   }
 );
@@ -481,7 +477,6 @@ export const upsert_inventory_entry = spacetimedb.reducer(
     carryGroupId: t.string().optional(),
   },
   (ctx, args) => {
-    requireGm(ctx);
     const existing = ctx.db.inventory_entries.id.find(args.id);
     if (existing) {
       ctx.db.inventory_entries.id.update(args);
@@ -494,7 +489,6 @@ export const upsert_inventory_entry = spacetimedb.reducer(
 export const delete_inventory_entry = spacetimedb.reducer(
   { id: t.string() },
   (ctx, { id }) => {
-    requireGm(ctx);
     const entry = ctx.db.inventory_entries.id.find(id);
     if (!entry) return;
     // Clear wield references on the owning actor
@@ -525,7 +519,6 @@ export const upsert_carry_group = spacetimedb.reducer(
     dropped: t.bool(),
   },
   (ctx, args) => {
-    requireGm(ctx);
     const existing = ctx.db.carry_groups.id.find(args.id);
     if (existing) {
       ctx.db.carry_groups.id.update(args);
@@ -538,7 +531,6 @@ export const upsert_carry_group = spacetimedb.reducer(
 export const delete_carry_group = spacetimedb.reducer(
   { id: t.string() },
   (ctx, { id }) => {
-    requireGm(ctx);
     ctx.db.carry_groups.id.delete(id);
   }
 );
@@ -552,7 +544,6 @@ export const upsert_movement_group = spacetimedb.reducer(
     active: t.bool(),
   },
   (ctx, args) => {
-    requireGm(ctx);
     const existing = ctx.db.movement_groups.id.find(args.id);
     if (existing) {
       ctx.db.movement_groups.id.update(args);
@@ -565,7 +556,6 @@ export const upsert_movement_group = spacetimedb.reducer(
 export const delete_movement_group = spacetimedb.reducer(
   { id: t.string() },
   (ctx, { id }) => {
-    requireGm(ctx);
     ctx.db.movement_groups.id.delete(id);
   }
 );
@@ -575,7 +565,6 @@ export const delete_movement_group = spacetimedb.reducer(
 export const upsert_node_position = spacetimedb.reducer(
   { nodeId: t.string(), x: t.f64(), y: t.f64() },
   (ctx, args) => {
-    requireGm(ctx);
     const existing = ctx.db.node_positions.nodeId.find(args.nodeId);
     if (existing) {
       ctx.db.node_positions.nodeId.update(args);
@@ -588,7 +577,6 @@ export const upsert_node_position = spacetimedb.reducer(
 export const delete_node_position = spacetimedb.reducer(
   { nodeId: t.string() },
   (ctx, { nodeId }) => {
-    requireGm(ctx);
     ctx.db.node_positions.nodeId.delete(nodeId);
   }
 );
@@ -598,7 +586,6 @@ export const delete_node_position = spacetimedb.reducer(
 export const upsert_group_position = spacetimedb.reducer(
   { groupId: t.string(), x: t.f64(), y: t.f64() },
   (ctx, args) => {
-    requireGm(ctx);
     const existing = ctx.db.group_positions.groupId.find(args.groupId);
     if (existing) {
       ctx.db.group_positions.groupId.update(args);
@@ -611,7 +598,6 @@ export const upsert_group_position = spacetimedb.reducer(
 export const delete_group_position = spacetimedb.reducer(
   { groupId: t.string() },
   (ctx, { groupId }) => {
-    requireGm(ctx);
     ctx.db.group_positions.groupId.delete(groupId);
   }
 );
@@ -621,7 +607,6 @@ export const delete_group_position = spacetimedb.reducer(
 export const upsert_group_size_override = spacetimedb.reducer(
   { groupId: t.string(), width: t.f64(), height: t.f64() },
   (ctx, args) => {
-    requireGm(ctx);
     const existing = ctx.db.group_size_overrides.groupId.find(args.groupId);
     if (existing) {
       ctx.db.group_size_overrides.groupId.update(args);
@@ -634,7 +619,6 @@ export const upsert_group_size_override = spacetimedb.reducer(
 export const delete_group_size_override = spacetimedb.reducer(
   { groupId: t.string() },
   (ctx, { groupId }) => {
-    requireGm(ctx);
     ctx.db.group_size_overrides.groupId.delete(groupId);
   }
 );
@@ -644,7 +628,6 @@ export const delete_group_size_override = spacetimedb.reducer(
 export const upsert_node_size_override = spacetimedb.reducer(
   { nodeId: t.string(), slotCols: t.u32(), slotRows: t.u32() },
   (ctx, args) => {
-    requireGm(ctx);
     const existing = ctx.db.node_size_overrides.nodeId.find(args.nodeId);
     if (existing) {
       ctx.db.node_size_overrides.nodeId.update(args);
@@ -657,7 +640,6 @@ export const upsert_node_size_override = spacetimedb.reducer(
 export const delete_node_size_override = spacetimedb.reducer(
   { nodeId: t.string() },
   (ctx, { nodeId }) => {
-    requireGm(ctx);
     ctx.db.node_size_overrides.nodeId.delete(nodeId);
   }
 );
@@ -667,7 +649,6 @@ export const delete_node_size_override = spacetimedb.reducer(
 export const upsert_group_list_view = spacetimedb.reducer(
   { groupId: t.string(), enabled: t.bool() },
   (ctx, args) => {
-    requireGm(ctx);
     const existing = ctx.db.group_list_view.groupId.find(args.groupId);
     if (existing) {
       ctx.db.group_list_view.groupId.update(args);
@@ -680,7 +661,6 @@ export const upsert_group_list_view = spacetimedb.reducer(
 export const delete_group_list_view = spacetimedb.reducer(
   { groupId: t.string() },
   (ctx, { groupId }) => {
-    requireGm(ctx);
     ctx.db.group_list_view.groupId.delete(groupId);
   }
 );
@@ -690,7 +670,6 @@ export const delete_group_list_view = spacetimedb.reducer(
 export const upsert_node_group_override = spacetimedb.reducer(
   { nodeId: t.string(), groupId: t.string().optional() },
   (ctx, args) => {
-    requireGm(ctx);
     const existing = ctx.db.node_group_overrides.nodeId.find(args.nodeId);
     if (existing) {
       ctx.db.node_group_overrides.nodeId.update(args);
@@ -703,7 +682,6 @@ export const upsert_node_group_override = spacetimedb.reducer(
 export const delete_node_group_override = spacetimedb.reducer(
   { nodeId: t.string() },
   (ctx, { nodeId }) => {
-    requireGm(ctx);
     ctx.db.node_group_overrides.nodeId.delete(nodeId);
   }
 );
@@ -713,7 +691,6 @@ export const delete_node_group_override = spacetimedb.reducer(
 export const upsert_group_node_position = spacetimedb.reducer(
   { groupId: t.string(), nodeId: t.string(), x: t.f64(), y: t.f64() },
   (ctx, { groupId, nodeId, x, y }) => {
-    requireGm(ctx);
     const id = compoundKey(groupId, nodeId);
     const existing = ctx.db.group_node_positions.id.find(id);
     if (existing) {
@@ -727,7 +704,6 @@ export const upsert_group_node_position = spacetimedb.reducer(
 export const delete_group_node_position = spacetimedb.reducer(
   { groupId: t.string(), nodeId: t.string() },
   (ctx, { groupId, nodeId }) => {
-    requireGm(ctx);
     ctx.db.group_node_positions.id.delete(compoundKey(groupId, nodeId));
   }
 );
@@ -735,7 +711,6 @@ export const delete_group_node_position = spacetimedb.reducer(
 export const delete_group_node_positions_by_group = spacetimedb.reducer(
   { groupId: t.string() },
   (ctx, { groupId }) => {
-    requireGm(ctx);
     for (const row of ctx.db.group_node_positions.iter()) {
       if (row.groupId === groupId) ctx.db.group_node_positions.id.delete(row.id);
     }
@@ -747,7 +722,6 @@ export const delete_group_node_positions_by_group = spacetimedb.reducer(
 export const upsert_free_segment_position = spacetimedb.reducer(
   { segmentId: t.string(), x: t.f64(), y: t.f64() },
   (ctx, args) => {
-    requireGm(ctx);
     const existing = ctx.db.free_segment_positions.segmentId.find(args.segmentId);
     if (existing) {
       ctx.db.free_segment_positions.segmentId.update(args);
@@ -760,7 +734,6 @@ export const upsert_free_segment_position = spacetimedb.reducer(
 export const delete_free_segment_position = spacetimedb.reducer(
   { segmentId: t.string() },
   (ctx, { segmentId }) => {
-    requireGm(ctx);
     ctx.db.free_segment_positions.segmentId.delete(segmentId);
   }
 );
@@ -770,7 +743,6 @@ export const delete_free_segment_position = spacetimedb.reducer(
 export const upsert_group_free_segment_position = spacetimedb.reducer(
   { groupId: t.string(), segmentId: t.string(), x: t.f64(), y: t.f64() },
   (ctx, { groupId, segmentId, x, y }) => {
-    requireGm(ctx);
     const id = compoundKey(groupId, segmentId);
     const existing = ctx.db.group_free_segment_positions.id.find(id);
     if (existing) {
@@ -784,7 +756,6 @@ export const upsert_group_free_segment_position = spacetimedb.reducer(
 export const delete_group_free_segment_position = spacetimedb.reducer(
   { groupId: t.string(), segmentId: t.string() },
   (ctx, { groupId, segmentId }) => {
-    requireGm(ctx);
     ctx.db.group_free_segment_positions.id.delete(compoundKey(groupId, segmentId));
   }
 );
@@ -792,7 +763,6 @@ export const delete_group_free_segment_position = spacetimedb.reducer(
 export const delete_group_free_segment_positions_by_group = spacetimedb.reducer(
   { groupId: t.string() },
   (ctx, { groupId }) => {
-    requireGm(ctx);
     for (const row of ctx.db.group_free_segment_positions.iter()) {
       if (row.groupId === groupId) ctx.db.group_free_segment_positions.id.delete(row.id);
     }
@@ -804,7 +774,6 @@ export const delete_group_free_segment_positions_by_group = spacetimedb.reducer(
 export const upsert_group_node_order = spacetimedb.reducer(
   { groupId: t.string(), nodeIdsJson: t.string() },
   (ctx, args) => {
-    requireGm(ctx);
     const existing = ctx.db.group_node_orders.groupId.find(args.groupId);
     if (existing) {
       ctx.db.group_node_orders.groupId.update(args);
@@ -817,7 +786,6 @@ export const upsert_group_node_order = spacetimedb.reducer(
 export const delete_group_node_order = spacetimedb.reducer(
   { groupId: t.string() },
   (ctx, { groupId }) => {
-    requireGm(ctx);
     ctx.db.group_node_orders.groupId.delete(groupId);
   }
 );
@@ -827,7 +795,6 @@ export const delete_group_node_order = spacetimedb.reducer(
 export const upsert_custom_group = spacetimedb.reducer(
   { groupId: t.string(), title: t.string() },
   (ctx, args) => {
-    requireGm(ctx);
     const existing = ctx.db.custom_groups.groupId.find(args.groupId);
     if (existing) {
       ctx.db.custom_groups.groupId.update(args);
@@ -840,7 +807,6 @@ export const upsert_custom_group = spacetimedb.reducer(
 export const delete_custom_group = spacetimedb.reducer(
   { groupId: t.string() },
   (ctx, { groupId }) => {
-    requireGm(ctx);
     ctx.db.custom_groups.groupId.delete(groupId);
     ctx.db.group_positions.groupId.delete(groupId);
     ctx.db.group_size_overrides.groupId.delete(groupId);
@@ -861,7 +827,6 @@ export const delete_custom_group = spacetimedb.reducer(
 export const upsert_group_title_override = spacetimedb.reducer(
   { groupId: t.string(), title: t.string() },
   (ctx, args) => {
-    requireGm(ctx);
     const existing = ctx.db.group_title_overrides.groupId.find(args.groupId);
     if (existing) {
       ctx.db.group_title_overrides.groupId.update(args);
@@ -874,7 +839,6 @@ export const upsert_group_title_override = spacetimedb.reducer(
 export const delete_group_title_override = spacetimedb.reducer(
   { groupId: t.string() },
   (ctx, { groupId }) => {
-    requireGm(ctx);
     ctx.db.group_title_overrides.groupId.delete(groupId);
   }
 );
@@ -884,7 +848,6 @@ export const delete_group_title_override = spacetimedb.reducer(
 export const upsert_node_title_override = spacetimedb.reducer(
   { nodeId: t.string(), title: t.string() },
   (ctx, args) => {
-    requireGm(ctx);
     const existing = ctx.db.node_title_overrides.nodeId.find(args.nodeId);
     if (existing) {
       ctx.db.node_title_overrides.nodeId.update(args);
@@ -897,7 +860,6 @@ export const upsert_node_title_override = spacetimedb.reducer(
 export const delete_node_title_override = spacetimedb.reducer(
   { nodeId: t.string() },
   (ctx, { nodeId }) => {
-    requireGm(ctx);
     ctx.db.node_title_overrides.nodeId.delete(nodeId);
   }
 );
@@ -907,7 +869,6 @@ export const delete_node_title_override = spacetimedb.reducer(
 export const upsert_node_containment = spacetimedb.reducer(
   { nodeId: t.string(), containerNodeId: t.string() },
   (ctx, args) => {
-    requireGm(ctx);
     const existing = ctx.db.node_containment.nodeId.find(args.nodeId);
     if (existing) {
       ctx.db.node_containment.nodeId.update(args);
@@ -920,7 +881,6 @@ export const upsert_node_containment = spacetimedb.reducer(
 export const delete_node_containment = spacetimedb.reducer(
   { nodeId: t.string() },
   (ctx, { nodeId }) => {
-    requireGm(ctx);
     ctx.db.node_containment.nodeId.delete(nodeId);
   }
 );
@@ -930,7 +890,6 @@ export const delete_node_containment = spacetimedb.reducer(
 export const upsert_label = spacetimedb.reducer(
   { labelId: t.string(), text: t.string(), x: t.f64(), y: t.f64() },
   (ctx, args) => {
-    requireGm(ctx);
     const existing = ctx.db.labels.labelId.find(args.labelId);
     if (existing) {
       ctx.db.labels.labelId.update(args);
@@ -943,7 +902,6 @@ export const upsert_label = spacetimedb.reducer(
 export const delete_label = spacetimedb.reducer(
   { labelId: t.string() },
   (ctx, { labelId }) => {
-    requireGm(ctx);
     ctx.db.labels.labelId.delete(labelId);
   }
 );
@@ -953,7 +911,6 @@ export const delete_label = spacetimedb.reducer(
 export const upsert_setting = spacetimedb.reducer(
   { key: t.string(), valueNum: t.u32().optional() },
   (ctx, args) => {
-    requireGm(ctx);
     const existing = ctx.db.settings.key.find(args.key);
     if (existing) {
       ctx.db.settings.key.update(args);
@@ -966,7 +923,6 @@ export const upsert_setting = spacetimedb.reducer(
 export const delete_setting = spacetimedb.reducer(
   { key: t.string() },
   (ctx, { key }) => {
-    requireGm(ctx);
     ctx.db.settings.key.delete(key);
   }
 );
@@ -976,7 +932,6 @@ export const delete_setting = spacetimedb.reducer(
 export const clear_all_tables = spacetimedb.reducer(
   {},
   (ctx) => {
-    requireGm(ctx);
     for (const r of ctx.db.actors.iter()) ctx.db.actors.id.delete(r.id);
     for (const r of ctx.db.item_definitions.iter()) ctx.db.item_definitions.id.delete(r.id);
     for (const r of ctx.db.inventory_entries.iter()) ctx.db.inventory_entries.id.delete(r.id);
@@ -1004,7 +959,6 @@ export const clear_all_tables = spacetimedb.reducer(
 export const set_world_state = spacetimedb.reducer(
   { dataJson: t.string() },
   (ctx, { dataJson }) => {
-    requireGm(ctx);
     const data = JSON.parse(dataJson) as {
       actors?: Array<Record<string, unknown>>;
       itemDefinitions?: Array<Record<string, unknown>>;
@@ -1103,7 +1057,6 @@ export const set_world_state = spacetimedb.reducer(
 export const set_layout_state = spacetimedb.reducer(
   { dataJson: t.string() },
   (ctx, { dataJson }) => {
-    requireGm(ctx);
     const data = JSON.parse(dataJson) as Record<string, unknown>;
 
     // Clear existing layout data

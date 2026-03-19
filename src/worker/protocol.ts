@@ -201,6 +201,8 @@ export type WorkerIntent =
   | { readonly type: 'DELETE_LABEL'; readonly labelId: string }
   | { readonly type: 'SELECT_LABEL'; readonly labelId: string | null }
   | { readonly type: 'SET_WORLD_STATE'; readonly worldState: CanonicalState }
+  | { readonly type: 'DRAG_START' }
+  | { readonly type: 'DRAG_END' }
 
 export interface ConnectedUser {
   identityHex: string
