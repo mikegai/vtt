@@ -4499,8 +4499,12 @@ export class PixiBoardAdapter {
     }
     this.activeDrag = { type: 'idle' }
     if (this.pendingRebuild && this.currentScene) {
-      // Do not consume skip flags here; let the next real post-drop scene update
-      // consume them so dragged nodes snap in place instead of animating from origin.
+      if (this.dragMotionTransaction) {
+        // A move intent is in flight to the worker. Defer the rebuild so we don't
+        // snap nodes back to stale scene positions; the next applyPatches will
+        // flush it with the correct scene data.
+        return
+      }
       this.rebuildAllNodes(this.currentScene, false)
       this.startSpringTicker()
       this.pendingRebuild = false
@@ -5147,10 +5151,11 @@ export class PixiBoardAdapter {
       this.updateSelectionOverlay()
       this.startSpringTicker()
     }
-    if (needsFullRebuild) {
+    if (needsFullRebuild || (this.pendingRebuild && this.activeDrag.type === 'idle')) {
       if (this.activeDrag.type !== 'idle') {
         this.pendingRebuild = true
       } else {
+        this.pendingRebuild = false
         this.rebuildAllNodes(scene)
         this.startSpringTicker()
       }
