@@ -299,6 +299,55 @@ const createInventoryEntryId = (state: CanonicalState, itemDefId: string, index?
   return `${base}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}_fallback`
 }
 
+const INSTANCE_OVERRIDE_PREFIX = 'instance:'
+const instanceOverridePrefixForEntry = (entryId: string): string => `${INSTANCE_OVERRIDE_PREFIX}${entryId}:`
+const parseInstanceOverrideBaseId = (entryId: string, itemDefId: string): string | null => {
+  const prefix = instanceOverridePrefixForEntry(entryId)
+  return itemDefId.startsWith(prefix) ? itemDefId.slice(prefix.length) : null
+}
+const createInstanceOverrideItemDefId = (state: CanonicalState, entryId: string, basePrototypeId: string): string => {
+  const prefix = instanceOverridePrefixForEntry(entryId)
+  const preferred = `${prefix}${basePrototypeId}`
+  if (!state.itemDefinitions[preferred]) return preferred
+  let n = 1
+  while (state.itemDefinitions[`${preferred}:${n}`]) n += 1
+  return `${preferred}:${n}`
+}
+
+const toOptionalPositiveNumber = (value: number | undefined): number | undefined => {
+  if (value == null || !Number.isFinite(value)) return undefined
+  return value > 0 ? value : undefined
+}
+
+type ItemPrototypePatch = {
+  readonly canonicalName: string
+  readonly kind: ItemKind
+  readonly sixthsPerUnit?: number
+  readonly armorClass?: number
+  readonly priceInGp?: number
+  readonly isFungibleVisual?: boolean
+}
+
+const applyPrototypePatch = (
+  source: ItemDefinition,
+  patch: ItemPrototypePatch,
+): ItemDefinition => {
+  const trimmedName = patch.canonicalName.trim()
+  const kind = patch.kind
+  const sixthsPerUnit = toOptionalPositiveNumber(patch.sixthsPerUnit)
+  const armorClass = toOptionalPositiveNumber(patch.armorClass)
+  const priceInGp = toOptionalPositiveNumber(patch.priceInGp)
+  return {
+    ...source,
+    canonicalName: trimmedName.length > 0 ? trimmedName : source.canonicalName,
+    kind,
+    ...(sixthsPerUnit != null ? { sixthsPerUnit } : { sixthsPerUnit: undefined }),
+    ...(kind === 'armor' && armorClass != null ? { armorClass } : { armorClass: undefined }),
+    ...(priceInGp != null ? { priceInGp } : { priceInGp: undefined }),
+    isFungibleVisual: !!patch.isFungibleVisual,
+  }
+}
+
 const removeSegmentsFromGroupPositions = (
   groupFreeSegmentPositions: WorkerLocalState['groupFreeSegmentPositions'],
   segmentIds: readonly string[],
@@ -1568,6 +1617,119 @@ const applyIntent = (intent: WorkerIntent): void => {
         }
       }
       localState = { ...localState, freeSegmentPositions }
+    }
+
+    recompute()
+    return
+  }
+
+  if (intent.type === 'SAVE_ITEM_EDITOR') {
+    if (!worldState) return
+    if (isSelfWeightTokenId(intent.segmentId)) {
+      recompute()
+      return
+    }
+    const entryId = segmentIdToEntryId(intent.segmentId)
+    const existingEntry = worldState.inventoryEntries[entryId]
+    if (!existingEntry) {
+      recompute()
+      return
+    }
+
+    const cleanedState = { ...(intent.state ?? {}) }
+    if (intent.zone === 'dropped') cleanedState.dropped = true
+    else delete cleanedState.dropped
+    const nextState = Object.keys(cleanedState).length > 0 ? cleanedState : undefined
+    const quantity = Math.max(1, Math.floor(intent.quantity || 1))
+    const dropped = intent.zone === 'dropped'
+
+    let nextCarryGroupId = existingEntry.carryGroupId
+    if (dropped) {
+      worldState = ensureDroppedGroup(worldState, existingEntry.actorId)
+      nextCarryGroupId = droppedGroupIdForActor(existingEntry.actorId)
+    } else {
+      nextCarryGroupId = undefined
+    }
+
+    let nextItemDefId = existingEntry.itemDefId
+    const currentDef = worldState.itemDefinitions[existingEntry.itemDefId]
+    const currentOverrideBase = parseInstanceOverrideBaseId(existingEntry.id, existingEntry.itemDefId)
+    const basePrototypeId = intent.basePrototypeId || currentOverrideBase || existingEntry.itemDefId
+    const basePrototype = worldState.itemDefinitions[basePrototypeId] ?? currentDef
+
+    if (intent.target === 'prototype') {
+      if (!currentDef) {
+        recompute()
+        return
+      }
+      const patched = applyPrototypePatch(currentDef, intent.prototypePatch)
+      worldState = {
+        ...worldState,
+        itemDefinitions: {
+          ...worldState.itemDefinitions,
+          [patched.id]: patched,
+        },
+      }
+    } else {
+      if (!basePrototype) {
+        recompute()
+        return
+      }
+      if (intent.instanceOverrideEnabled) {
+        const canReuseCurrentOverride =
+          currentOverrideBase != null &&
+          currentOverrideBase === basePrototypeId &&
+          !!worldState.itemDefinitions[existingEntry.itemDefId]
+        const overrideItemDefId = canReuseCurrentOverride
+          ? existingEntry.itemDefId
+          : createInstanceOverrideItemDefId(worldState, existingEntry.id, basePrototypeId)
+        const sourceForOverride = worldState.itemDefinitions[overrideItemDefId] ?? {
+          ...basePrototype,
+          id: overrideItemDefId,
+        }
+        const patchedOverride = applyPrototypePatch(sourceForOverride, intent.prototypePatch)
+        worldState = {
+          ...worldState,
+          itemDefinitions: {
+            ...worldState.itemDefinitions,
+            [overrideItemDefId]: patchedOverride,
+          },
+        }
+        nextItemDefId = overrideItemDefId
+      } else {
+        nextItemDefId = basePrototype.id
+      }
+    }
+
+    const nextEntry: InventoryEntry = {
+      ...existingEntry,
+      itemDefId: nextItemDefId,
+      quantity,
+      zone: intent.zone,
+      carryGroupId: nextCarryGroupId,
+      state: nextState,
+    }
+    worldState = {
+      ...worldState,
+      inventoryEntries: {
+        ...worldState.inventoryEntries,
+        [entryId]: nextEntry,
+      },
+    }
+
+    if (dropped) {
+      const actor = worldState.actors[existingEntry.actorId]
+      if (actor && (actor.leftWieldingEntryId === entryId || actor.rightWieldingEntryId === entryId)) {
+        const nextActor: Actor = {
+          ...actor,
+          leftWieldingEntryId: actor.leftWieldingEntryId === entryId ? undefined : actor.leftWieldingEntryId,
+          rightWieldingEntryId: actor.rightWieldingEntryId === entryId ? undefined : actor.rightWieldingEntryId,
+        }
+        worldState = {
+          ...worldState,
+          actors: { ...worldState.actors, [actor.id]: nextActor },
+        }
+      }
     }
 
     recompute()

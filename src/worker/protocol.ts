@@ -1,4 +1,4 @@
-import type { ActorKind, CanonicalState, WieldGrip } from '../domain/types'
+import type { ActorKind, CanonicalState, CarryZone, EquipmentState, ItemKind, WieldGrip } from '../domain/types'
 import type { ItemCategory } from '../domain/item-category'
 
 export type SceneSegmentVM = {
@@ -12,6 +12,21 @@ export type SceneSegmentVM = {
   /** True when this segment is the drop-preview placeholder (dashed outline). */
   readonly isDropPreview?: boolean
   readonly itemDefId: string
+  readonly entryId?: string
+  readonly quantity?: number
+  readonly zone?: CarryZone
+  readonly state?: EquipmentState
+  readonly prototype?: {
+    readonly id: string
+    readonly canonicalName: string
+    readonly kind: ItemKind
+    readonly sixthsPerUnit?: number
+    readonly armorClass?: number
+    readonly priceInGp?: number
+    readonly isFungibleVisual?: boolean
+  }
+  /** When present, this segment's entry uses an instance-level override of a base prototype id. */
+  readonly overridePrototypeId?: string
   readonly category: ItemCategory
   readonly wield?: WieldGrip
   readonly tooltip: {
@@ -200,6 +215,24 @@ export type WorkerIntent =
   | { readonly type: 'MOVE_LABEL'; readonly labelId: string; readonly x: number; readonly y: number }
   | { readonly type: 'DELETE_LABEL'; readonly labelId: string }
   | { readonly type: 'SELECT_LABEL'; readonly labelId: string | null }
+  | {
+      readonly type: 'SAVE_ITEM_EDITOR'
+      readonly segmentId: string
+      readonly target: 'prototype' | 'instance'
+      readonly quantity: number
+      readonly zone: CarryZone
+      readonly state: EquipmentState
+      readonly basePrototypeId: string
+      readonly instanceOverrideEnabled: boolean
+      readonly prototypePatch: {
+        readonly canonicalName: string
+        readonly kind: ItemKind
+        readonly sixthsPerUnit?: number
+        readonly armorClass?: number
+        readonly priceInGp?: number
+        readonly isFungibleVisual?: boolean
+      }
+    }
   | { readonly type: 'SET_WORLD_STATE'; readonly worldState: CanonicalState }
   | { readonly type: 'DRAG_START' }
   | { readonly type: 'DRAG_END' }

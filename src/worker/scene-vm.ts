@@ -72,6 +72,13 @@ const ROOT_NODE_MAX_W = 1800
 const FREE_SEGMENT_STACK_GAP = 8
 const CELL_H = STONE_H / 6
 const SELF_WEIGHT_TOKEN_PREFIX = '__self_weight__:'
+const INSTANCE_OVERRIDE_PREFIX = 'instance:'
+
+const segmentIdToEntryId = (segmentId: string): string => segmentId.replace(/:(\d+|overflow)$/, '')
+const parseInstanceOverrideBaseId = (entryId: string, itemDefId: string): string | null => {
+  const prefix = `${INSTANCE_OVERRIDE_PREFIX}${entryId}:`
+  return itemDefId.startsWith(prefix) ? itemDefId.slice(prefix.length) : null
+}
 
 const selfWeightStoneForActorKind = (kind: SceneNodeVM['actorKind']): number =>
   kind === 'pc' ? 15 : 100
@@ -256,6 +263,10 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
       // Dropped inventory lives directly on the canvas as free segments (no wrapper node).
       let yCursor = 0
       for (const segment of row.segments) {
+        const entryId = segmentIdToEntryId(segment.id)
+        const entry = worldState.inventoryEntries[entryId]
+        const prototype = worldState.itemDefinitions[segment.itemDefId]
+        const overridePrototypeId = parseInstanceOverrideBaseId(entryId, segment.itemDefId) ?? undefined
         const ownerGroupId = segmentGroupOwner.get(segment.id)
         const groupRelativePos = ownerGroupId ? localState.groupFreeSegmentPositions[ownerGroupId]?.[segment.id] : undefined
         const pos = groupRelativePos ?? localState.freeSegmentPositions[segment.id] ?? { x: 120, y: 120 + yCursor }
@@ -275,6 +286,24 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
             isOverflow: segment.isOverflow,
             isDropPreview: false,
             itemDefId: segment.itemDefId,
+            entryId,
+            quantity: entry?.quantity ?? segment.quantity,
+            zone: entry?.zone ?? segment.zone,
+            state: entry?.state ?? segment.state,
+            ...(prototype
+              ? {
+                  prototype: {
+                    id: prototype.id,
+                    canonicalName: prototype.canonicalName,
+                    kind: prototype.kind,
+                    sixthsPerUnit: prototype.sixthsPerUnit,
+                    armorClass: prototype.armorClass,
+                    priceInGp: prototype.priceInGp,
+                    isFungibleVisual: prototype.isFungibleVisual,
+                  },
+                }
+              : {}),
+            ...(overridePrototypeId ? { overridePrototypeId } : {}),
             category: segment.category,
             wield: segment.state?.wield,
             tooltip: segment.tooltip,
@@ -343,21 +372,45 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
       usedSixths: row.encumbranceSixths,
       usedStoneText: row.summary.usedStoneText,
       capacityStoneText: row.summary.capacityStoneText,
-      segments: row.segments.map((segment) => ({
-        id: segment.id,
-        shortLabel: segment.labels.short,
-        mediumLabel: segment.labels.medium,
-        fullLabel: segment.labels.full,
-        startSixth: segment.startSixth,
-        sizeSixths: segment.sizeSixths,
-        isOverflow: segment.isOverflow,
-        isDropPreview: dropIntent != null && movedSegmentIds.has(segment.id) && row.id === dropIntent.targetNodeId && dropIntent.sourceNodeIds[segment.id] !== dropIntent.targetNodeId,
-        itemDefId: segment.itemDefId,
-        category: segment.category,
-        wield: segment.state?.wield,
-        tooltip: segment.tooltip,
-        ...(segment.isFungibleVisual != null && { isFungibleVisual: segment.isFungibleVisual }),
-      })),
+      segments: row.segments.map((segment) => {
+        const entryId = segmentIdToEntryId(segment.id)
+        const entry = worldState.inventoryEntries[entryId]
+        const prototype = worldState.itemDefinitions[segment.itemDefId]
+        const overridePrototypeId = parseInstanceOverrideBaseId(entryId, segment.itemDefId) ?? undefined
+        return {
+          id: segment.id,
+          shortLabel: segment.labels.short,
+          mediumLabel: segment.labels.medium,
+          fullLabel: segment.labels.full,
+          startSixth: segment.startSixth,
+          sizeSixths: segment.sizeSixths,
+          isOverflow: segment.isOverflow,
+          isDropPreview: dropIntent != null && movedSegmentIds.has(segment.id) && row.id === dropIntent.targetNodeId && dropIntent.sourceNodeIds[segment.id] !== dropIntent.targetNodeId,
+          itemDefId: segment.itemDefId,
+          entryId,
+          quantity: entry?.quantity ?? segment.quantity,
+          zone: entry?.zone ?? segment.zone,
+          state: entry?.state ?? segment.state,
+          ...(prototype
+            ? {
+                prototype: {
+                  id: prototype.id,
+                  canonicalName: prototype.canonicalName,
+                  kind: prototype.kind,
+                  sixthsPerUnit: prototype.sixthsPerUnit,
+                  armorClass: prototype.armorClass,
+                  priceInGp: prototype.priceInGp,
+                  isFungibleVisual: prototype.isFungibleVisual,
+                },
+              }
+            : {}),
+          ...(overridePrototypeId ? { overridePrototypeId } : {}),
+          category: segment.category,
+          wield: segment.state?.wield,
+          tooltip: segment.tooltip,
+          ...(segment.isFungibleVisual != null && { isFungibleVisual: segment.isFungibleVisual }),
+        }
+      }),
     }
 
     if (groupId && groupTitle) {

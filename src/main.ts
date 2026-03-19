@@ -186,27 +186,347 @@ function showIdentityDialog(currentName: string, isFirstTime: boolean): void {
   input?.select()
 }
 
-// ─── Users Panel ──────────────────────────────────────────────────────────────
+// ─── Item Editor Dialog ───────────────────────────────────────────────────────
 
-const usersPanel = document.createElement('div')
-Object.assign(usersPanel.style, {
+const itemEditorDialog = document.createElement('dialog')
+itemEditorDialog.id = 'item-editor-dialog'
+Object.assign(itemEditorDialog.style, {
+  border: '1px solid #334455',
+  borderRadius: '10px',
+  background: '#151e2b',
+  color: '#d0dae8',
+  padding: '0',
+  maxWidth: '460px',
+  width: '100%',
+  fontFamily: 'system-ui, -apple-system, sans-serif',
+  boxShadow: '0 20px 60px rgba(0,0,0,0.6)',
+} as Partial<CSSStyleDeclaration>)
+document.body.appendChild(itemEditorDialog)
+
+function resolveSceneSegment(segmentId: string): SceneSegmentVM | null {
+  if (currentScene) {
+    for (const node of Object.values(currentScene.nodes)) {
+      const found = node.segments.find((s) => s.id === segmentId)
+      if (found) return found
+    }
+    const free = currentScene.freeSegments[segmentId]
+    if (free) return free.segment
+  }
+  return null
+}
+
+function showItemEditorDialog(segment: SceneSegmentVM): void {
+  if (segment.locked || !segment.entryId || !segment.prototype || !segment.zone) return
+  const prototype = segment.prototype
+  const basePrototypeId = segment.overridePrototypeId ?? prototype.id
+  const state = segment.state ?? {}
+  const quantity = Math.max(1, segment.quantity ?? 1)
+
+  itemEditorDialog.innerHTML = `
+    <form method="dialog" style="padding: 16px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:12px;">
+        <div>
+          <div style="font-size:16px;font-weight:600;">Item editor</div>
+          <div style="font-size:12px;color:#8ea0b6;">Entry <code>${segment.entryId}</code> · Prototype <code>${prototype.id}</code></div>
+        </div>
+        <button type="button" id="item-editor-close" style="padding:4px 8px;border-radius:6px;border:1px solid #334455;background:transparent;color:#a8b8cc;cursor:pointer;">Close</button>
+      </div>
+
+      <div style="display:flex;gap:8px;margin-bottom:12px;">
+        <button type="button" id="item-editor-tab-prototype" data-tab="prototype" style="flex:1;padding:8px;border-radius:6px;border:1px solid #334455;background:#213148;color:#d0dae8;cursor:pointer;">Prototype</button>
+        <button type="button" id="item-editor-tab-instance" data-tab="instance" style="flex:1;padding:8px;border-radius:6px;border:1px solid #334455;background:transparent;color:#a8b8cc;cursor:pointer;">Instance</button>
+      </div>
+
+      <input type="hidden" id="item-editor-target" value="prototype" />
+
+      <section style="border:1px solid #334455;border-radius:8px;padding:10px;margin-bottom:10px;">
+        <div style="font-size:11px;letter-spacing:0.04em;text-transform:uppercase;color:#8ea0b6;margin-bottom:8px;">Instance properties</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+          <label style="display:block;">
+            <span style="display:block;font-size:11px;color:#8ea0b6;margin-bottom:4px;">Quantity</span>
+            <input id="item-editor-quantity" type="number" min="1" step="1" value="${quantity}" style="width:100%;box-sizing:border-box;padding:7px 9px;background:#0c1118;border:1px solid #334455;border-radius:6px;color:#d0dae8;" />
+          </label>
+          <label style="display:block;">
+            <span style="display:block;font-size:11px;color:#8ea0b6;margin-bottom:4px;">Zone</span>
+            <select id="item-editor-zone" style="width:100%;box-sizing:border-box;padding:7px 9px;background:#0c1118;border:1px solid #334455;border-radius:6px;color:#d0dae8;">
+              <option value="worn" ${segment.zone === 'worn' ? 'selected' : ''}>worn</option>
+              <option value="attached" ${segment.zone === 'attached' ? 'selected' : ''}>attached</option>
+              <option value="accessible" ${segment.zone === 'accessible' ? 'selected' : ''}>accessible</option>
+              <option value="stowed" ${segment.zone === 'stowed' ? 'selected' : ''}>stowed</option>
+              <option value="dropped" ${segment.zone === 'dropped' ? 'selected' : ''}>dropped</option>
+            </select>
+          </label>
+        </div>
+        <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:8px;">
+          <label style="font-size:12px;color:#c3d0e0;"><input id="item-editor-state-worn" type="checkbox" ${state.worn ? 'checked' : ''}/> worn</label>
+          <label style="font-size:12px;color:#c3d0e0;"><input id="item-editor-state-attached" type="checkbox" ${state.attached ? 'checked' : ''}/> attached</label>
+          <label style="font-size:12px;color:#c3d0e0;"><input id="item-editor-state-dropped" type="checkbox" ${state.dropped ? 'checked' : ''}/> dropped</label>
+          <label style="font-size:12px;color:#c3d0e0;"><input id="item-editor-state-inaccessible" type="checkbox" ${state.inaccessible ? 'checked' : ''}/> inaccessible</label>
+        </div>
+      </section>
+
+      <section id="item-editor-instance-override-box" style="border:1px solid #334455;border-radius:8px;padding:10px;margin-bottom:10px;display:none;">
+        <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:#c3d0e0;">
+          <input id="item-editor-instance-override-enabled" type="checkbox" ${segment.overridePrototypeId ? 'checked' : ''} />
+          Override prototype for this instance
+        </label>
+        <div id="item-editor-override-note" style="margin-top:6px;font-size:11px;color:${segment.overridePrototypeId ? '#ffbf7a' : '#8ea0b6'};">
+          ${segment.overridePrototypeId
+            ? `Overriding base prototype <code>${basePrototypeId}</code>`
+            : `Currently inheriting prototype <code>${basePrototypeId}</code>`}
+        </div>
+      </section>
+
+      <section id="item-editor-prototype-fields" style="border:1px solid #334455;border-radius:8px;padding:10px;margin-bottom:10px;">
+        <div style="font-size:11px;letter-spacing:0.04em;text-transform:uppercase;color:#8ea0b6;margin-bottom:8px;">Prototype properties</div>
+        <label style="display:block;margin-bottom:8px;">
+          <span style="display:block;font-size:11px;color:#8ea0b6;margin-bottom:4px;">Canonical name</span>
+          <input id="item-editor-canonical-name" type="text" value="${prototype.canonicalName.replace(/"/g, '&quot;')}" style="width:100%;box-sizing:border-box;padding:7px 9px;background:#0c1118;border:1px solid #334455;border-radius:6px;color:#d0dae8;" />
+        </label>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+          <label style="display:block;">
+            <span style="display:block;font-size:11px;color:#8ea0b6;margin-bottom:4px;">Kind</span>
+            <select id="item-editor-kind" style="width:100%;box-sizing:border-box;padding:7px 9px;background:#0c1118;border:1px solid #334455;border-radius:6px;color:#d0dae8;">
+              <option value="standard" ${prototype.kind === 'standard' ? 'selected' : ''}>standard</option>
+              <option value="bulky" ${prototype.kind === 'bulky' ? 'selected' : ''}>bulky</option>
+              <option value="armor" ${prototype.kind === 'armor' ? 'selected' : ''}>armor</option>
+              <option value="coins" ${prototype.kind === 'coins' ? 'selected' : ''}>coins</option>
+            </select>
+          </label>
+          <label style="display:block;">
+            <span style="display:block;font-size:11px;color:#8ea0b6;margin-bottom:4px;">Sixths per unit</span>
+            <input id="item-editor-sixths-per-unit" type="number" min="1" step="1" value="${prototype.sixthsPerUnit ?? ''}" style="width:100%;box-sizing:border-box;padding:7px 9px;background:#0c1118;border:1px solid #334455;border-radius:6px;color:#d0dae8;" />
+          </label>
+          <label style="display:block;">
+            <span style="display:block;font-size:11px;color:#8ea0b6;margin-bottom:4px;">Armor class</span>
+            <input id="item-editor-armor-class" type="number" min="1" step="1" value="${prototype.armorClass ?? ''}" style="width:100%;box-sizing:border-box;padding:7px 9px;background:#0c1118;border:1px solid #334455;border-radius:6px;color:#d0dae8;" />
+          </label>
+          <label style="display:block;">
+            <span style="display:block;font-size:11px;color:#8ea0b6;margin-bottom:4px;">Price (gp)</span>
+            <input id="item-editor-price-gp" type="number" min="0" step="0.01" value="${prototype.priceInGp ?? ''}" style="width:100%;box-sizing:border-box;padding:7px 9px;background:#0c1118;border:1px solid #334455;border-radius:6px;color:#d0dae8;" />
+          </label>
+        </div>
+        <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:#c3d0e0;margin-top:8px;">
+          <input id="item-editor-fungible" type="checkbox" ${prototype.isFungibleVisual ? 'checked' : ''}/>
+          Fungible visual merge
+        </label>
+      </section>
+
+      <div style="display:flex;justify-content:flex-end;gap:8px;">
+        <button type="button" id="item-editor-cancel" style="padding:8px 12px;border-radius:6px;border:1px solid #334455;background:transparent;color:#a8b8cc;cursor:pointer;">Cancel</button>
+        <button type="submit" id="item-editor-save" style="padding:8px 12px;border-radius:6px;border:none;background:#2b6cb0;color:#fff;cursor:pointer;font-weight:600;">Save</button>
+      </div>
+    </form>
+  `
+
+  const targetInput = itemEditorDialog.querySelector<HTMLInputElement>('#item-editor-target')!
+  const tabPrototype = itemEditorDialog.querySelector<HTMLButtonElement>('#item-editor-tab-prototype')!
+  const tabInstance = itemEditorDialog.querySelector<HTMLButtonElement>('#item-editor-tab-instance')!
+  const instanceOverrideBox = itemEditorDialog.querySelector<HTMLElement>('#item-editor-instance-override-box')!
+  const instanceOverrideEnabled = itemEditorDialog.querySelector<HTMLInputElement>('#item-editor-instance-override-enabled')!
+  const prototypeFields = itemEditorDialog.querySelector<HTMLElement>('#item-editor-prototype-fields')!
+  const closeBtn = itemEditorDialog.querySelector<HTMLButtonElement>('#item-editor-close')!
+  const cancelBtn = itemEditorDialog.querySelector<HTMLButtonElement>('#item-editor-cancel')!
+  const form = itemEditorDialog.querySelector<HTMLFormElement>('form')!
+
+  const applyTab = (target: 'prototype' | 'instance') => {
+    targetInput.value = target
+    const isPrototype = target === 'prototype'
+    tabPrototype.style.background = isPrototype ? '#213148' : 'transparent'
+    tabPrototype.style.color = isPrototype ? '#d0dae8' : '#a8b8cc'
+    tabInstance.style.background = !isPrototype ? '#213148' : 'transparent'
+    tabInstance.style.color = !isPrototype ? '#d0dae8' : '#a8b8cc'
+    instanceOverrideBox.style.display = isPrototype ? 'none' : 'block'
+    if (!isPrototype && !instanceOverrideEnabled.checked) {
+      prototypeFields.style.opacity = '0.55'
+      prototypeFields.style.pointerEvents = 'none'
+    } else {
+      prototypeFields.style.opacity = '1'
+      prototypeFields.style.pointerEvents = 'auto'
+    }
+  }
+
+  tabPrototype.addEventListener('click', () => applyTab('prototype'))
+  tabInstance.addEventListener('click', () => applyTab('instance'))
+  instanceOverrideEnabled.addEventListener('change', () => applyTab(targetInput.value as 'prototype' | 'instance'))
+
+  closeBtn.addEventListener('click', () => itemEditorDialog.close())
+  cancelBtn.addEventListener('click', () => itemEditorDialog.close())
+
+  form.addEventListener('submit', (event) => {
+    event.preventDefault()
+    const parsedQuantity = Number(itemEditorDialog.querySelector<HTMLInputElement>('#item-editor-quantity')?.value ?? 1)
+    const quantityValue = Number.isFinite(parsedQuantity) ? Math.max(1, Math.floor(parsedQuantity)) : 1
+    const zoneValue = (itemEditorDialog.querySelector<HTMLSelectElement>('#item-editor-zone')?.value ?? 'stowed') as 'worn' | 'attached' | 'accessible' | 'stowed' | 'dropped'
+    const kindValue = (itemEditorDialog.querySelector<HTMLSelectElement>('#item-editor-kind')?.value ?? 'standard') as 'armor' | 'bulky' | 'standard' | 'coins'
+    const parseOptionalPositiveNumber = (raw: string): number | undefined => {
+      const n = Number(raw)
+      return Number.isFinite(n) && n > 0 ? n : undefined
+    }
+
+    postToWorker({
+      type: 'INTENT',
+      intent: {
+        type: 'SAVE_ITEM_EDITOR',
+        segmentId: segment.id,
+        target: (targetInput.value === 'instance' ? 'instance' : 'prototype'),
+        quantity: quantityValue,
+        zone: zoneValue,
+        state: {
+          worn: !!itemEditorDialog.querySelector<HTMLInputElement>('#item-editor-state-worn')?.checked,
+          attached: !!itemEditorDialog.querySelector<HTMLInputElement>('#item-editor-state-attached')?.checked,
+          dropped: !!itemEditorDialog.querySelector<HTMLInputElement>('#item-editor-state-dropped')?.checked,
+          inaccessible: !!itemEditorDialog.querySelector<HTMLInputElement>('#item-editor-state-inaccessible')?.checked,
+        },
+        basePrototypeId,
+        instanceOverrideEnabled: !!itemEditorDialog.querySelector<HTMLInputElement>('#item-editor-instance-override-enabled')?.checked,
+        prototypePatch: {
+          canonicalName: itemEditorDialog.querySelector<HTMLInputElement>('#item-editor-canonical-name')?.value?.trim() ?? prototype.canonicalName,
+          kind: kindValue,
+          sixthsPerUnit: parseOptionalPositiveNumber(itemEditorDialog.querySelector<HTMLInputElement>('#item-editor-sixths-per-unit')?.value ?? ''),
+          armorClass: parseOptionalPositiveNumber(itemEditorDialog.querySelector<HTMLInputElement>('#item-editor-armor-class')?.value ?? ''),
+          priceInGp: parseOptionalPositiveNumber(itemEditorDialog.querySelector<HTMLInputElement>('#item-editor-price-gp')?.value ?? ''),
+          isFungibleVisual: !!itemEditorDialog.querySelector<HTMLInputElement>('#item-editor-fungible')?.checked,
+        },
+      },
+    })
+    itemEditorDialog.close()
+  })
+
+  applyTab('prototype')
+  itemEditorDialog.showModal()
+}
+
+// ─── Presence Strip + Account Menu ────────────────────────────────────────────
+
+const presenceStrip = document.createElement('div')
+Object.assign(presenceStrip.style, {
   position: 'fixed',
   right: '12px',
-  top: '12px',
-  zIndex: '2147483646',
-  background: '#10161fdd',
-  border: '1px solid #ffffff22',
-  borderRadius: '8px',
-  padding: '8px 10px',
-  fontFamily: 'monospace',
-  fontSize: '11px',
-  color: '#ccd6e0',
-  pointerEvents: 'auto',
-  minWidth: '140px',
-  maxWidth: '200px',
+  top: '10px',
+  zIndex: '120',
   display: 'none',
+  alignItems: 'center',
+  gap: '6px',
+  pointerEvents: 'auto',
 } as Partial<CSSStyleDeclaration>)
-document.body.appendChild(usersPanel)
+document.body.appendChild(presenceStrip)
+
+const accountDropdown = document.createElement('div')
+Object.assign(accountDropdown.style, {
+  position: 'fixed',
+  right: '12px',
+  top: '52px',
+  zIndex: '130',
+  minWidth: '220px',
+  background: '#10161ff0',
+  border: '1px solid #ffffff22',
+  borderRadius: '10px',
+  boxShadow: '0 14px 34px rgba(0, 0, 0, 0.45)',
+  overflow: 'hidden',
+  display: 'none',
+  color: '#d0dae8',
+  fontFamily: 'system-ui, -apple-system, sans-serif',
+} as Partial<CSSStyleDeclaration>)
+document.body.appendChild(accountDropdown)
+
+let accountMenuOpen = false
+
+function closeAccountMenu(): void {
+  accountMenuOpen = false
+  accountDropdown.style.display = 'none'
+}
+
+function openAccountMenu(user: ConnectedUser): void {
+  accountMenuOpen = true
+  accountDropdown.style.display = 'block'
+  accountDropdown.innerHTML = ''
+
+  const header = document.createElement('div')
+  Object.assign(header.style, {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '10px',
+    padding: '12px',
+    borderBottom: '1px solid #ffffff1a',
+  } as Partial<CSSStyleDeclaration>)
+
+  const avatar = document.createElement('span')
+  Object.assign(avatar.style, {
+    width: '34px',
+    height: '34px',
+    borderRadius: '50%',
+    background: initialsColor(user.displayName),
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    color: '#fff',
+    fontSize: '13px',
+    fontWeight: '700',
+    flexShrink: '0',
+    letterSpacing: '0.02em',
+  } as Partial<CSSStyleDeclaration>)
+  avatar.textContent = getInitials(user.displayName)
+  header.appendChild(avatar)
+
+  const headerText = document.createElement('div')
+  headerText.style.minWidth = '0'
+  const nameEl = document.createElement('div')
+  nameEl.textContent = user.displayName
+  Object.assign(nameEl.style, {
+    fontSize: '13px',
+    fontWeight: '600',
+    color: '#e4edf8',
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+  } as Partial<CSSStyleDeclaration>)
+  headerText.appendChild(nameEl)
+  const statusEl = document.createElement('div')
+  statusEl.textContent = 'Logged in'
+  Object.assign(statusEl.style, {
+    marginTop: '2px',
+    fontSize: '11px',
+    color: '#8ff7bf',
+    letterSpacing: '0.01em',
+  } as Partial<CSSStyleDeclaration>)
+  headerText.appendChild(statusEl)
+  header.appendChild(headerText)
+  accountDropdown.appendChild(header)
+
+  const menuButton = document.createElement('button')
+  menuButton.type = 'button'
+  menuButton.textContent = 'Edit username'
+  Object.assign(menuButton.style, {
+    width: '100%',
+    textAlign: 'left',
+    border: 'none',
+    borderRadius: '0',
+    background: 'transparent',
+    color: '#d0dae8',
+    padding: '10px 12px',
+    fontSize: '13px',
+    cursor: 'pointer',
+  } as Partial<CSSStyleDeclaration>)
+  menuButton.addEventListener('mouseenter', () => {
+    menuButton.style.background = '#1a2535'
+  })
+  menuButton.addEventListener('mouseleave', () => {
+    menuButton.style.background = 'transparent'
+  })
+  menuButton.addEventListener('click', () => {
+    closeAccountMenu()
+    showIdentityDialog(user.displayName, false)
+  })
+  accountDropdown.appendChild(menuButton)
+}
+
+document.addEventListener('pointerdown', (event) => {
+  const target = event.target
+  if (!(target instanceof Node)) return
+  if (accountDropdown.contains(target) || presenceStrip.contains(target)) return
+  closeAccountMenu()
+})
 
 const CURSOR_COLORS = ['#ff6b6b', '#4ecdc4', '#ffe66d', '#95e1d3', '#f38181', '#aa96da', '#fcbad3', '#a8d8ea']
 function cursorColorForUser(hex: string): string {
@@ -218,45 +538,40 @@ function cursorColorForUser(hex: string): string {
 let currentUsers: ConnectedUser[] = []
 let currentCursors: RemoteCursor[] = []
 let myIdentityHex = ''
+let lastPresenceSignature = ''
 
 function updateUsersPanel(users: ConnectedUser[]): void {
   const online = users.filter(u => u.online)
-  if (online.length === 0) {
-    usersPanel.style.display = 'none'
+  const me = online.find((u) => u.identityHex === myIdentityHex)
+  const others = online.filter((u) => u.identityHex !== myIdentityHex)
+
+  const signature = JSON.stringify({
+    myIdentityHex,
+    online: online
+      .map((u) => ({ id: u.identityHex, name: u.displayName, role: u.role }))
+      .sort((a, b) => a.id.localeCompare(b.id)),
+  })
+
+  if (!me) {
+    presenceStrip.style.display = 'none'
+    lastPresenceSignature = ''
+    closeAccountMenu()
     return
   }
-  usersPanel.style.display = 'block'
-  usersPanel.innerHTML = ''
-  const header = document.createElement('div')
-  header.textContent = `Online (${online.length})`
-  Object.assign(header.style, {
-    fontWeight: 'bold',
-    marginBottom: '4px',
-    fontSize: '10px',
-    color: '#8899aa',
-    textTransform: 'uppercase',
-    letterSpacing: '0.05em',
-  } as Partial<CSSStyleDeclaration>)
-  usersPanel.appendChild(header)
 
-  for (const user of online) {
-    const row = document.createElement('div')
-    const isMe = user.identityHex === myIdentityHex
-    Object.assign(row.style, {
-      display: 'flex',
-      alignItems: 'center',
-      gap: '6px',
-      padding: '3px 0',
-      cursor: isMe ? 'pointer' : 'default',
-    } as Partial<CSSStyleDeclaration>)
+  if (signature === lastPresenceSignature) return
+  lastPresenceSignature = signature
 
+  presenceStrip.style.display = 'flex'
+  presenceStrip.innerHTML = ''
+
+  for (const user of others) {
     const avatar = document.createElement('span')
-    const avatarColor = initialsColor(user.displayName)
     Object.assign(avatar.style, {
       width: '20px',
       height: '20px',
       borderRadius: '50%',
-      background: avatarColor,
+      background: initialsColor(user.displayName),
       display: 'inline-flex',
       alignItems: 'center',
       justifyContent: 'center',
@@ -265,38 +580,49 @@ function updateUsersPanel(users: ConnectedUser[]): void {
       color: '#fff',
       flexShrink: '0',
       letterSpacing: '0.02em',
+      border: '1px solid #ffffff30',
+      userSelect: 'none',
     } as Partial<CSSStyleDeclaration>)
     avatar.textContent = getInitials(user.displayName)
-    row.appendChild(avatar)
+    avatar.title = `${user.displayName} (${user.role.toUpperCase()})`
+    presenceStrip.appendChild(avatar)
+  }
 
-    const name = document.createElement('span')
-    name.textContent = user.displayName + (isMe ? ' (you)' : '')
-    name.style.overflow = 'hidden'
-    name.style.textOverflow = 'ellipsis'
-    name.style.whiteSpace = 'nowrap'
-    row.appendChild(name)
-
-    const roleBadge = document.createElement('span')
-    roleBadge.textContent = user.role.toUpperCase()
-    Object.assign(roleBadge.style, {
-      marginLeft: 'auto',
-      fontSize: '8px',
-      padding: '1px 4px',
-      borderRadius: '3px',
-      background: user.role === 'gm' ? '#ff886633' : '#8ff7bf33',
-      color: user.role === 'gm' ? '#ff8866' : '#8ff7bf',
-      fontWeight: 'bold',
-      flexShrink: '0',
-    } as Partial<CSSStyleDeclaration>)
-    row.appendChild(roleBadge)
-
-    if (isMe) {
-      row.addEventListener('click', () => {
-        showIdentityDialog(user.displayName, false)
-      })
+  const myAvatarButton = document.createElement('button')
+  myAvatarButton.type = 'button'
+  Object.assign(myAvatarButton.style, {
+    width: '34px',
+    height: '34px',
+    borderRadius: '50%',
+    background: initialsColor(me.displayName),
+    border: '2px solid #ffffff40',
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    fontSize: '12px',
+    fontWeight: '700',
+    color: '#fff',
+    flexShrink: '0',
+    letterSpacing: '0.02em',
+    cursor: 'pointer',
+    boxShadow: '0 2px 8px rgba(0,0,0,0.35)',
+    padding: '0',
+  } as Partial<CSSStyleDeclaration>)
+  myAvatarButton.textContent = getInitials(me.displayName)
+  myAvatarButton.title = 'Account menu'
+  myAvatarButton.setAttribute('aria-label', 'Open account menu')
+  myAvatarButton.addEventListener('click', (event) => {
+    event.stopPropagation()
+    if (accountMenuOpen) {
+      closeAccountMenu()
+      return
     }
+    openAccountMenu(me)
+  })
+  presenceStrip.appendChild(myAvatarButton)
 
-    usersPanel.appendChild(row)
+  if (accountMenuOpen) {
+    openAccountMenu(me)
   }
 }
 
@@ -419,20 +745,24 @@ app.innerHTML = `
     <button type="button" class="category-btn" data-category="adventuring-equipment">Adventuring</button>
     <button type="button" class="category-btn category-btn-all" data-category="">All</button>
   </div>
-  <button id="left-drawer-toggle" class="left-drawer-toggle" aria-label="Open palette">Palette</button>
-  <div id="left-drawer" class="left-drawer">
-    <div class="left-drawer-header">
-      <h2>Palette</h2>
-      <button id="left-drawer-close" class="drawer-close" aria-label="Close palette">&times;</button>
+  <!-- Palette UI is intentionally disabled for now.
+       It is not fully implemented yet and can cause broken interactions. -->
+  <!--
+    <button id="left-drawer-toggle" class="left-drawer-toggle" aria-label="Open palette">Palette</button>
+    <div id="left-drawer" class="left-drawer">
+      <div class="left-drawer-header">
+        <h2>Palette</h2>
+        <button id="left-drawer-close" class="drawer-close" aria-label="Close palette">&times;</button>
+      </div>
+      <div class="left-drawer-body">
+        <section class="tool-panel">
+          <label class="tool-label">Drawing Tools</label>
+          <button id="tool-text" class="palette-tool-btn" type="button">Text</button>
+          <div class="palette-help">Choose Text, then click on the canvas to place a label.</div>
+        </section>
+      </div>
     </div>
-    <div class="left-drawer-body">
-      <section class="tool-panel">
-        <label class="tool-label">Drawing Tools</label>
-        <button id="tool-text" class="palette-tool-btn" type="button">Text</button>
-        <div class="palette-help">Choose Text, then click on the canvas to place a label.</div>
-      </section>
-    </div>
-  </div>
+  -->
   <div id="canvas-host">
     <div id="loading-overlay" style="position:absolute;inset:0;z-index:100;display:flex;align-items:center;justify-content:center;background:#10161f">
       <div style="text-align:center;color:#8899aa;font-family:monospace">
@@ -518,10 +848,10 @@ app.innerHTML = `
 `
 
 const canvasHost = document.querySelector<HTMLElement>('#canvas-host')!
-const leftDrawerEl = document.querySelector<HTMLElement>('#left-drawer')!
-const leftDrawerToggle = document.querySelector<HTMLElement>('#left-drawer-toggle')!
-const leftDrawerClose = document.querySelector<HTMLElement>('#left-drawer-close')!
-const toolTextBtnEl = document.querySelector<HTMLButtonElement>('#tool-text')!
+const leftDrawerEl = document.querySelector<HTMLElement>('#left-drawer')
+const leftDrawerToggle = document.querySelector<HTMLElement>('#left-drawer-toggle')
+const leftDrawerClose = document.querySelector<HTMLElement>('#left-drawer-close')
+const toolTextBtnEl = document.querySelector<HTMLButtonElement>('#tool-text')
 const drawerEl = document.querySelector<HTMLElement>('#drawer')!
 const drawerToggle = document.querySelector<HTMLElement>('#drawer-toggle')!
 const drawerClose = document.querySelector<HTMLElement>('#drawer-close')!
@@ -530,8 +860,8 @@ const parseResultsEl = document.querySelector<HTMLElement>('#parse-results')!
 
 drawerToggle.addEventListener('click', () => drawerEl.classList.toggle('open'))
 drawerClose.addEventListener('click', () => drawerEl.classList.remove('open'))
-leftDrawerToggle.addEventListener('click', () => leftDrawerEl.classList.toggle('open'))
-leftDrawerClose.addEventListener('click', () => leftDrawerEl.classList.remove('open'))
+leftDrawerToggle?.addEventListener('click', () => leftDrawerEl?.classList.toggle('open'))
+leftDrawerClose?.addEventListener('click', () => leftDrawerEl?.classList.remove('open'))
 
 const categoryBar = document.querySelector<HTMLElement>('#category-bar')!
 categoryBar.querySelectorAll<HTMLButtonElement>('.category-btn').forEach((btn) => {
@@ -555,7 +885,7 @@ const postToWorker = (message: MainToWorkerMessage): void => {
 
 let currentScene: SceneVM | null = null
 const renderCanvasToolUI = (): void => {
-  toolTextBtnEl.classList.toggle('active', activeCanvasTool === 'text')
+  toolTextBtnEl?.classList.toggle('active', activeCanvasTool === 'text')
   canvasHost.classList.toggle('tool-text-mode', activeCanvasTool === 'text')
 }
 
@@ -657,6 +987,9 @@ const showContextMenu = (
     const submenuId = 'ctx-wield-sub'
     html += `<div class="context-menu-submenu-wrap"><div class="context-menu-submenu-trigger" data-submenu="${submenuId}">Wield</div><div id="${submenuId}" class="context-menu-submenu">${wieldItems.join('')}</div></div>`
   }
+  if (!segment.locked) {
+    html += `<button class="context-menu-item" data-action="item-editor" type="button">Item editor</button>`
+  }
   html += `<button class="context-menu-item" data-action="duplicate" type="button">Duplicate</button>`
   html += `<button class="context-menu-item context-menu-item-danger" data-action="delete" type="button">Delete</button>`
 
@@ -720,6 +1053,9 @@ const showContextMenu = (
           type: 'INTENT',
           intent: { type: 'DUPLICATE_ENTRY', segmentIds: effectiveSegmentIds },
         })
+      } else if (action === 'item-editor') {
+        const targetSegment = resolveSceneSegment(segmentId)
+        if (targetSegment) showItemEditorDialog(targetSegment)
       } else if (action === 'delete') {
         postToWorker({
           type: 'INTENT',
@@ -1610,13 +1946,17 @@ labelDeleteBtnEl.addEventListener('click', () => {
   syncLabelEditor()
 })
 
-toolTextBtnEl.addEventListener('click', () => {
+toolTextBtnEl?.addEventListener('click', () => {
   activeCanvasTool = activeCanvasTool === 'text' ? 'select' : 'text'
   renderCanvasToolUI()
 })
 
 window.addEventListener('keydown', (event) => {
   if (event.key === 'Escape') {
+    if (accountMenuOpen) {
+      closeAccountMenu()
+      return
+    }
     if (pixiAdapter.isMarqueeActive()) {
       event.preventDefault()
       pixiAdapter.cancelMarquee()
@@ -1633,6 +1973,15 @@ window.addEventListener('keydown', (event) => {
       type: 'INTENT',
       intent: { type: 'DELETE_ENTRY', segmentIds: currentScene.selectedSegmentIds },
     })
+    return
+  }
+  if ((event.key === 'Delete' || event.key === 'Backspace') && selectedLabelId) {
+    const active = document.activeElement
+    if (active?.tagName === 'INPUT' || active?.tagName === 'TEXTAREA') return
+    event.preventDefault()
+    postToWorker({ type: 'INTENT', intent: { type: 'DELETE_LABEL', labelId: selectedLabelId } })
+    selectedLabelId = null
+    syncLabelEditor()
   }
 })
 
