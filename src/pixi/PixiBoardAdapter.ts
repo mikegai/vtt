@@ -2345,13 +2345,30 @@ export class PixiBoardAdapter {
     if (!originNode) return selection
     const nodePos = this.getNodeDisplayPosition(originNode)
     const layoutCols = this.getNodeLayoutCols(originNode)
-    const pillStripHeight = this.getNodePillStripHeight(originNode)
+    const view = this.nodeViews.get(origin.nodeId)
     for (const segment of originNode.segments) {
       if (segment.isDropPreview) continue
-      const b = segmentBoundsInNodeLocal(segment, layoutCols, pillStripHeight)
-      const x = nodePos.x + b.x
-      const y = nodePos.y + b.y
-      if (intersects(x, y, b.w, b.h)) selection.segmentIds.push(segment.id)
+      const segView = view?.segmentViews.get(segment.id)
+      let x: number, y: number, w: number, h: number
+      if (segment.isWornPill) {
+        if (!segView) continue
+        x = nodePos.x + segView.container.position.x
+        y = nodePos.y + segView.container.position.y
+        w = pillLabelWidth(segment.fullLabel)
+        h = WORN_PILL_H
+      } else {
+        const unshiftedPos = segmentPositionInNode(segment, layoutCols)
+        const bounds = segmentBoundsInNodeLocal(segment, layoutCols)
+        const intraX = bounds.x - unshiftedPos.x
+        const intraY = bounds.y - unshiftedPos.y
+        const containerX = segView ? segView.container.position.x : unshiftedPos.x
+        const containerY = segView ? segView.container.position.y : (unshiftedPos.y + this.getNodePillStripHeight(originNode))
+        x = nodePos.x + containerX + intraX
+        y = nodePos.y + containerY + intraY
+        w = bounds.w
+        h = bounds.h
+      }
+      if (intersects(x, y, w, h)) selection.segmentIds.push(segment.id)
     }
     return selection
   }
