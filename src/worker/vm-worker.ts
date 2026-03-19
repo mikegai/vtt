@@ -1612,18 +1612,23 @@ const applyIntent = (intent: WorkerIntent): void => {
       shouldDropToGround = true
     }
 
+    const preferredZone = intent.wornClothing ? 'worn' : (intent.zoneHint ?? 'stowed')
+    const preferredState = intent.wornClothing ? { worn: true as const } : undefined
+
     const createdEntryIds: string[] = []
     for (let i = 0; i < quantity; i++) {
       const entryId = createInventoryEntryId(worldState, intent.itemDefId, i)
       createdEntryIds.push(entryId)
+      const zone = shouldDropToGround ? 'dropped' : preferredZone
+      const state = shouldDropToGround ? { dropped: true } : preferredState
       const nextEntry: InventoryEntry = {
         id: entryId,
         actorId: targetActorId,
         itemDefId: intent.itemDefId,
         quantity: 1,
-        zone: shouldDropToGround ? 'dropped' : 'stowed',
+        zone,
         carryGroupId: targetCarryGroupId,
-        state: shouldDropToGround ? { dropped: true } : undefined,
+        state,
       }
       worldState = {
         ...worldState,
@@ -1656,6 +1661,22 @@ const applyIntent = (intent: WorkerIntent): void => {
     }
 
     recompute()
+    return
+  }
+
+  if (intent.type === 'APPLY_ADD_ITEMS_OP') {
+    runIntentBatch(intent.items.map((item) => ({
+      type: 'SPAWN_ITEM_INSTANCE' as const,
+      itemDefId: item.itemDefId,
+      quantity: item.quantity,
+      targetNodeId: intent.targetNodeId,
+      itemName: item.itemName,
+      sixthsPerUnit: item.sixthsPerUnit,
+      itemKind: item.itemKind,
+      armorClass: item.armorClass,
+      wornClothing: item.wornClothing,
+      zoneHint: item.zoneHint,
+    })))
     return
   }
 

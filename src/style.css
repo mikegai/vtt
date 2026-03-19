@@ -709,3 +709,73 @@ html, body {
 #identity-dialog button:hover {
   filter: brightness(1.1);
 }
+
+#add-items-dialog {
+  inset: 0;
+  margin: auto;
+}
+
+#add-items-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.62);
+  backdrop-filter: blur(4px);
+}
+
+.add-items-form {
+  padding: 14px;
+}
+
+.add-items-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.add-items-title {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.add-items-subtitle {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.add-items-actions {
+  display: flex;
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.add-items-actions-end {
+  justify-content: flex-end;
+}
+
+.add-items-input,
+.add-items-json {
+  width: 100%;
+}
+
+.add-items-status {
+  margin: 8px 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.add-items-status-ok {
+  color: #7de58f;
+}
+
+.add-items-status-warn {
+  color: #f4c477;
+}
+
+.add-items-status-error {
+  color: #ff8686;
+}
+
+.add-items-results {
+  max-height: 260px;
+  overflow: auto;
+}

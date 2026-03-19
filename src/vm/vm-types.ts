@@ -26,6 +26,8 @@ export type SegmentVM = {
   readonly tooltip: TooltipVM
   /** When true, contiguous same-type segments may be visually merged. Fallback: sizeSixths <= 1. */
   readonly isFungibleVisual?: boolean
+  /** Visual-only non-encumbering worn clothing rendered as pill strip under node. */
+  readonly isWornPill?: boolean
 }
 
 export type StoneSlotVM = {

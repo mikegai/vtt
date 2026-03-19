@@ -42,6 +42,7 @@ const STONE_ROW_GAP = 3
 const SLOT_START_X = 10
 const TOP_BAND_H = 34
 const NODE_BOTTOM_PADDING = 6
+const WORN_PILL_STRIP_H = 18
 
 const meterWidthForCols = (slotCols: number): number =>
   Math.max(1, slotCols) * (STONE_W + STONE_GAP) - STONE_GAP
@@ -350,6 +351,48 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
       : null
     const parentNodeId = row.parentActorId
 
+    const mappedSegments = row.segments.map((segment) => {
+      const entryId = segmentIdToEntryId(segment.id)
+      const entry = worldState.inventoryEntries[entryId]
+      const prototype = worldState.itemDefinitions[segment.itemDefId]
+      const overridePrototypeId = parseInstanceOverrideBaseId(entryId, segment.itemDefId) ?? undefined
+      return {
+        id: segment.id,
+        shortLabel: segment.labels.short,
+        mediumLabel: segment.labels.medium,
+        fullLabel: segment.labels.full,
+        startSixth: segment.startSixth,
+        sizeSixths: segment.sizeSixths,
+        isOverflow: segment.isOverflow,
+        isDropPreview: dropIntent != null && movedSegmentIds.has(segment.id) && row.id === dropIntent.targetNodeId && dropIntent.sourceNodeIds[segment.id] !== dropIntent.targetNodeId,
+        itemDefId: segment.itemDefId,
+        entryId,
+        quantity: entry?.quantity ?? segment.quantity,
+        zone: entry?.zone ?? segment.zone,
+        state: entry?.state ?? segment.state,
+        ...(prototype
+          ? {
+              prototype: {
+                id: prototype.id,
+                canonicalName: prototype.canonicalName,
+                kind: prototype.kind,
+                sixthsPerUnit: prototype.sixthsPerUnit,
+                armorClass: prototype.armorClass,
+                priceInGp: prototype.priceInGp,
+                isFungibleVisual: prototype.isFungibleVisual,
+              },
+            }
+          : {}),
+        ...(overridePrototypeId ? { overridePrototypeId } : {}),
+        category: segment.category,
+        wield: segment.state?.wield,
+        tooltip: segment.tooltip,
+        ...(segment.isFungibleVisual != null && { isFungibleVisual: segment.isFungibleVisual }),
+        ...(segment.isWornPill ? { isWornPill: true } : {}),
+      }
+    })
+    const hasWornPills = mappedSegments.some((segment) => segment.isWornPill)
+
     nodes[row.id] = {
       id: row.id,
       rowId: row.id,
@@ -361,7 +404,7 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
       x: 0,
       y: 0,
       width: nodeWidthForCols(slotCols),
-      height: nodeHeightForRows(slotRows),
+      height: nodeHeightForRows(slotRows) + (hasWornPills ? WORN_PILL_STRIP_H : 0),
       speedFeet: row.speed.explorationFeet,
       speedBand: row.speedBand.band,
       fixedGreenStoneSlots: clampedGreenSlots,
@@ -372,45 +415,7 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
       usedSixths: row.encumbranceSixths,
       usedStoneText: row.summary.usedStoneText,
       capacityStoneText: row.summary.capacityStoneText,
-      segments: row.segments.map((segment) => {
-        const entryId = segmentIdToEntryId(segment.id)
-        const entry = worldState.inventoryEntries[entryId]
-        const prototype = worldState.itemDefinitions[segment.itemDefId]
-        const overridePrototypeId = parseInstanceOverrideBaseId(entryId, segment.itemDefId) ?? undefined
-        return {
-          id: segment.id,
-          shortLabel: segment.labels.short,
-          mediumLabel: segment.labels.medium,
-          fullLabel: segment.labels.full,
-          startSixth: segment.startSixth,
-          sizeSixths: segment.sizeSixths,
-          isOverflow: segment.isOverflow,
-          isDropPreview: dropIntent != null && movedSegmentIds.has(segment.id) && row.id === dropIntent.targetNodeId && dropIntent.sourceNodeIds[segment.id] !== dropIntent.targetNodeId,
-          itemDefId: segment.itemDefId,
-          entryId,
-          quantity: entry?.quantity ?? segment.quantity,
-          zone: entry?.zone ?? segment.zone,
-          state: entry?.state ?? segment.state,
-          ...(prototype
-            ? {
-                prototype: {
-                  id: prototype.id,
-                  canonicalName: prototype.canonicalName,
-                  kind: prototype.kind,
-                  sixthsPerUnit: prototype.sixthsPerUnit,
-                  armorClass: prototype.armorClass,
-                  priceInGp: prototype.priceInGp,
-                  isFungibleVisual: prototype.isFungibleVisual,
-                },
-              }
-            : {}),
-          ...(overridePrototypeId ? { overridePrototypeId } : {}),
-          category: segment.category,
-          wield: segment.state?.wield,
-          tooltip: segment.tooltip,
-          ...(segment.isFungibleVisual != null && { isFungibleVisual: segment.isFungibleVisual }),
-        }
-      }),
+      segments: mappedSegments,
     }
 
     if (groupId && groupTitle) {
@@ -432,6 +437,7 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
     const targetNode = nodes[targetNodeId]
     if (!containedNode || !targetNode) continue
     const nextStartSixth = targetNode.segments.reduce((max, segment) => {
+      if (segment.isWornPill) return max
       return Math.max(max, segment.startSixth + segment.sizeSixths)
     }, 0)
     const sizeSixths = selfWeightStoneForActorKind(containedNode.actorKind) * SIXTHS_PER_STONE

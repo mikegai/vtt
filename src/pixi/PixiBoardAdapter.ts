@@ -230,6 +230,12 @@ const SIXTH_ROWS = 6
 const CELL_H = STONE_H / SIXTH_ROWS
 const TOP_BAND_H = 22
 const NODE_BOTTOM_PADDING = 6
+const WORN_PILL_H = CELL_H
+const WORN_PILL_ROW_GAP = 2
+const WORN_PILL_MIN_W = 56
+const WORN_PILL_HPAD = 10
+const WORN_PILL_STRIP_PAD_TOP = 4
+const WORN_PILL_STRIP_PAD_BOTTOM = 5
 const SLOT_START_X = 10
 const DEFAULT_STONES_PER_ROW = 25
 const STONE_ROW_GAP = 3
@@ -570,6 +576,33 @@ const segmentPositionInNode = (segment: SceneSegmentVM, stonesPerRowOverride = s
   return {
     x: SLOT_START_X + minX,
     y: TOP_BAND_H + minY,
+  }
+}
+
+const slotSegmentsOnly = (segments: readonly SceneSegmentVM[]): readonly SceneSegmentVM[] =>
+  segments.filter((segment) => !segment.isWornPill)
+
+const wornPillSegmentsOnly = (segments: readonly SceneSegmentVM[]): readonly SceneSegmentVM[] =>
+  segments.filter((segment) => segment.isWornPill)
+
+const wornPillStripHeight = (segments: readonly SceneSegmentVM[]): number => {
+  const count = wornPillSegmentsOnly(segments).length
+  if (count <= 0) return 0
+  return WORN_PILL_STRIP_PAD_TOP + WORN_PILL_H + WORN_PILL_STRIP_PAD_BOTTOM
+}
+
+const wornPillPositionInNode = (
+  index: number,
+  totalWidth: number,
+): { x: number; y: number } => {
+  const usableWidth = Math.max(140, totalWidth - SLOT_START_X - 16)
+  const pillWidth = 72
+  const cols = Math.max(1, Math.floor(usableWidth / (pillWidth + 6)))
+  const col = index % cols
+  const row = Math.floor(index / cols)
+  return {
+    x: SLOT_START_X + col * (pillWidth + 6),
+    y: TOP_BAND_H + WORN_PILL_STRIP_PAD_TOP + row * (WORN_PILL_H + WORN_PILL_ROW_GAP),
   }
 }
 
@@ -3366,14 +3399,19 @@ export class PixiBoardAdapter {
     positionSpring.targetY = displayPos.y
 
     const slotCount = node.slotCount
+    const slotSegments = slotSegmentsOnly(node.segments)
+    const wornPills = wornPillSegmentsOnly(node.segments)
     const isExpanded = this.isNodeExpanded(node.id)
     const visibleSlotCount = isExpanded
       ? Math.max(slotCount, node.slotCols * node.slotRows)
-      : collapsedVisibleSlotCount(node.segments, slotCount)
+      : collapsedVisibleSlotCount(slotSegments, slotCount)
     const layoutCols = this.getNodeLayoutCols(node)
     const totalMeterWidth = meterWidthForCols(layoutCols)
     const totalWidth = SLOT_START_X + totalMeterWidth + 20
-    const totalHeight = TOP_BAND_H + (isExpanded ? slotAreaHeightForRows(node.slotRows) : slotAreaHeightForSlots(visibleSlotCount)) + NODE_BOTTOM_PADDING
+    const pillStripHeight = wornPillStripHeight(node.segments)
+    const slotStartY = TOP_BAND_H + pillStripHeight
+    const slotAreaHeight = isExpanded ? slotAreaHeightForRows(node.slotRows) : slotAreaHeightForSlots(visibleSlotCount)
+    const totalHeight = TOP_BAND_H + slotAreaHeight + NODE_BOTTOM_PADDING + pillStripHeight
     const totalSixths = totalSixthsForSlots(slotCount)
 
     let moveToRootBtn: Graphics | undefined
@@ -3551,7 +3589,7 @@ export class PixiBoardAdapter {
       contentContainer.addChild(compact)
     }
 
-    const occupiedSixths = occupiedSixthsFromSegments(node.segments, totalSixths)
+    const occupiedSixths = occupiedSixthsFromSegments(slotSegments, totalSixths)
 
     const slotFillLayer = new Graphics()
     const dimAlpha = tier === 'far' ? 0.1 : 0.14
@@ -3559,7 +3597,7 @@ export class PixiBoardAdapter {
     const slotColorFn = node.twoBandSlots ? twoBandSlotColor : fixedSlotBandColor
     for (let stone = 0; stone < visibleSlotCount; stone += 1) {
       const sx = SLOT_START_X + (stone % layoutCols) * (STONE_W + STONE_GAP)
-      const sy = TOP_BAND_H + Math.floor(stone / layoutCols) * (STONE_H + STONE_ROW_GAP)
+      const sy = slotStartY + Math.floor(stone / layoutCols) * (STONE_H + STONE_ROW_GAP)
       if (stone >= slotCount) {
         // Dead zone: visual grid cells beyond the node's actual allocated capacity
         for (let row = 0; row < SIXTH_ROWS; row += 1) {
@@ -3594,7 +3632,7 @@ export class PixiBoardAdapter {
     runVisualsContainer.eventMode = 'none'
     segmentContainer.addChild(runVisualsContainer)
 
-    const runs = groupContiguousSameType(node.segments)
+    const runs = groupContiguousSameType(slotSegments)
     const mergedIds = new Set(runs.filter((r) => r.length > 1).flatMap((r) => r.map((s) => s.id)))
 
     for (const run of runs) {
@@ -3609,7 +3647,7 @@ export class PixiBoardAdapter {
         runVisualsContainer,
         run,
         SLOT_START_X,
-        TOP_BAND_H,
+        slotStartY,
         color,
         alpha,
         tier,
@@ -3624,8 +3662,82 @@ export class PixiBoardAdapter {
     }
 
     const segmentViews = new Map<string, SegmentView>()
+    const drawWornPill = (
+      container: Container,
+      segment: SceneSegmentVM,
+      hovered: boolean,
+    ): void => {
+      const label = tier === 'far' ? segment.shortLabel : (tier === 'medium' ? segment.mediumLabel : segment.fullLabel)
+      const text = label.trim().length > 0 ? label : segment.fullLabel
+      const pillWidth = Math.max(WORN_PILL_MIN_W, text.length * 6 + WORN_PILL_HPAD * 2)
+      const body = new Graphics()
+      body.eventMode = 'none'
+      body.roundRect(0, 0, pillWidth, WORN_PILL_H, WORN_PILL_H / 2)
+      body.fill({ color: hovered ? 0x5cadee : 0x3d9ac9, alpha: 0.96 })
+      body.stroke({ width: 1, color: 0x8ed8ff, alpha: 0.95 })
+      container.addChild(body)
+      const textSprite = new BitmapText({
+        text,
+        style: { fill: '#e8f0ff', fontSize: 9, fontFamily: FONT_SEMIBOLD },
+      })
+      textSprite.eventMode = 'none'
+      textSprite.anchor.set(0, 0.5)
+      textSprite.scale.set(textCompensationScale)
+      textSprite.position.set(8, WORN_PILL_H / 2)
+      container.addChild(textSprite)
+      const hit = new Graphics()
+      hit.eventMode = 'static'
+      hit.cursor = 'pointer'
+      hit.roundRect(0, 0, pillWidth, WORN_PILL_H, WORN_PILL_H / 2)
+      hit.fill({ color: 0xffffff, alpha: 0.001 })
+      hit.on('pointerover', (event: any) => {
+        this.handlers.onHoverSegment(segment.id)
+        const canvasRect = this.app.canvas.getBoundingClientRect()
+        const clientX = typeof event.clientX === 'number' ? event.clientX : event.global.x + canvasRect.left
+        const clientY = typeof event.clientY === 'number' ? event.clientY : event.global.y + canvasRect.top
+        this.showTooltip(segment, clientX, clientY)
+      })
+      hit.on('pointermove', (event: any) => {
+        const canvasRect = this.app.canvas.getBoundingClientRect()
+        const clientX = typeof event.clientX === 'number' ? event.clientX : event.global.x + canvasRect.left
+        const clientY = typeof event.clientY === 'number' ? event.clientY : event.global.y + canvasRect.top
+        this.moveTooltip(clientX, clientY)
+      })
+      hit.on('pointerout', () => {
+        this.handlers.onHoverSegment(null)
+        this.hideTooltip()
+      })
+      hit.on('pointerdown', (event: any) => {
+        if (event.button !== 0) return
+        const canvasRect = this.app.canvas.getBoundingClientRect()
+        const clientX = typeof event.clientX === 'number' ? event.clientX : event.global.x + canvasRect.left
+        const clientY = typeof event.clientY === 'number' ? event.clientY : event.global.y + canvasRect.top
+        const addToSelection = !!(event.originalEvent?.shiftKey ?? event.shiftKey)
+        this.onSegmentPointerDown(segment, node.id, clientX, clientY, addToSelection)
+        event.stopPropagation()
+      })
+      hit.on('pointertap', (event: any) => {
+        if (event.button !== 0) return
+        const addToSelection = !!(event.originalEvent?.shiftKey ?? event.shiftKey)
+        if (this.shouldTreatAsDoubleTap(`segment:${segment.id}`)) {
+          this.handlers.onSegmentDoubleClick?.(segment.id, segment.itemDefId, node.id)
+        } else {
+          this.handlers.onSegmentClick?.(segment.id, node.id, addToSelection)
+        }
+        event.stopPropagation()
+      })
+      ;(hit as Container & { __segmentContext?: SegmentContext }).__segmentContext = { segmentId: segment.id, nodeId: node.id }
+      container.addChild(hit)
+    }
+
     node.segments.forEach((segment) => {
-      const pos = segmentPositionInNode(segment, layoutCols)
+      const pillIndex = segment.isWornPill ? wornPills.findIndex((pill) => pill.id === segment.id) : -1
+      const pos = segment.isWornPill
+        ? wornPillPositionInNode(Math.max(0, pillIndex), totalWidth)
+        : (() => {
+            const p = segmentPositionInNode(segment, layoutCols)
+            return { x: p.x, y: p.y + pillStripHeight }
+          })()
       const segContainer = new Container()
       segContainer.position.set(pos.x, pos.y)
       const spring = createSpring2D(pos.x, pos.y)
@@ -3633,32 +3745,36 @@ export class PixiBoardAdapter {
       spring.targetY = pos.y
       segmentViews.set(segment.id, { container: segContainer, spring })
       const hovered = segment.id === hoveredSegmentId
-      drawSegmentBlock(
-        segContainer,
-        segment,
-        tier,
-        this.zoom,
-        hovered,
-        this.handlers,
-        textCompensationScale,
-        this.minVisibleLabelPx,
-        this.maxVisibleLabelPx,
-        totalSixths,
-        (seg, x, y) => this.showTooltip(seg, x, y),
-        (x, y) => this.moveTooltip(x, y),
-        () => this.hideTooltip(),
-        node.id,
-        (seg, nodeId, x, y, addToSel) => this.onSegmentPointerDown(seg, nodeId, x, y, addToSel),
-        pos,
-        filterCategory,
-        selectedSegmentIds,
-        this.handlers.onSegmentClick,
-        this.handlers.onSegmentDoubleClick,
-        () => this.lastDragEndTime,
-        () => this.activeDrag.type === 'idle' || this.activeDrag.type === 'pendingSegment',
-        mergedIds.has(segment.id),
-        layoutCols,
-      )
+      if (segment.isWornPill) {
+        drawWornPill(segContainer, segment, hovered)
+      } else {
+        drawSegmentBlock(
+          segContainer,
+          segment,
+          tier,
+          this.zoom,
+          hovered,
+          this.handlers,
+          textCompensationScale,
+          this.minVisibleLabelPx,
+          this.maxVisibleLabelPx,
+          totalSixths,
+          (seg, x, y) => this.showTooltip(seg, x, y),
+          (x, y) => this.moveTooltip(x, y),
+          () => this.hideTooltip(),
+          node.id,
+          (seg, nodeId, x, y, addToSel) => this.onSegmentPointerDown(seg, nodeId, x, y, addToSel),
+          pos,
+          filterCategory,
+          selectedSegmentIds,
+          this.handlers.onSegmentClick,
+          this.handlers.onSegmentDoubleClick,
+          () => this.lastDragEndTime,
+          () => this.activeDrag.type === 'idle' || this.activeDrag.type === 'pendingSegment',
+          mergedIds.has(segment.id),
+          layoutCols,
+        )
+      }
       segmentContainer.addChild(segContainer)
     })
     contentContainer.addChild(segmentContainer)
@@ -3811,9 +3927,13 @@ export class PixiBoardAdapter {
     const textCompensationScale = getTextCompensationScale(this.zoom)
     const totalSixths = totalSixthsForSlots(node.slotCount)
     const layoutCols = this.getNodeLayoutCols(node)
+    const slotSegments = slotSegmentsOnly(node.segments)
+    const wornPills = wornPillSegmentsOnly(node.segments)
+    const pillStripHeight = wornPillStripHeight(node.segments)
+    const slotStartY = TOP_BAND_H + pillStripHeight
 
     view.runVisualsContainer.removeChildren()
-    const runs = groupContiguousSameType(node.segments)
+    const runs = groupContiguousSameType(slotSegments)
     const mergedIds = new Set(runs.filter((r) => r.length > 1).flatMap((r) => r.map((s) => s.id)))
     for (const run of runs) {
       if (run.length < 2) continue
@@ -3827,7 +3947,7 @@ export class PixiBoardAdapter {
         view.runVisualsContainer,
         run,
         SLOT_START_X,
-        TOP_BAND_H,
+        slotStartY,
         color,
         alpha,
         tier,
@@ -3840,6 +3960,69 @@ export class PixiBoardAdapter {
         layoutCols,
       )
     }
+    const drawWornPill = (container: Container, segment: SceneSegmentVM, hovered: boolean): void => {
+      const label = tier === 'far' ? segment.shortLabel : (tier === 'medium' ? segment.mediumLabel : segment.fullLabel)
+      const text = label.trim().length > 0 ? label : segment.fullLabel
+      const pillWidth = Math.max(WORN_PILL_MIN_W, text.length * 6 + WORN_PILL_HPAD * 2)
+      const body = new Graphics()
+      body.eventMode = 'none'
+      body.roundRect(0, 0, pillWidth, WORN_PILL_H, WORN_PILL_H / 2)
+      body.fill({ color: hovered ? 0x5cadee : 0x3d9ac9, alpha: 0.96 })
+      body.stroke({ width: 1, color: 0x8ed8ff, alpha: 0.95 })
+      container.addChild(body)
+      const textSprite = new BitmapText({
+        text,
+        style: { fill: '#e8f0ff', fontSize: 11, fontFamily: FONT_SEMIBOLD },
+      })
+      textSprite.eventMode = 'none'
+      textSprite.anchor.set(0, 0.5)
+      textSprite.scale.set(textCompensationScale)
+      textSprite.position.set(8, WORN_PILL_H / 2)
+      container.addChild(textSprite)
+      const hit = new Graphics()
+      hit.eventMode = 'static'
+      hit.cursor = 'pointer'
+      hit.roundRect(0, 0, pillWidth, WORN_PILL_H, WORN_PILL_H / 2)
+      hit.fill({ color: 0xffffff, alpha: 0.001 })
+      hit.on('pointerover', (event: any) => {
+        this.handlers.onHoverSegment(segment.id)
+        const canvasRect = this.app.canvas.getBoundingClientRect()
+        const clientX = typeof event.clientX === 'number' ? event.clientX : event.global.x + canvasRect.left
+        const clientY = typeof event.clientY === 'number' ? event.clientY : event.global.y + canvasRect.top
+        this.showTooltip(segment, clientX, clientY)
+      })
+      hit.on('pointermove', (event: any) => {
+        const canvasRect = this.app.canvas.getBoundingClientRect()
+        const clientX = typeof event.clientX === 'number' ? event.clientX : event.global.x + canvasRect.left
+        const clientY = typeof event.clientY === 'number' ? event.clientY : event.global.y + canvasRect.top
+        this.moveTooltip(clientX, clientY)
+      })
+      hit.on('pointerout', () => {
+        this.handlers.onHoverSegment(null)
+        this.hideTooltip()
+      })
+      hit.on('pointerdown', (event: any) => {
+        if (event.button !== 0) return
+        const canvasRect = this.app.canvas.getBoundingClientRect()
+        const clientX = typeof event.clientX === 'number' ? event.clientX : event.global.x + canvasRect.left
+        const clientY = typeof event.clientY === 'number' ? event.clientY : event.global.y + canvasRect.top
+        const addToSelection = !!(event.originalEvent?.shiftKey ?? event.shiftKey)
+        this.onSegmentPointerDown(segment, node.id, clientX, clientY, addToSelection)
+        event.stopPropagation()
+      })
+      hit.on('pointertap', (event: any) => {
+        if (event.button !== 0) return
+        const addToSelection = !!(event.originalEvent?.shiftKey ?? event.shiftKey)
+        if (this.shouldTreatAsDoubleTap(`segment:${segment.id}`)) {
+          this.handlers.onSegmentDoubleClick?.(segment.id, segment.itemDefId, node.id)
+        } else {
+          this.handlers.onSegmentClick?.(segment.id, node.id, addToSelection)
+        }
+        event.stopPropagation()
+      })
+      ;(hit as Container & { __segmentContext?: SegmentContext }).__segmentContext = { segmentId: segment.id, nodeId: node.id }
+      container.addChild(hit)
+    }
 
     const nextIds = new Set(node.segments.map((s) => s.id))
     for (const [id, segView] of view.segmentViews) {
@@ -3850,7 +4033,13 @@ export class PixiBoardAdapter {
       }
     }
     node.segments.forEach((segment) => {
-      const pos = segmentPositionInNode(segment, layoutCols)
+      const pillIndex = segment.isWornPill ? wornPills.findIndex((pill) => pill.id === segment.id) : -1
+      const pos = segment.isWornPill
+        ? wornPillPositionInNode(Math.max(0, pillIndex), view.totalWidth)
+        : (() => {
+            const p = segmentPositionInNode(segment, layoutCols)
+            return { x: p.x, y: p.y + pillStripHeight }
+          })()
       let segView = view.segmentViews.get(segment.id)
       if (!segView) {
         const segContainer = new Container()
@@ -3861,32 +4050,36 @@ export class PixiBoardAdapter {
         segView = { container: segContainer, spring }
         view.segmentViews.set(segment.id, segView)
         const hovered = segment.id === hoveredSegmentId
-        drawSegmentBlock(
-          segContainer,
-          segment,
-          tier,
-          this.zoom,
-          hovered,
-          this.handlers,
-          textCompensationScale,
-          this.minVisibleLabelPx,
-          this.maxVisibleLabelPx,
-          totalSixths,
-          (seg, x, y) => this.showTooltip(seg, x, y),
-          (x, y) => this.moveTooltip(x, y),
-          () => this.hideTooltip(),
-          node.id,
-          (seg, nodeId, x, y, addToSel) => this.onSegmentPointerDown(seg, nodeId, x, y, addToSel),
-          pos,
-          filterCategory,
-          selectedSegmentIds,
-          this.handlers.onSegmentClick,
-          this.handlers.onSegmentDoubleClick,
-          () => this.lastDragEndTime,
-          () => this.activeDrag.type === 'idle' || this.activeDrag.type === 'pendingSegment',
-          mergedIds.has(segment.id),
-          layoutCols,
-        )
+        if (segment.isWornPill) {
+          drawWornPill(segContainer, segment, hovered)
+        } else {
+          drawSegmentBlock(
+            segContainer,
+            segment,
+            tier,
+            this.zoom,
+            hovered,
+            this.handlers,
+            textCompensationScale,
+            this.minVisibleLabelPx,
+            this.maxVisibleLabelPx,
+            totalSixths,
+            (seg, x, y) => this.showTooltip(seg, x, y),
+            (x, y) => this.moveTooltip(x, y),
+            () => this.hideTooltip(),
+            node.id,
+            (seg, nodeId, x, y, addToSel) => this.onSegmentPointerDown(seg, nodeId, x, y, addToSel),
+            pos,
+            filterCategory,
+            selectedSegmentIds,
+            this.handlers.onSegmentClick,
+            this.handlers.onSegmentDoubleClick,
+            () => this.lastDragEndTime,
+            () => this.activeDrag.type === 'idle' || this.activeDrag.type === 'pendingSegment',
+            mergedIds.has(segment.id),
+            layoutCols,
+          )
+        }
         view.segmentContainer.addChild(segContainer)
       } else {
         setSpringTarget(segView.spring, pos.x, pos.y)
@@ -3902,32 +4095,36 @@ export class PixiBoardAdapter {
         }
         const hovered = segment.id === hoveredSegmentId
         segView.container.removeChildren()
-        drawSegmentBlock(
-          segView.container,
-          segment,
-          tier,
-          this.zoom,
-          hovered,
-          this.handlers,
-          textCompensationScale,
-          this.minVisibleLabelPx,
-          this.maxVisibleLabelPx,
-          totalSixths,
-          (seg, x, y) => this.showTooltip(seg, x, y),
-          (x, y) => this.moveTooltip(x, y),
-          () => this.hideTooltip(),
-          node.id,
-          (seg, nodeId, x, y, addToSel) => this.onSegmentPointerDown(seg, nodeId, x, y, addToSel),
-          pos,
-          filterCategory,
-          selectedSegmentIds,
-          this.handlers.onSegmentClick,
-          this.handlers.onSegmentDoubleClick,
-          () => this.lastDragEndTime,
-          () => this.activeDrag.type === 'idle' || this.activeDrag.type === 'pendingSegment',
-          mergedIds.has(segment.id),
-          layoutCols,
-        )
+        if (segment.isWornPill) {
+          drawWornPill(segView.container, segment, hovered)
+        } else {
+          drawSegmentBlock(
+            segView.container,
+            segment,
+            tier,
+            this.zoom,
+            hovered,
+            this.handlers,
+            textCompensationScale,
+            this.minVisibleLabelPx,
+            this.maxVisibleLabelPx,
+            totalSixths,
+            (seg, x, y) => this.showTooltip(seg, x, y),
+            (x, y) => this.moveTooltip(x, y),
+            () => this.hideTooltip(),
+            node.id,
+            (seg, nodeId, x, y, addToSel) => this.onSegmentPointerDown(seg, nodeId, x, y, addToSel),
+            pos,
+            filterCategory,
+            selectedSegmentIds,
+            this.handlers.onSegmentClick,
+            this.handlers.onSegmentDoubleClick,
+            () => this.lastDragEndTime,
+            () => this.activeDrag.type === 'idle' || this.activeDrag.type === 'pendingSegment',
+            mergedIds.has(segment.id),
+            layoutCols,
+          )
+        }
       }
     })
   }
@@ -4954,7 +5151,8 @@ export class PixiBoardAdapter {
 
   private getVisibleSlotCount(node: SceneNodeVM): number {
     const expanded = this.isNodeExpanded(node.id)
-    return expanded ? Math.max(node.slotCount, node.slotCols * node.slotRows) : collapsedVisibleSlotCount(node.segments, node.slotCount)
+    const slotSegments = slotSegmentsOnly(node.segments)
+    return expanded ? Math.max(node.slotCount, node.slotCols * node.slotRows) : collapsedVisibleSlotCount(slotSegments, node.slotCount)
   }
 
   private getNodeLayoutCols(node: SceneNodeVM): number {
@@ -4968,15 +5166,20 @@ export class PixiBoardAdapter {
     node: SceneNodeVM,
     expanded: boolean,
   ): { width: number; height: number } {
+    const slotSegments = slotSegmentsOnly(node.segments)
     const visibleSlotCount = expanded
       ? Math.max(node.slotCount, node.slotCols * node.slotRows)
-      : collapsedVisibleSlotCount(node.segments, node.slotCount)
+      : collapsedVisibleSlotCount(slotSegments, node.slotCount)
     const totalMeterWidth = expanded
       ? meterWidthForCols(node.slotCols)
       : meterWidthForSlots(visibleSlotCount)
     return {
       width: SLOT_START_X + totalMeterWidth + 20,
-      height: TOP_BAND_H + (expanded ? slotAreaHeightForRows(node.slotRows) : slotAreaHeightForSlots(visibleSlotCount)) + NODE_BOTTOM_PADDING,
+      height:
+        TOP_BAND_H +
+        (expanded ? slotAreaHeightForRows(node.slotRows) : slotAreaHeightForSlots(visibleSlotCount)) +
+        NODE_BOTTOM_PADDING +
+        wornPillStripHeight(node.segments),
     }
   }
 

@@ -1,16 +1,19 @@
 import './style.css'
 import { parseInventoryImportPlan } from './domain/inventory-import-plan'
 import { parseInventoryText } from './domain/inventory-text-parser'
+import { buildInventoryLlmPrompt } from './domain/inventory-llm-prompt'
+import { parseInventoryOpsDocument, type InventoryItemInput, type MutateAddItemsOp } from './domain/inventory-ops-schema'
 import { allSourceItems, itemSourceCatalog, type EncumbranceExpr, type SourceItem } from './domain/item-source-catalog'
 import { formatSixthsAsStone, stoneToSixths } from './domain/rules'
 import { createSourceItemSearchIndex } from './domain/item-source-search'
 import { getWieldOptions } from './domain/weapon-metadata'
 import { PixiBoardAdapter } from './pixi/PixiBoardAdapter'
 import { sampleState } from './sample-data'
-import type { ActorKind } from './domain/types'
+import type { ActorKind, CarryZone } from './domain/types'
 import type { ConnectedUser, MainToWorkerMessage, RemoteCursor, SceneSegmentVM, SceneVM, WorkerToMainMessage } from './worker/protocol'
 import type { ItemCategory } from './domain/item-category'
 import { canonicalPathForContext, contextFromPathname } from './spacetimedb/context'
+import { attachTooltip } from './tooltip'
 
 const app = document.querySelector<HTMLDivElement>('#app')
 if (!app) throw new Error('App root missing')
@@ -209,6 +212,21 @@ Object.assign(itemEditorDialog.style, {
   boxShadow: '0 20px 60px rgba(0,0,0,0.6)',
 } as Partial<CSSStyleDeclaration>)
 document.body.appendChild(itemEditorDialog)
+
+const addItemsDialog = document.createElement('dialog')
+addItemsDialog.id = 'add-items-dialog'
+Object.assign(addItemsDialog.style, {
+  border: '1px solid #334455',
+  borderRadius: '10px',
+  background: '#151e2b',
+  color: '#d0dae8',
+  padding: '0',
+  maxWidth: '760px',
+  width: '100%',
+  fontFamily: 'system-ui, -apple-system, sans-serif',
+  boxShadow: '0 20px 60px rgba(0,0,0,0.6)',
+} as Partial<CSSStyleDeclaration>)
+document.body.appendChild(addItemsDialog)
 
 function resolveSceneSegment(segmentId: string): SceneSegmentVM | null {
   if (currentScene) {
@@ -591,7 +609,7 @@ function updateUsersPanel(users: ConnectedUser[]): void {
       userSelect: 'none',
     } as Partial<CSSStyleDeclaration>)
     avatar.textContent = getInitials(user.displayName)
-    avatar.title = `${user.displayName} (${user.role.toUpperCase()})`
+    attachTooltip(avatar, `${user.displayName} (${user.role.toUpperCase()})`)
     presenceStrip.appendChild(avatar)
   }
 
@@ -616,7 +634,7 @@ function updateUsersPanel(users: ConnectedUser[]): void {
     padding: '0',
   } as Partial<CSSStyleDeclaration>)
   myAvatarButton.textContent = getInitials(me.displayName)
-  myAvatarButton.title = 'Account menu'
+  attachTooltip(myAvatarButton, 'Account menu')
   myAvatarButton.setAttribute('aria-label', 'Open account menu')
   myAvatarButton.addEventListener('click', (event) => {
     event.stopPropagation()
@@ -798,7 +816,7 @@ app.innerHTML = `
       </section>
 
       <section class="tool-panel">
-        <label for="parse-input" class="tool-label">Paste Inventory</label>
+        <label for="parse-input" class="tool-label">Paste Inventory (Deprecated)</label>
         <textarea id="parse-input" class="tool-textarea" rows="3" placeholder="2 sacks, 14 torches and 3 flasks of oil"></textarea>
         <div id="parse-results" class="parsed-list"></div>
       </section>
@@ -1122,8 +1140,10 @@ const showGroupContextMenu = (groupId: string, clientX: number, clientY: number)
 
 const showNodeContextMenu = (nodeId: string, clientX: number, clientY: number): void => {
   closeContextMenu()
+  const nodeTitle = currentScene?.nodes[nodeId]?.title ?? nodeId
 
   contextMenuEl.innerHTML = [
+    `<button class="context-menu-item" data-action="add-items" type="button">Add Items</button>`,
     `<button class="context-menu-item" data-action="duplicate-node" type="button">Duplicate Node</button>`,
     `<button class="context-menu-item context-menu-item-danger" data-action="delete-node" type="button">Delete Node</button>`,
   ].join('')
@@ -1139,7 +1159,9 @@ const showNodeContextMenu = (nodeId: string, clientX: number, clientY: number): 
     const b = btn as HTMLButtonElement
     b.addEventListener('click', (e) => {
       e.stopPropagation()
-      if (b.dataset.action === 'duplicate-node') {
+      if (b.dataset.action === 'add-items') {
+        showAddItemsDialog(nodeId, nodeTitle)
+      } else if (b.dataset.action === 'duplicate-node') {
         postToWorker({ type: 'INTENT', intent: { type: 'DUPLICATE_NODE', nodeId } })
       } else if (b.dataset.action === 'delete-node') {
         postToWorker({ type: 'INTENT', intent: { type: 'DELETE_NODE', nodeId } })
@@ -1231,6 +1253,13 @@ type ParsedSpawnItem = {
   sizeSixths: number
   sixthsPerUnit?: number
   alternatives: readonly { itemId: string; itemName: string }[]
+  wornClothing?: boolean
+  zoneHint?: CarryZone
+}
+
+type ParsedAddItemsRow = ParsedSpawnItem & {
+  opIndex: number
+  overrideKey: string
 }
 
 const sourceItemById = new Map(allSourceItems.map((item) => [item.id, item]))
@@ -1278,6 +1307,128 @@ let activeParsedDrag: {
   ghost: HTMLElement
   enteredCanvas: boolean
 } | null = null
+let addItemsTargetNodeId: string | null = null
+let addItemsRows: ParsedAddItemsRow[] = []
+let addItemsError: string | null = null
+let addItemsJson = ''
+let addItemsDescription = ''
+const addItemsDisambiguationOverrides: Record<string, string> = {}
+
+const normalizeRowKey = (opIndex: number, itemIndex: number, chunkIndex: number): string =>
+  `${opIndex}:${itemIndex}:${chunkIndex}`
+
+const resolveParsedItem = (
+  raw: string,
+  candidateName: string,
+  quantity: number,
+  confidence: number,
+  status: 'resolved' | 'ambiguous' | 'unknown',
+  resolvedItemId: string | undefined,
+  resolvedItemName: string | undefined,
+  alternatives: readonly { itemId: string; itemName: string }[],
+  overrideKey: string,
+  stoneOverride?: number,
+  wornClothing?: boolean,
+  zoneHint?: CarryZone,
+): ParsedSpawnItem => {
+  const override = addItemsDisambiguationOverrides[overrideKey]
+  const isCustom = override === CUSTOM_ITEM_ID
+  let customSlug = slugify(candidateName) || slugify(raw) || 'custom-item'
+  const resolvedStone = stoneOverride ?? (wornClothing ? 0 : undefined)
+  if (isCustom && resolvedStone != null) {
+    const sixths = Math.round(stoneToSixths(resolvedStone))
+    customSlug = `${customSlug}-${sixths}`
+  }
+  const customDefId = `custom:${customSlug}`
+
+  let itemDefId: string | null
+  let itemName: string
+  let perUnitSixths: number
+  let sixthsPerUnit: number | undefined
+
+  if (isCustom) {
+    itemDefId = customDefId
+    itemName = candidateName || raw || 'Custom item'
+    if (resolvedStone != null) {
+      perUnitSixths = Math.max(0, Math.round(stoneToSixths(resolvedStone)))
+    } else if (alternatives.length > 0) {
+      const best = sourceItemById.get(alternatives[0].itemId)
+      perUnitSixths = best ? perUnitSixthsFromSource(best) : 1
+    } else {
+      perUnitSixths = 1
+    }
+    sixthsPerUnit = perUnitSixths
+  } else {
+    itemDefId = override ?? resolvedItemId ?? null
+    itemName = override
+      ? (alternatives.find((a) => a.itemId === override)?.itemName ?? candidateName)
+      : (resolvedItemName ?? candidateName)
+    const sourceItem = itemDefId ? sourceItemById.get(itemDefId) : null
+    perUnitSixths = sourceItem
+      ? perUnitSixthsFromSource(sourceItem)
+      : Math.max(0, Math.round(stoneToSixths(resolvedStone ?? 1 / 6)))
+  }
+
+  return {
+    id: overrideKey,
+    raw,
+    status: override ? 'resolved' : status,
+    confidence,
+    quantity: Math.max(1, quantity),
+    itemDefId,
+    itemName,
+    sizeSixths: Math.max(0, perUnitSixths * Math.max(1, quantity)),
+    ...(sixthsPerUnit != null && { sixthsPerUnit }),
+    alternatives,
+    ...(wornClothing ? { wornClothing: true } : {}),
+    ...(zoneHint ? { zoneHint } : {}),
+  }
+}
+
+const parseAddItemsRowsFromJson = (jsonText: string): { rows: ParsedAddItemsRow[]; error: string | null; ops: readonly MutateAddItemsOp[] } => {
+  if (jsonText.trim().length === 0) return { rows: [], error: null, ops: [] }
+  let parsedRaw: unknown
+  try {
+    parsedRaw = JSON.parse(jsonText)
+  } catch {
+    return { rows: [], error: 'Invalid JSON', ops: [] }
+  }
+
+  const parsed = parseInventoryOpsDocument(parsedRaw)
+  if (!parsed.ok) return { rows: [], error: parsed.error, ops: [] }
+  const addOps = parsed.value.ops.filter((op): op is MutateAddItemsOp => op.op === 'mutate.add-items')
+  if (addOps.length === 0) return { rows: [], error: 'No mutate.add-items operation found', ops: [] }
+
+  const rows: ParsedAddItemsRow[] = []
+  addOps.forEach((op, opIndex) => {
+    op.items.forEach((item: InventoryItemInput, itemIndex: number) => {
+      const parsedBatch = parseInventoryText(item.text, sourceItemSearch)
+      parsedBatch.chunks.forEach((chunk, chunkIndex) => {
+        const rowKey = normalizeRowKey(opIndex, itemIndex, chunkIndex)
+        const resolved = resolveParsedItem(
+          chunk.raw,
+          chunk.candidateName,
+          (item.quantity ?? 1) * chunk.quantity,
+          chunk.confidence,
+          chunk.status,
+          chunk.resolvedItemId,
+          chunk.resolvedItemName,
+          chunk.alternatives.map((a) => ({ itemId: a.itemId, itemName: a.itemName })),
+          rowKey,
+          item.encumbranceStone ?? chunk.stoneOverride,
+          item.wornClothing,
+          item.zoneHint,
+        )
+        rows.push({
+          ...resolved,
+          opIndex,
+          overrideKey: rowKey,
+        })
+      })
+    })
+  })
+  return { rows, error: null, ops: addOps }
+}
 
 type ActiveInlineTitleEditor = {
   readonly input: HTMLInputElement
@@ -1510,7 +1661,7 @@ const pixiAdapter = new PixiBoardAdapter(canvasHost, {
     const sourceItem = item.itemDefId.startsWith('custom:') ? null : sourceItemById.get(item.itemDefId)
     const derived = sourceItem
       ? deriveItemKind(sourceItem)
-      : { kind: 'standard' as const, sixthsPerUnit: item.sixthsPerUnit ?? SIXTHS_PER_STONE }
+      : { kind: 'standard' as const, sixthsPerUnit: item.sixthsPerUnit ?? 1 }
     const segmentIds = freeSegmentPositions
       ? Array.from({ length: item.quantity }, (_, i) => `ext-${item.id}-${i}`)
       : undefined
@@ -1702,9 +1853,9 @@ const renderParsed = (text: string): void => {
         perUnitSixths = Math.max(1, Math.round(stoneToSixths(c.stoneOverride)))
       } else if (c.alternatives.length > 0) {
         const best = sourceItemById.get(c.alternatives[0].itemId)
-        perUnitSixths = best ? perUnitSixthsFromSource(best) : SIXTHS_PER_STONE
+        perUnitSixths = best ? perUnitSixthsFromSource(best) : 1
       } else {
-        perUnitSixths = SIXTHS_PER_STONE
+        perUnitSixths = 1
       }
       sixthsPerUnit = perUnitSixths
     } else {
@@ -1765,6 +1916,186 @@ const escapeHtml = (s: string): string =>
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
+
+const renderAddItemsRows = (): void => {
+  const rowsEl = addItemsDialog.querySelector<HTMLElement>('#add-items-match-results')
+  const statusEl = addItemsDialog.querySelector<HTMLElement>('#add-items-status')
+  const applyBtn = addItemsDialog.querySelector<HTMLButtonElement>('#add-items-apply')
+  if (!rowsEl || !statusEl || !applyBtn) return
+
+  if (addItemsError) {
+    statusEl.textContent = addItemsError
+    statusEl.className = 'add-items-status add-items-status-error'
+    rowsEl.innerHTML = ''
+    applyBtn.disabled = true
+    return
+  }
+
+  if (addItemsRows.length === 0) {
+    statusEl.textContent = 'Paste JSON output to validate and resolve item matches.'
+    statusEl.className = 'add-items-status'
+    rowsEl.innerHTML = ''
+    applyBtn.disabled = true
+    return
+  }
+
+  const unresolved = addItemsRows.filter((row) => !row.itemDefId).length
+  const ambiguous = addItemsRows.filter((row) => row.status !== 'resolved').length
+  statusEl.textContent = `${addItemsRows.length} rows • ${unresolved} unresolved • ${ambiguous} ambiguous`
+  statusEl.className = unresolved > 0 || ambiguous > 0 ? 'add-items-status add-items-status-warn' : 'add-items-status add-items-status-ok'
+
+  rowsEl.innerHTML = addItemsRows
+    .map((row) => {
+      const catalogPills = row.alternatives
+        .map(
+          (a) =>
+            `<button class="alt-pill ${a.itemId === row.itemDefId ? 'alt-pill-selected' : ''}" data-add-items-key="${escapeAttr(row.overrideKey)}" data-item-id="${escapeHtml(a.itemId)}" type="button">${escapeHtml(a.itemName)}</button>`,
+        )
+        .join('')
+      const customPill = `<button class="alt-pill ${row.itemDefId?.startsWith('custom:') ? 'alt-pill-selected' : ''}" data-add-items-key="${escapeAttr(row.overrideKey)}" data-item-id="${escapeHtml(CUSTOM_ITEM_ID)}" type="button">As-is</button>`
+      const wornTag = row.wornClothing ? `<span class="parsed-qty">worn clothing</span>` : ''
+      return `<div class="parsed-item status-${row.status}" data-add-items-row="${escapeAttr(row.overrideKey)}">
+        <div class="parsed-head">
+          <span class="parsed-status">${row.status}</span>
+          <span class="parsed-qty">qty ${row.quantity}</span>
+          ${wornTag}
+          <span class="parsed-conf">${Math.round(row.confidence * 100)}%</span>
+        </div>
+        <div class="parsed-text">${escapeHtml(row.raw)}</div>
+        <div class="parsed-candidate">
+          <span class="parsed-display-name">${escapeHtml(row.itemName)}</span>
+          <div class="alt-pills">${catalogPills}${customPill}</div>
+        </div>
+      </div>`
+    })
+    .join('')
+
+  applyBtn.disabled = unresolved > 0 || ambiguous > 0
+}
+
+const applyAddItemsRowsToNode = (rows: readonly ParsedAddItemsRow[], mode: 'auto' | 'manual'): void => {
+  if (!addItemsTargetNodeId) return
+  const spawnRows = rows.filter((row) => row.itemDefId)
+  const items = spawnRows.map((row) => {
+    const wornCustomId = `custom:worn-${slugify(row.itemName || row.raw || row.id)}`
+    if (row.wornClothing) {
+      return {
+        itemDefId: wornCustomId,
+        itemName: row.itemName,
+        quantity: row.quantity,
+        sixthsPerUnit: 0,
+        itemKind: 'standard',
+        armorClass: undefined,
+        wornClothing: true,
+        zoneHint: 'worn' as const,
+      }
+    }
+    const sourceItem = row.itemDefId && !row.itemDefId.startsWith('custom:') ? sourceItemById.get(row.itemDefId) : null
+    const derived = sourceItem ? deriveItemKind(sourceItem) : { kind: 'standard', sixthsPerUnit: row.sixthsPerUnit ?? 1 }
+    return {
+      itemDefId: row.itemDefId!,
+      itemName: row.itemName,
+      quantity: row.quantity,
+      sixthsPerUnit: row.sixthsPerUnit ?? derived.sixthsPerUnit,
+      itemKind: derived.kind,
+      armorClass: derived.armorClass,
+      wornClothing: row.wornClothing,
+      zoneHint: row.zoneHint,
+    }
+  })
+  postToWorker({
+    type: 'INTENT',
+    intent: {
+      type: 'APPLY_ADD_ITEMS_OP',
+      targetNodeId: addItemsTargetNodeId,
+      items,
+    },
+  })
+  addItemsDialog.close(mode === 'auto' ? 'auto' : 'manual')
+}
+
+const refreshAddItemsParsed = (): void => {
+  const parsed = parseAddItemsRowsFromJson(addItemsJson)
+  addItemsError = parsed.error
+  addItemsRows = parsed.rows
+  renderAddItemsRows()
+
+  const cleanRows = addItemsRows.length > 0 && addItemsRows.every((row) => row.status === 'resolved' && !!row.itemDefId)
+  if (!addItemsError && cleanRows) {
+    applyAddItemsRowsToNode(addItemsRows, 'auto')
+  }
+}
+
+const showAddItemsDialog = (nodeId: string, nodeTitle: string): void => {
+  addItemsTargetNodeId = nodeId
+  addItemsRows = []
+  addItemsError = null
+  addItemsJson = ''
+  addItemsDescription = ''
+  Object.keys(addItemsDisambiguationOverrides).forEach((k) => delete addItemsDisambiguationOverrides[k])
+
+  addItemsDialog.innerHTML = `
+    <form method="dialog" class="add-items-form">
+      <div class="add-items-header">
+        <div>
+          <div class="add-items-title">Add Items</div>
+          <div class="add-items-subtitle">Target: ${escapeHtml(nodeTitle)}</div>
+        </div>
+        <button type="button" class="tool-button" id="add-items-close">Close</button>
+      </div>
+      <label class="tool-label" for="add-items-description">Description for LLM</label>
+      <textarea id="add-items-description" class="tool-textarea add-items-input" rows="5" placeholder="Describe items, treasure, nodes, or operations."></textarea>
+      <div class="add-items-actions">
+        <button type="button" class="tool-button" id="add-items-copy-prompt">Copy Prompt for LLM</button>
+      </div>
+      <label class="tool-label" for="add-items-json">Paste LLM JSON Output</label>
+      <textarea id="add-items-json" class="tool-textarea add-items-json" rows="10" placeholder='{"schema":"vtt.inventory.ops.v1","ops":[...]}'></textarea>
+      <div id="add-items-status" class="add-items-status"></div>
+      <div id="add-items-match-results" class="parsed-list add-items-results"></div>
+      <div class="add-items-actions add-items-actions-end">
+        <button type="button" class="tool-button" id="add-items-apply">Apply</button>
+      </div>
+    </form>
+  `
+
+  addItemsDialog.querySelector<HTMLButtonElement>('#add-items-close')?.addEventListener('click', () => addItemsDialog.close())
+  addItemsDialog.querySelector<HTMLTextAreaElement>('#add-items-description')?.addEventListener('input', (e) => {
+    addItemsDescription = (e.target as HTMLTextAreaElement).value
+  })
+  addItemsDialog.querySelector<HTMLButtonElement>('#add-items-copy-prompt')?.addEventListener('click', async () => {
+    const prompt = buildInventoryLlmPrompt({ userDescription: addItemsDescription })
+    try {
+      await navigator.clipboard.writeText(prompt)
+      addItemsError = null
+    } catch {
+      addItemsError = 'Clipboard copy failed. Copy manually from devtools if needed.'
+    }
+    renderAddItemsRows()
+  })
+  addItemsDialog.querySelector<HTMLTextAreaElement>('#add-items-json')?.addEventListener('input', (e) => {
+    addItemsJson = (e.target as HTMLTextAreaElement).value
+    refreshAddItemsParsed()
+  })
+  addItemsDialog.querySelector<HTMLButtonElement>('#add-items-apply')?.addEventListener('click', () => {
+    if (addItemsRows.length === 0) return
+    const canApply = addItemsRows.every((row) => row.status === 'resolved' && !!row.itemDefId)
+    if (!canApply) return
+    applyAddItemsRowsToNode(addItemsRows, 'manual')
+  })
+  addItemsDialog.querySelector<HTMLElement>('#add-items-match-results')?.addEventListener('click', (e) => {
+    const target = e.target as HTMLElement
+    const pill = target.closest<HTMLElement>('.alt-pill[data-add-items-key][data-item-id]')
+    if (!pill) return
+    const key = pill.dataset.addItemsKey
+    const itemId = pill.dataset.itemId
+    if (!key || !itemId) return
+    addItemsDisambiguationOverrides[key] = itemId
+    refreshAddItemsParsed()
+  })
+
+  renderAddItemsRows()
+  addItemsDialog.showModal()
+}
 
 const renderBulkImport = (text: string): void => {
   const plan = parseInventoryImportPlan(text, sourceItemSearch)
@@ -1861,7 +2192,7 @@ document.addEventListener('pointermove', (e) => {
       const sourceItem = item.itemDefId?.startsWith('custom:') ? null : (item.itemDefId ? sourceItemById.get(item.itemDefId) : null)
       const perUnitSixths = sourceItem
         ? perUnitSixthsFromSource(sourceItem)
-        : (item.sixthsPerUnit ?? SIXTHS_PER_STONE)
+        : (item.sixthsPerUnit ?? 1)
       const syntheticSegments: SceneSegmentVM[] = []
       for (let i = 0; i < item.quantity; i++) {
         syntheticSegments.push({

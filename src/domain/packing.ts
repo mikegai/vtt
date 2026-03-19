@@ -18,6 +18,7 @@ export type PackedSegment = {
   readonly endSixth: number
   readonly sizeSixths: number
   readonly isOverflow: boolean
+  readonly isWornPill?: boolean
 }
 
 const isOneOrMoreStone = (sixths: number): boolean => sixths >= SIXTHS_PER_STONE
@@ -63,6 +64,23 @@ export const packDeterministic = (items: readonly PackInput[], capacitySixths: n
 
   for (const input of sorted) {
     const rawCost = encumbranceCostSixths(input.definition, input.entry.quantity)
+    // Zero-encumbrance entries are rendered as pill-strip items, never in slot meter.
+    const isWornPill = rawCost <= 0
+    if (isWornPill) {
+      result.push({
+        inventoryEntryId: input.entry.id,
+        itemDefId: input.definition.id,
+        quantity: input.entry.quantity,
+        zone: input.entry.zone,
+        state: input.entry.state ?? {},
+        startSixth: 0,
+        endSixth: 1,
+        sizeSixths: 1,
+        isOverflow: false,
+        isWornPill: true,
+      })
+      continue
+    }
     const countsAgainstAccessibleLimit = input.entry.zone === 'accessible' && input.definition.kind !== 'bulky'
 
     const allowedCost = (() => {

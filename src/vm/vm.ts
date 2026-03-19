@@ -141,6 +141,7 @@ const toSegmentVM = (
     readonly endSixth: number
     readonly sizeSixths: number
     readonly isOverflow: boolean
+    readonly isWornPill?: boolean
   },
   definition: ItemDefinition,
 ): SegmentVM | SegmentVM[] => {
@@ -173,6 +174,7 @@ const toSegmentVM = (
       zoneText: zoneLabel,
     },
     ...(definition.isFungibleVisual != null && { isFungibleVisual: definition.isFungibleVisual }),
+    ...(packedSegment.isWornPill ? { isWornPill: true } : {}),
   }
 }
 

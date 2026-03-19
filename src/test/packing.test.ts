@@ -12,6 +12,7 @@ const defs: Record<string, ItemDefinition> = {
   torch: { id: 'torch', canonicalName: 'Torch', kind: 'standard', sixthsPerUnit: 1 },
   fiveSixths: { id: 'fiveSixths', canonicalName: '5/6 item', kind: 'standard', sixthsPerUnit: 5 },
   ironRationsDay: { id: 'ironRationsDay', canonicalName: 'Daily iron rations', kind: 'standard', sixthsPerUnit: 1 },
+  tunic: { id: 'tunic', canonicalName: 'Tunic and pants', kind: 'standard', sixthsPerUnit: 0 },
 }
 
 const mkEntry = (id: string, itemDefId: string, zone: InventoryEntry['zone'], quantity = 1): InventoryEntry => ({
@@ -117,5 +118,30 @@ describe('deterministic packing', () => {
     const packed = packDeterministic(items, stoneToSixths(20))
     const placed = packed.filter((s) => !s.isOverflow).map((s) => s.itemDefId)
     expect(placed).toEqual(['armor', 'shield', 'rope', 'pole', 'sword', 'torch'])
+  })
+
+  it('keeps non-encumbering worn clothing as visual worn-pill segments', () => {
+    const items = [
+      asInput({ ...mkEntry('a', 'tunic', 'worn', 1), state: { worn: true } }),
+      asInput(mkEntry('b', 'torch', 'stowed', 1)),
+    ]
+    const packed = packDeterministic(items, stoneToSixths(20))
+    const tunic = packed.find((s) => s.itemDefId === 'tunic' && !s.isOverflow)
+    const torch = packed.find((s) => s.itemDefId === 'torch' && !s.isOverflow)
+    expect(tunic?.isWornPill).toBe(true)
+    expect(tunic?.sizeSixths).toBe(1)
+    expect(torch?.startSixth).toBe(0)
+  })
+
+  it('keeps any zero-encumbrance item out of meter slots', () => {
+    const items = [
+      asInput(mkEntry('a', 'tunic', 'stowed', 1)),
+      asInput(mkEntry('b', 'torch', 'stowed', 1)),
+    ]
+    const packed = packDeterministic(items, stoneToSixths(20))
+    const tunic = packed.find((s) => s.itemDefId === 'tunic' && !s.isOverflow)
+    const torch = packed.find((s) => s.itemDefId === 'torch' && !s.isOverflow)
+    expect(tunic?.isWornPill).toBe(true)
+    expect(torch?.startSixth).toBe(0)
   })
 })

@@ -42,6 +42,8 @@ export type SceneSegmentVM = {
   readonly isSelfWeightToken?: boolean
   /** Segment is immutable in UI actions (move/delete/duplicate). */
   readonly locked?: boolean
+  /** Visual-only non-encumbering worn clothing rendered as pill strip under node. */
+  readonly isWornPill?: boolean
 }
 
 export type SceneNodeVM = {
@@ -196,8 +198,24 @@ export type WorkerIntent =
       readonly sixthsPerUnit?: number
       readonly itemKind?: string
       readonly armorClass?: number
+      readonly zoneHint?: CarryZone
+      readonly wornClothing?: boolean
       readonly segmentIds?: readonly string[]
       readonly freeSegmentPositions?: Readonly<Record<string, { x: number; y: number }>>
+    }
+  | {
+      readonly type: 'APPLY_ADD_ITEMS_OP'
+      readonly targetNodeId: string
+      readonly items: readonly {
+        readonly itemDefId: string
+        readonly itemName: string
+        readonly quantity: number
+        readonly sixthsPerUnit?: number
+        readonly itemKind?: string
+        readonly armorClass?: number
+        readonly wornClothing?: boolean
+        readonly zoneHint?: CarryZone
+      }[]
     }
   | { readonly type: 'MOVE_ENTRY_TO'; readonly segmentId: string; readonly sourceNodeId: string; readonly targetNodeId: string }
   | {
