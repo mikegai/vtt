@@ -166,6 +166,14 @@ export function reconstructLayoutState(conn: DbConnection, context: WorldCanvasC
     groupListViewEnabled[groupId] = row.enabled
   }
 
+  const layoutExpanded: Record<string, boolean> = {}
+  for (const row of conn.db.layout_expanded.iter()) {
+    if (row.worldId !== context.worldId || row.canvasId !== context.canvasId) continue
+    const containerId = withoutPrefix(row.containerId, cp)
+    if (!containerId) continue
+    layoutExpanded[containerId] = row.expanded
+  }
+
   const nodeGroupOverrides: Record<string, string | null> = {}
   for (const row of conn.db.node_group_overrides.iter()) {
     if (row.worldId !== context.worldId || row.canvasId !== context.canvasId) continue
@@ -270,6 +278,7 @@ export function reconstructLayoutState(conn: DbConnection, context: WorldCanvasC
     groupSizeOverrides,
     nodeSizeOverrides,
     groupListViewEnabled,
+    layoutExpanded,
     nodeGroupOverrides,
     groupNodePositions,
     freeSegmentPositions,

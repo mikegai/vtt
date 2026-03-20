@@ -57,6 +57,8 @@ export type SceneNodeVM = {
   readonly groupId: string | null
   /** Parent node id when nested (one-level deep). */
   readonly parentNodeId?: string
+  /** Canvas-persisted: full slot grid vs collapsed visible slots. */
+  readonly layoutExpanded: boolean
   readonly actorKind: ActorKind
   readonly title: string
   readonly x: number
@@ -101,6 +103,8 @@ export type SceneGroupVM = {
   readonly id: string
   readonly title: string
   readonly listViewEnabled: boolean
+  /** Canvas-persisted: full layout size vs fit-to-content chrome. */
+  readonly layoutExpanded: boolean
   readonly nodeIds: readonly string[]
   readonly freeSegmentIds: readonly string[]
   readonly x: number
@@ -156,6 +160,7 @@ export type WorkerIntent =
   | { readonly type: 'MOVE_GROUP'; readonly groupId: string; readonly x: number; readonly y: number }
   | { readonly type: 'RESIZE_GROUP'; readonly groupId: string; readonly width: number; readonly height: number }
   | { readonly type: 'SET_GROUP_LIST_VIEW'; readonly groupId: string; readonly enabled: boolean }
+  | { readonly type: 'SET_LAYOUT_EXPANDED'; readonly containerId: string; readonly expanded: boolean }
   | { readonly type: 'RESIZE_NODE'; readonly nodeId: string; readonly slotCols: number; readonly slotRows: number }
   | { readonly type: 'ADD_GROUP'; readonly x: number; readonly y: number }
   | { readonly type: 'DELETE_GROUP'; readonly groupId: string }

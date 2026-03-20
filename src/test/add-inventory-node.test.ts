@@ -10,6 +10,7 @@ const makeLocalState = (overrides: Partial<WorkerLocalState> = {}): WorkerLocalS
     groupPositions: {},
     groupSizeOverrides: {},
     groupListViewEnabled: {},
+    layoutExpanded: {},
     nodeGroupOverrides: {},
     nodePositions: {},
     groupNodePositions: {},

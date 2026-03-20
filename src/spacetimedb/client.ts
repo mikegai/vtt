@@ -87,15 +87,18 @@ function displayNameFromSlug(slug: string): string {
 }
 
 /**
- * Reducers return Promises; rejections are async (try/catch won’t see them).
- * Catches “no such reducer” when the published module is older than client bindings.
+ * Invokes a reducer call. Sync throws propagate; async rejections are not swallowed
+ * (they surface as unhandledrejection — fix the module mismatch or server error).
  */
 function runReducer(label: string, call: () => void | Promise<void>): void {
+  let out: void | Promise<void>
   try {
-    void Promise.resolve(call()).catch((err) => console.warn(`[spacetimedb] ${label} failed:`, err))
+    out = call()
   } catch (err) {
-    console.warn(`[spacetimedb] ${label} threw:`, err)
+    console.error(`[spacetimedb] ${label} threw:`, err)
+    throw err
   }
+  void Promise.resolve(out)
 }
 
 function bootstrapRegistry(conn: DbConnection, ctx: WorldCanvasContext): void {
@@ -145,6 +148,7 @@ function subscriptionQueriesForContext(ctx: WorldCanvasContext): string[] {
     `SELECT * FROM group_size_overrides WHERE ${room}`,
     `SELECT * FROM node_size_overrides WHERE ${room}`,
     `SELECT * FROM group_list_view WHERE ${room}`,
+    `SELECT * FROM layout_expanded WHERE ${room}`,
     `SELECT * FROM node_group_overrides WHERE ${room}`,
     `SELECT * FROM group_node_positions WHERE ${room}`,
     `SELECT * FROM free_segment_positions WHERE ${room}`,
@@ -179,6 +183,7 @@ export function subscriptionQueriesForHubWorld(worldId: string): string[] {
     `SELECT * FROM group_size_overrides WHERE ${worldOnly}`,
     `SELECT * FROM node_size_overrides WHERE ${worldOnly}`,
     `SELECT * FROM group_list_view WHERE ${worldOnly}`,
+    `SELECT * FROM layout_expanded WHERE ${worldOnly}`,
     `SELECT * FROM node_group_overrides WHERE ${worldOnly}`,
     `SELECT * FROM group_node_positions WHERE ${worldOnly}`,
     `SELECT * FROM free_segment_positions WHERE ${worldOnly}`,
@@ -385,6 +390,7 @@ function registerTableCallbacks(): void {
     conn.db.group_size_overrides,
     conn.db.node_size_overrides,
     conn.db.group_list_view,
+    conn.db.layout_expanded,
     conn.db.node_group_overrides,
     conn.db.group_node_positions,
     conn.db.free_segment_positions,

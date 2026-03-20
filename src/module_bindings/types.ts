@@ -175,6 +175,14 @@ export const Labels = __t.object("Labels", {
 });
 export type Labels = __Infer<typeof Labels>;
 
+export const LayoutExpanded = __t.object("LayoutExpanded", {
+  containerId: __t.string(),
+  worldId: __t.string(),
+  canvasId: __t.string(),
+  expanded: __t.bool(),
+});
+export type LayoutExpanded = __Infer<typeof LayoutExpanded>;
+
 export const MovementGroups = __t.object("MovementGroups", {
   id: __t.string(),
   worldId: __t.string(),

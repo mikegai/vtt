@@ -23,6 +23,7 @@ import DeleteGroupTitleOverrideReducer from "../delete_group_title_override_redu
 import DeleteInventoryEntryReducer from "../delete_inventory_entry_reducer";
 import DeleteItemDefinitionReducer from "../delete_item_definition_reducer";
 import DeleteLabelReducer from "../delete_label_reducer";
+import DeleteLayoutExpandedReducer from "../delete_layout_expanded_reducer";
 import DeleteMovementGroupReducer from "../delete_movement_group_reducer";
 import DeleteNodeContainmentReducer from "../delete_node_containment_reducer";
 import DeleteNodeGroupOverrideReducer from "../delete_node_group_override_reducer";
@@ -55,6 +56,7 @@ import UpsertGroupTitleOverrideReducer from "../upsert_group_title_override_redu
 import UpsertInventoryEntryReducer from "../upsert_inventory_entry_reducer";
 import UpsertItemDefinitionReducer from "../upsert_item_definition_reducer";
 import UpsertLabelReducer from "../upsert_label_reducer";
+import UpsertLayoutExpandedReducer from "../upsert_layout_expanded_reducer";
 import UpsertMovementGroupReducer from "../upsert_movement_group_reducer";
 import UpsertNodeContainmentReducer from "../upsert_node_containment_reducer";
 import UpsertNodeGroupOverrideReducer from "../upsert_node_group_override_reducer";
@@ -80,6 +82,7 @@ export type DeleteGroupTitleOverrideParams = __Infer<typeof DeleteGroupTitleOver
 export type DeleteInventoryEntryParams = __Infer<typeof DeleteInventoryEntryReducer>;
 export type DeleteItemDefinitionParams = __Infer<typeof DeleteItemDefinitionReducer>;
 export type DeleteLabelParams = __Infer<typeof DeleteLabelReducer>;
+export type DeleteLayoutExpandedParams = __Infer<typeof DeleteLayoutExpandedReducer>;
 export type DeleteMovementGroupParams = __Infer<typeof DeleteMovementGroupReducer>;
 export type DeleteNodeContainmentParams = __Infer<typeof DeleteNodeContainmentReducer>;
 export type DeleteNodeGroupOverrideParams = __Infer<typeof DeleteNodeGroupOverrideReducer>;
@@ -112,6 +115,7 @@ export type UpsertGroupTitleOverrideParams = __Infer<typeof UpsertGroupTitleOver
 export type UpsertInventoryEntryParams = __Infer<typeof UpsertInventoryEntryReducer>;
 export type UpsertItemDefinitionParams = __Infer<typeof UpsertItemDefinitionReducer>;
 export type UpsertLabelParams = __Infer<typeof UpsertLabelReducer>;
+export type UpsertLayoutExpandedParams = __Infer<typeof UpsertLayoutExpandedReducer>;
 export type UpsertMovementGroupParams = __Infer<typeof UpsertMovementGroupReducer>;
 export type UpsertNodeContainmentParams = __Infer<typeof UpsertNodeContainmentReducer>;
 export type UpsertNodeGroupOverrideParams = __Infer<typeof UpsertNodeGroupOverrideReducer>;

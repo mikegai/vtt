@@ -118,6 +118,8 @@ type AdapterHandlers = {
   onMoveGroup?(groupId: string, x: number, y: number): void
   onResizeGroup?(groupId: string, width: number, height: number): void
   onSetGroupListView?(groupId: string, enabled: boolean): void
+  /** Group id or node id — canvas-persisted layout expand. */
+  onSetLayoutExpanded?(containerId: string, expanded: boolean): void
   onResizeNode?(nodeId: string, slotCols: number, slotRows: number): void
   onMoveNodeToGroupIndex?(nodeId: string, groupId: string, index: number): void
   onMoveNodesToGroupIndex?(moves: readonly { nodeId: string; groupId: string; index: number }[]): void
@@ -1669,8 +1671,8 @@ export class PixiBoardAdapter {
   private minVisibleLabelPx = DEFAULT_MIN_VISIBLE_PX
   private readonly maxVisibleLabelPx = DEFAULT_MAX_VISIBLE_PX
   private fontsLoaded = false
-  private readonly nodeExpandedState = new Map<string, boolean>()
-  private readonly groupExpandedState = new Map<string, boolean>()
+  /** Group ids and node ids (disjoint) — layout expanded chrome. */
+  private readonly layoutExpandedState = new Map<string, boolean>()
   private readonly nodeDisplayOffsetY = new Map<string, number>()
   private readonly groupDisplayHeights = new Map<string, number>()
   private readonly skipNodeAnimationOnce = new Set<string>()
@@ -4976,12 +4978,9 @@ export class PixiBoardAdapter {
     }
     this.labelViews.clear()
     const liveNodeIds = new Set(Object.keys(scene.nodes))
-    for (const nodeId of this.nodeExpandedState.keys()) {
-      if (!liveNodeIds.has(nodeId)) this.nodeExpandedState.delete(nodeId)
-    }
     const liveGroupIds = new Set(Object.keys(scene.groups ?? {}))
-    for (const groupId of this.groupExpandedState.keys()) {
-      if (!liveGroupIds.has(groupId)) this.groupExpandedState.delete(groupId)
+    for (const id of this.layoutExpandedState.keys()) {
+      if (!liveNodeIds.has(id) && !liveGroupIds.has(id)) this.layoutExpandedState.delete(id)
     }
     const filterCategory = scene.filterCategory ?? null
     const selectedSegmentIds = scene.selectedSegmentIds ?? []
@@ -5099,6 +5098,7 @@ export class PixiBoardAdapter {
     this.movedGroupIds = moved
 
     this.currentScene = scene
+    this.syncExpandStateFromScene(scene)
     this.recomputeDisplayFlow(scene)
     this.paceText.text = `Party ${scene.partyPaceText}`
     this.rebuildAllNodes(scene)
@@ -5210,7 +5210,7 @@ export class PixiBoardAdapter {
   }
 
   private isNodeExpanded(nodeId: string): boolean {
-    return this.nodeExpandedState.get(nodeId) === true
+    return this.layoutExpandedState.get(nodeId) === true
   }
 
   private setNodeExpanded(nodeId: string, expanded: boolean): void {
@@ -5218,14 +5218,14 @@ export class PixiBoardAdapter {
     const node = this.currentScene.nodes[nodeId]
     const view = this.nodeViews.get(nodeId)
     if (!node || !view) {
-      this.nodeExpandedState.set(nodeId, expanded)
+      this.persistLayoutExpanded(nodeId, expanded)
       this.rebuildAllNodes(this.currentScene)
       this.startSpringTicker()
       return
     }
 
     if (expanded) {
-      this.nodeExpandedState.set(nodeId, true)
+      this.persistLayoutExpanded(nodeId, true)
       this.rebuildAllNodes(this.currentScene)
       this.startSpringTicker()
       return
@@ -5235,14 +5235,14 @@ export class PixiBoardAdapter {
     const currentWidth = view.clipWidthSpring?.value ?? view.totalWidth
     const currentHeight = view.clipHeightSpring?.value ?? view.totalHeight
     if (Math.abs(currentWidth - targetDims.width) <= 0.5 && Math.abs(currentHeight - targetDims.height) <= 0.5) {
-      this.nodeExpandedState.set(nodeId, false)
+      this.persistLayoutExpanded(nodeId, false)
       this.rebuildAllNodes(this.currentScene)
       this.startSpringTicker()
       return
     }
 
     // Update display flow immediately so sibling nodes start moving while this node clips closed.
-    this.nodeExpandedState.set(nodeId, false)
+    this.persistLayoutExpanded(nodeId, false)
     this.recomputeDisplayFlow(this.currentScene)
     for (const [id, nodeView] of this.nodeViews) {
       const sceneNode = this.currentScene.nodes[id]
@@ -5348,7 +5348,23 @@ export class PixiBoardAdapter {
   }
 
   private isGroupExpanded(groupId: string): boolean {
-    return this.groupExpandedState.get(groupId) === true
+    return this.layoutExpandedState.get(groupId) === true
+  }
+
+  private persistLayoutExpanded(containerId: string, expanded: boolean): void {
+    if (expanded) this.layoutExpandedState.set(containerId, true)
+    else this.layoutExpandedState.delete(containerId)
+    this.handlers.onSetLayoutExpanded?.(containerId, expanded)
+  }
+
+  private syncExpandStateFromScene(scene: SceneVM): void {
+    this.layoutExpandedState.clear()
+    for (const [id, g] of Object.entries(scene.groups ?? {})) {
+      if (g.layoutExpanded) this.layoutExpandedState.set(id, true)
+    }
+    for (const [id, n] of Object.entries(scene.nodes)) {
+      if (n.layoutExpanded) this.layoutExpandedState.set(id, true)
+    }
   }
 
   private setGroupExpanded(groupId: string, expanded: boolean): void {
@@ -5356,14 +5372,14 @@ export class PixiBoardAdapter {
     const group = this.currentScene.groups?.[groupId]
     const view = this.groupViews.get(groupId)
     if (!group || !view) {
-      this.groupExpandedState.set(groupId, expanded)
+      this.persistLayoutExpanded(groupId, expanded)
       this.rebuildGroups(this.currentScene)
       this.startSpringTicker()
       return
     }
 
     if (expanded) {
-      this.groupExpandedState.set(groupId, true)
+      this.persistLayoutExpanded(groupId, true)
       this.recomputeDisplayFlow(this.currentScene)
       this.rebuildGroups(this.currentScene)
       this.startSpringTicker()
@@ -5374,14 +5390,14 @@ export class PixiBoardAdapter {
     const currentWidth = view.clipWidthSpring?.value ?? this.getGroupDisplayDimensions(group).width
     const currentHeight = view.clipHeightSpring?.value ?? this.getGroupDisplayDimensions(group).height
     if (Math.abs(currentWidth - targetDims.width) <= 0.5 && Math.abs(currentHeight - targetDims.height) <= 0.5) {
-      this.groupExpandedState.set(groupId, false)
+      this.persistLayoutExpanded(groupId, false)
       this.recomputeDisplayFlow(this.currentScene)
       this.rebuildGroups(this.currentScene)
       this.startSpringTicker()
       return
     }
 
-    this.groupExpandedState.set(groupId, false)
+    this.persistLayoutExpanded(groupId, false)
     this.recomputeDisplayFlow(this.currentScene)
     let clip = view.contentClip
     if (!clip) {
@@ -5559,6 +5575,7 @@ export class PixiBoardAdapter {
     this.movedGroupIds = moved
 
     this.currentScene = scene
+    this.syncExpandStateFromScene(scene)
     this.recomputeDisplayFlow(scene)
     let needsFullRebuild = false
     let metaChanged = false

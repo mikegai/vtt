@@ -55,6 +55,7 @@ let localState: WorkerLocalState = {
   groupPositions: {},
   groupSizeOverrides: {},
   groupListViewEnabled: {},
+  layoutExpanded: {},
   nodeGroupOverrides: {},
   nodePositions: {},
   groupNodePositions: {},
@@ -148,6 +149,7 @@ function applyServerState(
       groupSizeOverrides: {},
       nodeSizeOverrides: {},
       groupListViewEnabled: {},
+      layoutExpanded: {},
       nodeGroupOverrides: {},
       groupNodePositions: {},
       freeSegmentPositions: {},
@@ -179,6 +181,7 @@ function applyServerState(
     groupSizeOverrides: newLayoutState.groupSizeOverrides ?? {},
     nodeSizeOverrides: newLayoutState.nodeSizeOverrides ?? {},
     groupListViewEnabled: newLayoutState.groupListViewEnabled ?? {},
+    layoutExpanded: newLayoutState.layoutExpanded ?? {},
     nodeGroupOverrides: newLayoutState.nodeGroupOverrides ?? {},
     groupNodePositions: newLayoutState.groupNodePositions ?? {},
     freeSegmentPositions: newLayoutState.freeSegmentPositions ?? {},
@@ -832,6 +835,15 @@ const applyIntent = (intent: WorkerIntent): void => {
     return
   }
 
+  if (intent.type === 'SET_LAYOUT_EXPANDED') {
+    const nextLayoutExpanded = { ...localState.layoutExpanded }
+    if (intent.expanded) nextLayoutExpanded[intent.containerId] = true
+    else delete nextLayoutExpanded[intent.containerId]
+    localState = { ...localState, layoutExpanded: nextLayoutExpanded }
+    recompute()
+    return
+  }
+
   if (intent.type === 'RESIZE_NODE') {
     localState = {
       ...localState,
@@ -909,6 +921,8 @@ const applyIntent = (intent: WorkerIntent): void => {
     delete nextGroupSizeOverrides[groupId]
     const nextGroupListViewEnabled = { ...localState.groupListViewEnabled }
     delete nextGroupListViewEnabled[groupId]
+    const nextLayoutExpanded = { ...localState.layoutExpanded }
+    delete nextLayoutExpanded[groupId]
     const nextGroupNodePositions = { ...localState.groupNodePositions }
     delete nextGroupNodePositions[groupId]
     const nextGroupTitleOverrides = { ...localState.groupTitleOverrides }
@@ -924,6 +938,7 @@ const applyIntent = (intent: WorkerIntent): void => {
       groupPositions: nextGroupPositions,
       groupSizeOverrides: nextGroupSizeOverrides,
       groupListViewEnabled: nextGroupListViewEnabled,
+      layoutExpanded: nextLayoutExpanded,
       groupNodePositions: nextGroupNodePositions,
       groupTitleOverrides: nextGroupTitleOverrides,
     }
@@ -1983,6 +1998,9 @@ const applyIntent = (intent: WorkerIntent): void => {
       nodeSizeOverrides: Object.fromEntries(
         Object.entries(localState.nodeSizeOverrides).filter(([id]) => id !== actorId),
       ),
+      layoutExpanded: Object.fromEntries(
+        Object.entries(localState.layoutExpanded).filter(([id]) => id !== actorId),
+      ),
       nodeContainment: Object.fromEntries(
         Object.entries(localState.nodeContainment).filter(([id, targetId]) => id !== actorId && targetId !== actorId),
       ),
@@ -2531,7 +2549,7 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
         displayName: name,
         description: undefined,
       }),
-    ).catch((err) => console.warn('[vm-worker] renameWorld failed (publish a module that includes rename_world):', err))
+    )
     return
   }
   if (message.type === 'RESET') {
@@ -2544,6 +2562,7 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       groupPositions: {},
       groupSizeOverrides: {},
       groupListViewEnabled: {},
+      layoutExpanded: {},
       nodeGroupOverrides: {},
       nodePositions: {},
       groupNodePositions: {},

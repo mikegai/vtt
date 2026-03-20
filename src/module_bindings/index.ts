@@ -51,6 +51,7 @@ import DeleteGroupTitleOverrideReducer from "./delete_group_title_override_reduc
 import DeleteInventoryEntryReducer from "./delete_inventory_entry_reducer";
 import DeleteItemDefinitionReducer from "./delete_item_definition_reducer";
 import DeleteLabelReducer from "./delete_label_reducer";
+import DeleteLayoutExpandedReducer from "./delete_layout_expanded_reducer";
 import DeleteMovementGroupReducer from "./delete_movement_group_reducer";
 import DeleteNodeContainmentReducer from "./delete_node_containment_reducer";
 import DeleteNodeGroupOverrideReducer from "./delete_node_group_override_reducer";
@@ -83,6 +84,7 @@ import UpsertGroupTitleOverrideReducer from "./upsert_group_title_override_reduc
 import UpsertInventoryEntryReducer from "./upsert_inventory_entry_reducer";
 import UpsertItemDefinitionReducer from "./upsert_item_definition_reducer";
 import UpsertLabelReducer from "./upsert_label_reducer";
+import UpsertLayoutExpandedReducer from "./upsert_layout_expanded_reducer";
 import UpsertMovementGroupReducer from "./upsert_movement_group_reducer";
 import UpsertNodeContainmentReducer from "./upsert_node_containment_reducer";
 import UpsertNodeGroupOverrideReducer from "./upsert_node_group_override_reducer";
@@ -110,6 +112,7 @@ import GroupTitleOverridesRow from "./group_title_overrides_table";
 import InventoryEntriesRow from "./inventory_entries_table";
 import ItemDefinitionsRow from "./item_definitions_table";
 import LabelsRow from "./labels_table";
+import LayoutExpandedRow from "./layout_expanded_table";
 import MovementGroupsRow from "./movement_groups_table";
 import NodeContainmentRow from "./node_containment_table";
 import NodeGroupOverridesRow from "./node_group_overrides_table";
@@ -382,6 +385,21 @@ const tablesSchema = __schema({
       { name: 'labels_label_id_key', constraint: 'unique', columns: ['labelId'] },
     ],
   }, LabelsRow),
+  layout_expanded: __table({
+    name: 'layout_expanded',
+    indexes: [
+      { accessor: 'containerId', name: 'layout_expanded_container_id_idx_btree', algorithm: 'btree', columns: [
+        'containerId',
+      ] },
+      { accessor: 'byWorldCanvas', name: 'layout_expanded_world_id_canvas_id_idx_btree', algorithm: 'btree', columns: [
+        'worldId',
+        'canvasId',
+      ] },
+    ],
+    constraints: [
+      { name: 'layout_expanded_container_id_key', constraint: 'unique', columns: ['containerId'] },
+    ],
+  }, LayoutExpandedRow),
   movement_groups: __table({
     name: 'movement_groups',
     indexes: [
@@ -603,6 +621,7 @@ const reducersSchema = __reducers(
   __reducerSchema("delete_inventory_entry", DeleteInventoryEntryReducer),
   __reducerSchema("delete_item_definition", DeleteItemDefinitionReducer),
   __reducerSchema("delete_label", DeleteLabelReducer),
+  __reducerSchema("delete_layout_expanded", DeleteLayoutExpandedReducer),
   __reducerSchema("delete_movement_group", DeleteMovementGroupReducer),
   __reducerSchema("delete_node_containment", DeleteNodeContainmentReducer),
   __reducerSchema("delete_node_group_override", DeleteNodeGroupOverrideReducer),
@@ -635,6 +654,7 @@ const reducersSchema = __reducers(
   __reducerSchema("upsert_inventory_entry", UpsertInventoryEntryReducer),
   __reducerSchema("upsert_item_definition", UpsertItemDefinitionReducer),
   __reducerSchema("upsert_label", UpsertLabelReducer),
+  __reducerSchema("upsert_layout_expanded", UpsertLayoutExpandedReducer),
   __reducerSchema("upsert_movement_group", UpsertMovementGroupReducer),
   __reducerSchema("upsert_node_containment", UpsertNodeContainmentReducer),
   __reducerSchema("upsert_node_group_override", UpsertNodeGroupOverrideReducer),

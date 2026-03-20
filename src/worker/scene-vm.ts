@@ -22,6 +22,8 @@ export type WorkerLocalState = {
   readonly groupPositions: Record<string, { x: number; y: number }>
   readonly groupSizeOverrides: Record<string, { width: number; height: number }>
   readonly groupListViewEnabled: Record<string, boolean>
+  /** Group or node id → full layout (canvas-persisted). */
+  readonly layoutExpanded: Record<string, boolean>
   readonly nodeGroupOverrides: Record<string, string | null>
   readonly nodePositions: Record<string, { x: number; y: number }>
   readonly groupNodePositions: Record<string, Record<string, { x: number; y: number }>>
@@ -229,7 +231,10 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
   const rows = flattenRows(board.rows)
   const nodes: Record<string, SceneNodeVM> = {}
   const freeSegments: Record<string, SceneFreeSegmentVM> = {}
-  const groupsById = new Map<string, { id: string; title: string; listViewEnabled: boolean; nodeIds: string[]; freeSegmentIds: string[] }>()
+  const groupsById = new Map<
+    string,
+    { id: string; title: string; listViewEnabled: boolean; layoutExpanded: boolean; nodeIds: string[]; freeSegmentIds: string[] }
+  >()
   const segmentGroupOwner = new Map<string, string>()
 
   for (const [groupId, positions] of Object.entries(localState.groupFreeSegmentPositions)) {
@@ -243,6 +248,7 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
       id: groupId,
       title: group.title,
       listViewEnabled: localState.groupListViewEnabled[groupId] === true,
+      layoutExpanded: localState.layoutExpanded[groupId] === true,
       nodeIds: [],
       freeSegmentIds: [],
     })
@@ -307,6 +313,7 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
             id: ownerGroupId,
             title: ownerGroupId,
             listViewEnabled: localState.groupListViewEnabled[ownerGroupId] === true,
+            layoutExpanded: localState.layoutExpanded[ownerGroupId] === true,
             nodeIds: [],
             freeSegmentIds: [segment.id],
           })
@@ -388,6 +395,7 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
       actorId: row.actorId,
       groupId,
       parentNodeId,
+      layoutExpanded: localState.layoutExpanded[row.id] === true,
       actorKind: actor?.kind ?? 'pc',
       title: localState.nodeTitleOverrides[row.id] ?? row.title,
       x: 0,
@@ -414,6 +422,7 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
         id: groupId,
         title: groupTitle,
         listViewEnabled: localState.groupListViewEnabled[groupId] === true,
+        layoutExpanded: localState.layoutExpanded[groupId] === true,
         nodeIds: [row.id],
         freeSegmentIds: [],
       })
@@ -561,6 +570,7 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
       id: groupId,
       title: meta.title,
       listViewEnabled,
+      layoutExpanded: meta.layoutExpanded,
       nodeIds: orderedNodeIds,
       freeSegmentIds: segmentIds,
       x: pos.x,

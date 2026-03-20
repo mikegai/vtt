@@ -10,7 +10,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "stdb:build": "spacetime build",
-    "stdb:generate": "spacetime generate --lang typescript --out-dir src/module_bindings",
+    "stdb:generate": "spacetime generate --lang typescript --out-dir src/module_bindings -y",
     "stdb:publish": "spacetime publish vtt -y"
   },
   "devDependencies": {

@@ -295,6 +295,23 @@ const group_list_view = table(
   }
 );
 
+/** Group or node id: full layout vs fit-to-content (canvas-persisted). */
+const layout_expanded = table(
+  {
+    name: 'layout_expanded',
+    public: true,
+    indexes: [
+      { accessor: 'byWorldCanvas', name: 'idx_lex_room', algorithm: 'btree' as const, columns: ['worldId', 'canvasId'] },
+    ],
+  },
+  {
+    containerId: t.string().primaryKey(),
+    worldId: t.string(),
+    canvasId: t.string(),
+    expanded: t.bool(),
+  }
+);
+
 const node_group_overrides = table(
   {
     name: 'node_group_overrides',
@@ -599,6 +616,7 @@ const spacetimedb = schema({
   group_size_overrides,
   node_size_overrides,
   group_list_view,
+  layout_expanded,
   node_group_overrides,
   group_node_positions,
   free_segment_positions,
@@ -1151,6 +1169,29 @@ export const delete_group_list_view = spacetimedb.reducer(
   }
 );
 
+// ─── Layout expand (group or node container) Reducers ────────────────────────
+
+export const upsert_layout_expanded = spacetimedb.reducer(
+  { containerId: t.string(), expanded: t.bool() },
+  (ctx, args) => {
+    const { worldId, canvasId } = requireCanvasScope(args.containerId, 'layout_expanded');
+    const row = { ...args, worldId, canvasId };
+    const existing = ctx.db.layout_expanded.containerId.find(args.containerId);
+    if (existing) {
+      ctx.db.layout_expanded.containerId.update(row);
+    } else {
+      ctx.db.layout_expanded.insert(row);
+    }
+  }
+);
+
+export const delete_layout_expanded = spacetimedb.reducer(
+  { containerId: t.string() },
+  (ctx, { containerId }) => {
+    ctx.db.layout_expanded.containerId.delete(containerId);
+  }
+);
+
 // ─── Node Group Override Reducers ─────────────────────────────────────────────
 
 export const upsert_node_group_override = spacetimedb.reducer(
@@ -1309,6 +1350,7 @@ export const delete_custom_group = spacetimedb.reducer(
     ctx.db.group_positions.groupId.delete(groupId);
     ctx.db.group_size_overrides.groupId.delete(groupId);
     ctx.db.group_list_view.groupId.delete(groupId);
+    ctx.db.layout_expanded.containerId.delete(groupId);
     ctx.db.group_node_orders.groupId.delete(groupId);
     ctx.db.group_title_overrides.groupId.delete(groupId);
     for (const row of ctx.db.group_node_positions.groupId.filter(groupId)) {
@@ -1457,6 +1499,7 @@ export const clear_all_tables = spacetimedb.reducer(
     for (const r of ctx.db.group_size_overrides.iter()) ctx.db.group_size_overrides.groupId.delete(r.groupId);
     for (const r of ctx.db.node_size_overrides.iter()) ctx.db.node_size_overrides.nodeId.delete(r.nodeId);
     for (const r of ctx.db.group_list_view.iter()) ctx.db.group_list_view.groupId.delete(r.groupId);
+    for (const r of ctx.db.layout_expanded.iter()) ctx.db.layout_expanded.containerId.delete(r.containerId);
     for (const r of ctx.db.node_group_overrides.iter()) ctx.db.node_group_overrides.nodeId.delete(r.nodeId);
     for (const r of ctx.db.group_node_positions.iter()) ctx.db.group_node_positions.id.delete(r.id);
     for (const r of ctx.db.free_segment_positions.iter()) ctx.db.free_segment_positions.segmentId.delete(r.segmentId);
@@ -1595,6 +1638,7 @@ export const set_layout_state = spacetimedb.reducer(
     for (const r of ctx.db.group_size_overrides.iter()) ctx.db.group_size_overrides.groupId.delete(r.groupId);
     for (const r of ctx.db.node_size_overrides.iter()) ctx.db.node_size_overrides.nodeId.delete(r.nodeId);
     for (const r of ctx.db.group_list_view.iter()) ctx.db.group_list_view.groupId.delete(r.groupId);
+    for (const r of ctx.db.layout_expanded.iter()) ctx.db.layout_expanded.containerId.delete(r.containerId);
     for (const r of ctx.db.node_group_overrides.iter()) ctx.db.node_group_overrides.nodeId.delete(r.nodeId);
     for (const r of ctx.db.group_node_positions.iter()) ctx.db.group_node_positions.id.delete(r.id);
     for (const r of ctx.db.free_segment_positions.iter()) ctx.db.free_segment_positions.segmentId.delete(r.segmentId);
@@ -1644,6 +1688,17 @@ export const set_layout_state = spacetimedb.reducer(
       for (const [groupId, enabled] of Object.entries(glv)) {
         const { worldId, canvasId } = requireCanvasScope(groupId, 'set_layout_state group_list_view');
         ctx.db.group_list_view.insert({ groupId, enabled, worldId, canvasId });
+      }
+    }
+
+    const legacyGroupEx = data.groupExpanded as Record<string, boolean> | undefined;
+    const legacyNodeEx = data.nodeExpanded as Record<string, boolean> | undefined;
+    const layoutEx = data.layoutExpanded as Record<string, boolean> | undefined;
+    const mergedLayoutEx = { ...legacyGroupEx, ...legacyNodeEx, ...layoutEx };
+    if (Object.keys(mergedLayoutEx).length > 0) {
+      for (const [containerId, expanded] of Object.entries(mergedLayoutEx)) {
+        const { worldId, canvasId } = requireCanvasScope(containerId, 'set_layout_state layout_expanded');
+        ctx.db.layout_expanded.insert({ containerId, expanded, worldId, canvasId });
       }
     }
 

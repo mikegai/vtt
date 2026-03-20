@@ -1702,6 +1702,9 @@ const pixiAdapter = new PixiBoardAdapter(canvasHost, {
   onSetGroupListView(groupId, enabled) {
     postToWorker({ type: 'INTENT', intent: { type: 'SET_GROUP_LIST_VIEW', groupId, enabled } })
   },
+  onSetLayoutExpanded(containerId, expanded) {
+    postToWorker({ type: 'INTENT', intent: { type: 'SET_LAYOUT_EXPANDED', containerId, expanded } })
+  },
   onResizeNode(nodeId, slotCols, slotRows) {
     postToWorker({ type: 'INTENT', intent: { type: 'RESIZE_NODE', nodeId, slotCols, slotRows } })
   },

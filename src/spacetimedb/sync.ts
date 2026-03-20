@@ -15,11 +15,14 @@ import { withCanvasPrefix, withWorldPrefix } from './context'
 import { sampleState } from '../sample-data'
 
 function safe(label: string, fn: () => void | Promise<void>): void {
+  let out: void | Promise<void>
   try {
-    Promise.resolve(fn()).catch(e => console.error(`[sync] ${label} reducer rejected:`, e))
+    out = fn()
   } catch (e) {
     console.error(`[sync] ${label} call threw:`, e)
+    throw e
   }
+  void Promise.resolve(out)
 }
 
 function stripEphemeral(state: WorkerLocalState): PersistedLocalState {
@@ -92,6 +95,10 @@ export function syncLocalState(
   diffScalarMap(oldP.groupListViewEnabled, newP.groupListViewEnabled,
     (id, v) => safe(`upsertGroupListView(${id})`, () => conn.reducers.upsertGroupListView({ groupId: c(id), enabled: v })),
     (id) => safe(`deleteGroupListView(${id})`, () => conn.reducers.deleteGroupListView({ groupId: c(id) })))
+
+  diffScalarMap(oldP.layoutExpanded ?? {}, newP.layoutExpanded ?? {},
+    (id, v) => safe(`upsertLayoutExpanded(${id})`, () => conn.reducers.upsertLayoutExpanded({ containerId: c(id), expanded: v })),
+    (id) => safe(`deleteLayoutExpanded(${id})`, () => conn.reducers.deleteLayoutExpanded({ containerId: c(id) })))
 
   diffScalarMap(oldP.nodeGroupOverrides, newP.nodeGroupOverrides,
     (id, v) => safe(`upsertNodeGroupOverride(${id})`, () => conn.reducers.upsertNodeGroupOverride({ nodeId: c(id), groupId: v != null ? c(v) : undefined })),
