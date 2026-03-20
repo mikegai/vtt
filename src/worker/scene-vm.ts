@@ -360,11 +360,6 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
         startSixth: segment.startSixth,
         sizeSixths: segment.sizeSixths,
         isOverflow: segment.isOverflow,
-        ...(segment.occupiedSixths != null && segment.occupiedSixths.length > 0
-          ? { occupiedSixths: segment.occupiedSixths }
-          : {}),
-        ...(segment.packStart != null ? { packStart: segment.packStart } : {}),
-        ...(segment.primarySixth != null ? { primarySixth: segment.primarySixth } : {}),
         isDropPreview: dropIntent != null && movedSegmentIds.has(segment.id) && row.id === dropIntent.targetNodeId && dropIntent.sourceNodeIds[segment.id] !== dropIntent.targetNodeId,
         itemDefId: segment.itemDefId,
         entryId,
@@ -629,7 +624,6 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
   }
 
   return {
-    serpentineInventoryPacking: effectiveState.serpentineInventoryPacking === true,
     partyPaceText: `${board.partyPace.explorationFeet}'/${board.partyPace.combatFeet}'/${board.partyPace.runningFeet}' • ${board.partyPace.milesPerDay} mi/day`,
     hoveredSegmentId: localState.hoveredSegmentId,
     filterCategory: localState.filterCategory,

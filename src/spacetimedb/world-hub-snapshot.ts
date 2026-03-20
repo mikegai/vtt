@@ -93,7 +93,7 @@ function collectCanvasSlugs(conn: DbConnection, worldId: string): Set<string> {
 }
 
 export function buildWorldHubSnapshot(conn: DbConnection, ctx: WorldCanvasContext, myIdentityHex: string): WorldHubSnapshot {
-  const canonical = reconstructCanonicalState(conn, ctx, myIdentityHex)
+  const canonical = reconstructCanonicalState(conn, ctx)
 
   const wrow = conn.db.worlds.id.find(ctx.worldId)
   const displayName = wrow?.displayName?.trim() || titleCaseFromSlug(ctx.worldSlug)

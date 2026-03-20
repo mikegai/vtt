@@ -99,9 +99,4 @@ export type CanonicalState = {
   readonly inventoryEntries: Record<string, InventoryEntry>
   readonly carryGroups: Record<string, CarryGroup>
   readonly movementGroups: Record<string, MovementGroup>
-  /**
-   * Viewer-local packing preference from `user_preferences`.
-   * When true, inventory meter uses serpentine (alternating column) fill. Default is column-major down only.
-   */
-  readonly serpentineInventoryPacking?: boolean
 }

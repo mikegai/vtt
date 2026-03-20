@@ -1,11 +1,5 @@
 import type { CarryZone, EquipmentState, InventoryEntry, ItemDefinition } from './types'
 import { getItemCategory } from './item-category'
-import {
-  buildColumnMajorDownPackOrder,
-  buildSerpentinePackOrder,
-  DEFAULT_PACK_STONES_PER_ROW,
-  findAlignedPackStart,
-} from './pack-trajectory'
 import { ACCESSIBLE_MISC_LIMIT_SIXTHS, encumbranceCostSixths } from './rules'
 import { SIXTHS_PER_STONE } from './types'
 
@@ -25,12 +19,6 @@ export type PackedSegment = {
   readonly sizeSixths: number
   readonly isOverflow: boolean
   readonly isWornPill?: boolean
-  /** Row-major sixth indices this segment occupies (sorted ascending). Omitted for worn pills / overflow. */
-  readonly occupiedSixths?: readonly number[]
-  /** Start index in serpentine pack order (0..capacity-1). */
-  readonly packStart?: number
-  /** First sixth in serpentine fill order (packOrder[packStart]). */
-  readonly primarySixth?: number
 }
 
 const isOneOrMoreStone = (sixths: number): boolean => sixths >= SIXTHS_PER_STONE
@@ -47,12 +35,6 @@ const categoryPriorityFullStone = (input: PackInput): number => {
 /** Category priority for < 1 stone items: weapons first, then other. */
 const categoryPriorityPartialStone = (input: PackInput): number =>
   getItemCategory(input.definition) === 'weapons' ? 0 : 1
-
-export type PackDeterministicOptions = {
-  readonly stonesPerRow?: number
-  /** When true, uses alternating up/down columns (legacy). Default false fills only downward per column. */
-  readonly serpentineInventoryPacking?: boolean
-}
 
 const sortPackInputs = (items: readonly PackInput[]): PackInput[] =>
   [...items].sort((a, b) => {
@@ -73,24 +55,9 @@ const sortPackInputs = (items: readonly PackInput[]): PackInput[] =>
     return a.entry.id.localeCompare(b.entry.id)
   })
 
-export const packDeterministic = (
-  items: readonly PackInput[],
-  capacitySixths: number,
-  third: number | PackDeterministicOptions = DEFAULT_PACK_STONES_PER_ROW,
-): PackedSegment[] => {
+export const packDeterministic = (items: readonly PackInput[], capacitySixths: number): PackedSegment[] => {
   const sorted = sortPackInputs(items)
   const result: PackedSegment[] = []
-  let stonesPerRow = DEFAULT_PACK_STONES_PER_ROW
-  let serpentine = false
-  if (typeof third === 'number') {
-    stonesPerRow = third
-  } else {
-    stonesPerRow = third.stonesPerRow ?? DEFAULT_PACK_STONES_PER_ROW
-    serpentine = third.serpentineInventoryPacking ?? false
-  }
-  const packOrder = serpentine
-    ? buildSerpentinePackOrder(capacitySixths, stonesPerRow)
-    : buildColumnMajorDownPackOrder(capacitySixths, stonesPerRow)
 
   let cursor = 0
   let accessibleMiscUsed = 0
@@ -126,34 +93,28 @@ export const packDeterministic = (
       accessibleMiscUsed += allowedCost
     }
 
-    const remainingPack = packOrder.length - cursor
-    const placeableCost = Math.max(0, Math.min(allowedCost, remainingPack))
+    const placeableCost = Math.max(0, Math.min(allowedCost, capacitySixths - cursor))
     if (placeableCost > 0) {
-      const needWhole =
-        placeableCost >= SIXTHS_PER_STONE && placeableCost % SIXTHS_PER_STONE === 0
-      let startPack =
-        findAlignedPackStart(packOrder, cursor, placeableCost, needWhole) ??
-        findAlignedPackStart(packOrder, cursor, placeableCost, false)
-      if (startPack == null) startPack = cursor
-      const occupiedRaw = packOrder.slice(startPack, startPack + placeableCost)
-      const occupiedSorted = [...occupiedRaw].sort((a, b) => a - b)
-      const startSixth = occupiedSorted[0]!
-      const endSixth = occupiedSorted[occupiedSorted.length - 1]! + 1
+      let start = cursor
+      if (placeableCost >= SIXTHS_PER_STONE && placeableCost % SIXTHS_PER_STONE === 0) {
+        const alignedStart = Math.ceil(cursor / SIXTHS_PER_STONE) * SIXTHS_PER_STONE
+        if (alignedStart + placeableCost <= capacitySixths) {
+          start = alignedStart
+        }
+      }
+      const end = start + placeableCost
       result.push({
         inventoryEntryId: input.entry.id,
         itemDefId: input.definition.id,
         quantity: input.entry.quantity,
         zone: input.entry.zone,
         state: input.entry.state ?? {},
-        startSixth,
-        endSixth,
+        startSixth: start,
+        endSixth: end,
         sizeSixths: placeableCost,
         isOverflow: false,
-        occupiedSixths: occupiedSorted,
-        packStart: startPack,
-        primarySixth: occupiedRaw[0],
       })
-      cursor = startPack + placeableCost
+      cursor = end
     }
 
     const overflowSize = rawCost - placeableCost

@@ -572,32 +572,6 @@ function openAccountMenu(user: ConnectedUser): void {
     showIdentityDialog(user.displayName, false)
   })
   accountDropdown.appendChild(menuButton)
-
-  const prefsBtn = document.createElement('button')
-  prefsBtn.type = 'button'
-  prefsBtn.textContent = 'Preferences'
-  Object.assign(prefsBtn.style, {
-    width: '100%',
-    textAlign: 'left',
-    border: 'none',
-    borderRadius: '0',
-    background: 'transparent',
-    color: '#d0dae8',
-    padding: '10px 12px',
-    fontSize: '13px',
-    cursor: 'pointer',
-  } as Partial<CSSStyleDeclaration>)
-  prefsBtn.addEventListener('mouseenter', () => {
-    prefsBtn.style.background = '#1a2535'
-  })
-  prefsBtn.addEventListener('mouseleave', () => {
-    prefsBtn.style.background = 'transparent'
-  })
-  prefsBtn.addEventListener('click', () => {
-    closeAccountMenu()
-    showPreferencesDialog()
-  })
-  accountDropdown.appendChild(prefsBtn)
 }
 
 document.addEventListener('pointerdown', (event) => {
@@ -1068,57 +1042,6 @@ const fetchItemCatalogFromWorker = (): Promise<readonly ItemCatalogRow[]> => {
 }
 
 let currentScene: SceneVM | null = null
-
-// ─── Preferences Dialog (after currentScene — reads live board preference) ─
-
-const preferencesDialog = document.createElement('dialog')
-preferencesDialog.id = 'preferences-dialog'
-Object.assign(preferencesDialog.style, {
-  border: '1px solid #334455',
-  borderRadius: '10px',
-  background: '#151e2b',
-  color: '#d0dae8',
-  padding: '0',
-  maxWidth: '380px',
-  width: '100%',
-  fontFamily: 'system-ui, -apple-system, sans-serif',
-  boxShadow: '0 20px 60px rgba(0,0,0,0.6)',
-} as Partial<CSSStyleDeclaration>)
-
-function showPreferencesDialog(): void {
-  const serpentine = currentScene?.serpentineInventoryPacking === true
-  preferencesDialog.innerHTML = `
-    <form method="dialog" style="padding: 24px;">
-      <div style="font-size:16px;font-weight:600;margin-bottom:8px;">Preferences</div>
-      <p style="font-size:12px;color:#6b7d90;margin:0 0 16px;line-height:1.45;">
-        Inventory meter fill order is normally top-to-bottom in each column. Enable this to use the legacy alternating column direction (some columns fill upward).
-      </p>
-      <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;margin-bottom:20px;">
-        <input type="checkbox" id="pref-serpentine-packing" ${serpentine ? 'checked' : ''}
-          style="margin-top:2px;accent-color:#2b6cb0;" />
-        <span style="font-size:13px;line-height:1.4;">
-          Legacy alternating columns (serpentine packing)
-        </span>
-      </label>
-      <div style="display:flex;gap:8px;justify-content:flex-end;">
-        <button type="button" id="pref-cancel-btn" style="padding:8px 16px;border-radius:6px;border:1px solid #334455;background:transparent;color:#8899aa;cursor:pointer;font-size:13px;">Cancel</button>
-        <button type="submit" id="pref-save-btn" style="padding:8px 16px;border-radius:6px;border:none;background:#2b6cb0;color:#fff;cursor:pointer;font-size:13px;font-weight:600;">Save</button>
-      </div>
-    </form>
-  `
-  const checkbox = preferencesDialog.querySelector<HTMLInputElement>('#pref-serpentine-packing')!
-  preferencesDialog.querySelector('#pref-cancel-btn')?.addEventListener('click', () => preferencesDialog.close())
-  const form = preferencesDialog.querySelector('form')!
-  form.addEventListener('submit', (e) => {
-    e.preventDefault()
-    postToWorker({ type: 'SET_SERPENTINE_INVENTORY_PACKING', enabled: checkbox.checked })
-    preferencesDialog.close()
-  })
-  preferencesDialog.showModal()
-}
-
-document.body.appendChild(preferencesDialog)
-
 const renderCanvasToolUI = (): void => {
   toolTextBtnEl?.classList.toggle('active', activeCanvasTool === 'text')
   canvasHost.classList.toggle('tool-text-mode', activeCanvasTool === 'text')

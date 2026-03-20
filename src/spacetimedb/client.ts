@@ -161,7 +161,6 @@ function subscriptionQueriesForContext(ctx: WorldCanvasContext): string[] {
     `SELECT * FROM labels WHERE ${room}`,
     `SELECT * FROM settings WHERE ${room}`,
     'SELECT * FROM users',
-    'SELECT * FROM user_preferences',
     `SELECT * FROM user_presences WHERE ${room}`,
     `SELECT * FROM user_cursors WHERE ${room}`,
     `SELECT * FROM user_cameras WHERE ${room}`,
@@ -197,7 +196,6 @@ export function subscriptionQueriesForHubWorld(worldId: string): string[] {
     `SELECT * FROM labels WHERE ${worldOnly}`,
     `SELECT * FROM settings WHERE ${worldOnly}`,
     'SELECT * FROM users',
-    'SELECT * FROM user_preferences',
     `SELECT * FROM user_presences WHERE ${worldOnly}`,
     `SELECT * FROM user_cursors WHERE ${worldOnly}`,
     `SELECT * FROM user_cameras WHERE ${worldOnly}`,
@@ -263,7 +261,7 @@ function handleSubscriptionApplied(): void {
     subscribeToAllTables()
     return
   }
-  const worldState = reconstructCanonicalState(conn, currentContext, myIdentityHex)
+  const worldState = reconstructCanonicalState(conn, currentContext)
   const layoutState = reconstructLayoutState(conn, currentContext)
   initialApplied = true
   logRoomDebug('subscription: snapshot loaded', {
@@ -371,7 +369,7 @@ function registerTableCallbacks(): void {
 
   const rebuild = () => {
     if (!initialApplied || !conn || !onServerState) return
-    const worldState = reconstructCanonicalState(conn, currentContext, myIdentityHex)
+    const worldState = reconstructCanonicalState(conn, currentContext)
     const layoutState = reconstructLayoutState(conn, currentContext)
     onServerState(worldState, layoutState)
     tickWorldHubIfNeeded()
@@ -404,7 +402,6 @@ function registerTableCallbacks(): void {
     conn.db.node_containment,
     conn.db.labels,
     conn.db.settings,
-    conn.db.user_preferences,
   ] as const
 
   for (const table of domainTables) {
@@ -550,12 +547,6 @@ export function setMyDisplayName(name: string): void {
   const c = conn
   if (!c || !initialApplied) return
   runReducer('setDisplayName', () => c.reducers.setDisplayName({ displayName: name }))
-}
-
-export function setSerpentineInventoryPacking(enabled: boolean): void {
-  const c = conn
-  if (!c || !initialApplied) return
-  runReducer('setSerpentineInventoryPacking', () => c.reducers.setSerpentineInventoryPacking({ enabled }))
 }
 
 export function setUserRole(targetIdentityHex: string, role: 'gm' | 'player'): void {
