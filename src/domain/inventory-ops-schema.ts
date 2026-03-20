@@ -32,6 +32,8 @@ export type InventoryItemInput = {
   readonly quantity?: number
   readonly encumbranceStone?: number
   readonly valueGp?: number
+  /** Catalog-style base name when text is ornate; improves matching. */
+  readonly prototypeName?: string
   readonly zoneHint?: CarryZone
   /** Non-encumbering worn clothing displayed as pills. */
   readonly wornClothing?: boolean
@@ -119,6 +121,19 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 const isNonEmptyString = (value: unknown): value is string =>
   typeof value === 'string' && value.trim().length > 0
 
+/**
+ * Chat UIs often wrap the assistant reply in a single markdown ` ```json ` … ` ``` ` block.
+ * Strip that wrapper so `JSON.parse` accepts the paste; if there is no fence, return trimmed input.
+ */
+export const unwrapPastedInventoryJson = (input: string): string => {
+  const t = input.trim()
+  if (!t.startsWith('```')) return t
+  const inner = t.replace(/^```(?:json)?\r?\n?/i, '')
+  const close = inner.lastIndexOf('```')
+  if (close === -1) return t
+  return inner.slice(0, close).trim()
+}
+
 const validNodeKinds: readonly InventorySerializableNodeKind[] = [
   'pc',
   'retainer',
@@ -148,6 +163,11 @@ const validateItems = (items: unknown, path: string): ParseErr | null => {
     const item = items[i]
     if (!isRecord(item)) return fail(`${path}[${i}] must be an object`)
     if (!isNonEmptyString(item.text)) return fail(`${path}[${i}].text must be non-empty`)
+    if (item.prototypeName != null) {
+      if (typeof item.prototypeName !== 'string' || item.prototypeName.trim().length === 0) {
+        return fail(`${path}[${i}].prototypeName must be non-empty when set`)
+      }
+    }
     if (item.quantity != null && (!Number.isFinite(item.quantity) || Number(item.quantity) <= 0)) {
       return fail(`${path}[${i}].quantity must be > 0`)
     }

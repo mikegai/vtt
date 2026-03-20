@@ -63,5 +63,22 @@ describe('inventory text parser', () => {
     expect(sword?.resolvedItemName?.toLowerCase()).toContain('short sword')
     expect(dust?.status).not.toBe('resolved')
   })
+
+  it('merges prototypeName hint with ornate text for catalog search', () => {
+    const parsed = parseInventoryText('a green musty iron-class spellbook', undefined, {
+      prototypeName: 'Treatise, Apprentice',
+    })
+    expect(parsed.chunks.length).toBe(1)
+    const chunk = parsed.chunks[0]
+    expect(chunk?.resolvedItemName ?? chunk?.alternatives[0]?.itemName).toContain('Treatise')
+  })
+
+  it('ignores prototypeName when text splits into multiple clauses', () => {
+    const withHint = parseInventoryText('plate armor, shield', undefined, { prototypeName: 'sword' })
+    const noHint = parseInventoryText('plate armor, shield')
+    expect(withHint.chunks.map((c) => c.alternatives.map((a) => a.itemId))).toEqual(
+      noHint.chunks.map((c) => c.alternatives.map((a) => a.itemId)),
+    )
+  })
 })
 

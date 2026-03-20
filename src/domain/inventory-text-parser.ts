@@ -132,9 +132,33 @@ const singularize = (value: string): string => {
   return value
 }
 
+const MAX_ALTS = 5
+
+const collectNamedHits = (name: string, index: SourceItemSearchIndex): ReturnType<SourceItemSearchIndex['search']> => {
+  const q = `name:"${name}"`
+  const hits = index.search(q, MAX_ALTS)
+  if (hits.length > 0) return hits
+  return index.search(`name:"${singularize(name)}"`, MAX_ALTS)
+}
+
+/** Merge Fuse hit lists by item id, keeping the best (lowest) score per id. */
+const mergeHits = (...lists: ReturnType<SourceItemSearchIndex['search']>[]): ParsedChunkAlternative[] => {
+  const byId = new Map<string, { itemId: string; itemName: string; score: number }>()
+  for (const hits of lists) {
+    for (const hit of hits) {
+      const prev = byId.get(hit.item.id)
+      if (!prev || hit.score < prev.score) {
+        byId.set(hit.item.id, { itemId: hit.item.id, itemName: hit.item.name, score: hit.score })
+      }
+    }
+  }
+  return [...byId.values()].sort((a, b) => a.score - b.score).slice(0, MAX_ALTS)
+}
+
 const resolveCandidate = (
   candidateName: string,
   index: SourceItemSearchIndex,
+  prototypeName?: string,
 ): {
   status: ParsedChunkStatus
   confidence: number
@@ -142,11 +166,12 @@ const resolveCandidate = (
   resolvedItemName?: string
   alternatives: readonly ParsedChunkAlternative[]
 } => {
-  const query = `name:"${candidateName}"`
-  const hits = index.search(query, 5)
-  const singularHits = hits.length > 0 ? hits : index.search(`name:"${singularize(candidateName)}"`, 5)
+  const primaryHits = collectNamedHits(candidateName, index)
+  const hintHits =
+    prototypeName && prototypeName.trim().length > 0 ? collectNamedHits(prototypeName.trim(), index) : []
+  const alternatives = mergeHits(primaryHits, hintHits)
 
-  if (singularHits.length === 0) {
+  if (alternatives.length === 0) {
     return {
       status: 'unknown',
       confidence: 0,
@@ -154,11 +179,6 @@ const resolveCandidate = (
     }
   }
 
-  const alternatives = singularHits.slice(0, 3).map((hit) => ({
-    itemId: hit.item.id,
-    itemName: hit.item.name,
-    score: hit.score,
-  }))
   const top = alternatives[0]
   if (!top) {
     return {
@@ -169,6 +189,7 @@ const resolveCandidate = (
   }
 
   const confidence = Math.max(0, 1 - top.score)
+  // Thresholds use the best merged score (candidate vs prototype hint).
   if (top.score <= resolvedScoreThreshold) {
     return {
       status: 'resolved',
@@ -194,14 +215,22 @@ const resolveCandidate = (
   }
 }
 
+export type ParseInventoryTextOptions = {
+  /** When `text` is a single clause, merged with candidate for catalog search. Ignored if input splits into multiple clauses. */
+  readonly prototypeName?: string
+}
+
 export const parseInventoryText = (
   input: string,
   index: SourceItemSearchIndex = createSourceItemSearchIndex(),
+  options?: ParseInventoryTextOptions,
 ): ParsedInventoryBatch => {
   const clauses = splitInventoryClauses(input)
+  const proto =
+    options?.prototypeName?.trim() && clauses.length === 1 ? options.prototypeName.trim() : undefined
   const chunks: ParsedInventoryChunk[] = clauses.map((raw) => {
     const extracted = extractQuantityAndName(raw)
-    const resolved = resolveCandidate(extracted.candidateName, index)
+    const resolved = resolveCandidate(extracted.candidateName, index, proto)
     return {
       raw,
       quantity: extracted.quantity,

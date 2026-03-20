@@ -2,7 +2,12 @@ import './style.css'
 import { parseInventoryImportPlan } from './domain/inventory-import-plan'
 import { parseInventoryText } from './domain/inventory-text-parser'
 import { buildInventoryLlmPrompt } from './domain/inventory-llm-prompt'
-import { parseInventoryOpsDocument, type InventoryItemInput, type MutateAddItemsOp } from './domain/inventory-ops-schema'
+import {
+  parseInventoryOpsDocument,
+  unwrapPastedInventoryJson,
+  type InventoryItemInput,
+  type MutateAddItemsOp,
+} from './domain/inventory-ops-schema'
 import { allSourceItems, itemSourceCatalog, type EncumbranceExpr, type SourceItem } from './domain/item-source-catalog'
 import { formatSixthsAsStone, stoneToSixths } from './domain/rules'
 import { createSourceItemSearchIndex } from './domain/item-source-search'
@@ -1260,6 +1265,8 @@ type ParsedSpawnItem = {
 type ParsedAddItemsRow = ParsedSpawnItem & {
   opIndex: number
   overrideKey: string
+  prototypeName?: string
+  valueGp?: number
 }
 
 const sourceItemById = new Map(allSourceItems.map((item) => [item.id, item]))
@@ -1332,12 +1339,18 @@ const resolveParsedItem = (
   zoneHint?: CarryZone,
 ): ParsedSpawnItem => {
   const override = addItemsDisambiguationOverrides[overrideKey]
-  const isCustom = override === CUSTOM_ITEM_ID
+  const forceCustom = override === CUSTOM_ITEM_ID
+  const catalogId = forceCustom
+    ? undefined
+    : (override && override !== CUSTOM_ITEM_ID
+        ? override
+        : (resolvedItemId ?? alternatives[0]?.itemId))
+
   let customSlug = slugify(candidateName) || slugify(raw) || 'custom-item'
   const resolvedStone = stoneOverride ?? (wornClothing ? 0 : undefined)
-  if (isCustom && resolvedStone != null) {
-    const sixths = Math.round(stoneToSixths(resolvedStone))
-    customSlug = `${customSlug}-${sixths}`
+  const useCustom = forceCustom || !catalogId
+  if (useCustom && resolvedStone != null) {
+    customSlug = `${customSlug}-${Math.round(stoneToSixths(resolvedStone))}`
   }
   const customDefId = `custom:${customSlug}`
 
@@ -1346,7 +1359,7 @@ const resolveParsedItem = (
   let perUnitSixths: number
   let sixthsPerUnit: number | undefined
 
-  if (isCustom) {
+  if (!catalogId) {
     itemDefId = customDefId
     itemName = candidateName || raw || 'Custom item'
     if (resolvedStone != null) {
@@ -1359,11 +1372,13 @@ const resolveParsedItem = (
     }
     sixthsPerUnit = perUnitSixths
   } else {
-    itemDefId = override ?? resolvedItemId ?? null
-    itemName = override
-      ? (alternatives.find((a) => a.itemId === override)?.itemName ?? candidateName)
-      : (resolvedItemName ?? candidateName)
-    const sourceItem = itemDefId ? sourceItemById.get(itemDefId) : null
+    itemDefId = catalogId
+    itemName =
+      alternatives.find((a) => a.itemId === catalogId)?.itemName ??
+      sourceItemById.get(catalogId)?.name ??
+      resolvedItemName ??
+      candidateName
+    const sourceItem = sourceItemById.get(catalogId)
     perUnitSixths = sourceItem
       ? perUnitSixthsFromSource(sourceItem)
       : Math.max(0, Math.round(stoneToSixths(resolvedStone ?? 1 / 6)))
@@ -1386,10 +1401,11 @@ const resolveParsedItem = (
 }
 
 const parseAddItemsRowsFromJson = (jsonText: string): { rows: ParsedAddItemsRow[]; error: string | null; ops: readonly MutateAddItemsOp[] } => {
-  if (jsonText.trim().length === 0) return { rows: [], error: null, ops: [] }
+  const normalizedJson = unwrapPastedInventoryJson(jsonText)
+  if (normalizedJson.length === 0) return { rows: [], error: null, ops: [] }
   let parsedRaw: unknown
   try {
-    parsedRaw = JSON.parse(jsonText)
+    parsedRaw = JSON.parse(normalizedJson)
   } catch {
     return { rows: [], error: 'Invalid JSON', ops: [] }
   }
@@ -1402,7 +1418,9 @@ const parseAddItemsRowsFromJson = (jsonText: string): { rows: ParsedAddItemsRow[
   const rows: ParsedAddItemsRow[] = []
   addOps.forEach((op, opIndex) => {
     op.items.forEach((item: InventoryItemInput, itemIndex: number) => {
-      const parsedBatch = parseInventoryText(item.text, sourceItemSearch)
+      const parsedBatch = parseInventoryText(item.text, sourceItemSearch, {
+        prototypeName: item.prototypeName,
+      })
       parsedBatch.chunks.forEach((chunk, chunkIndex) => {
         const rowKey = normalizeRowKey(opIndex, itemIndex, chunkIndex)
         const resolved = resolveParsedItem(
@@ -1423,6 +1441,8 @@ const parseAddItemsRowsFromJson = (jsonText: string): { rows: ParsedAddItemsRow[
           ...resolved,
           opIndex,
           overrideKey: rowKey,
+          ...(item.prototypeName?.trim() ? { prototypeName: item.prototypeName.trim() } : {}),
+          ...(item.valueGp != null && Number.isFinite(item.valueGp) ? { valueGp: item.valueGp } : {}),
         })
       })
     })
@@ -1891,7 +1911,7 @@ const renderParsed = (text: string): void => {
             `<button class="alt-pill ${a.itemId === item.itemDefId ? 'alt-pill-selected' : ''}" data-raw="${escapeHtml(item.raw)}" data-item-id="${escapeHtml(a.itemId)}" type="button">${escapeHtml(a.itemName)}</button>`,
         )
         .join('')
-      const customPill = `<button class="alt-pill ${item.itemDefId?.startsWith('custom:') ? 'alt-pill-selected' : ''}" data-raw="${escapeHtml(item.raw)}" data-item-id="${escapeHtml(CUSTOM_ITEM_ID)}" type="button">As-is</button>`
+      const customPill = `<button class="alt-pill ${item.itemDefId?.startsWith('custom:') ? 'alt-pill-selected' : ''}" data-raw="${escapeHtml(item.raw)}" data-item-id="${escapeHtml(CUSTOM_ITEM_ID)}" type="button">Custom</button>`
       const altsHtml = `<div class="alt-pills">${catalogPills}${customPill}</div>`
       const draggableClass = item.itemDefId ? ' parsed-item-draggable' : ''
       return `<div class="parsed-item${draggableClass} status-${item.status}" data-parsed-id="${escapeAttr(item.id)}" data-raw="${escapeHtml(item.raw)}">
@@ -1917,6 +1937,17 @@ const escapeHtml = (s: string): string =>
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
 
+const catalogEncMeta = (itemId: string): string => {
+  const src = sourceItemById.get(itemId)
+  return src ? formatEncumbrance(src.encumbrance) : '—'
+}
+
+const addItemsCustomTileMeta = (row: ParsedAddItemsRow): string => {
+  if (row.wornClothing) return '0 st (clothing)'
+  if (row.sixthsPerUnit != null) return formatEncumbrance({ kind: 'fixed', sixths: Math.max(0, row.sixthsPerUnit) })
+  return 'Custom'
+}
+
 const renderAddItemsRows = (): void => {
   const rowsEl = addItemsDialog.querySelector<HTMLElement>('#add-items-match-results')
   const statusEl = addItemsDialog.querySelector<HTMLElement>('#add-items-status')
@@ -1939,38 +1970,53 @@ const renderAddItemsRows = (): void => {
     return
   }
 
-  const unresolved = addItemsRows.filter((row) => !row.itemDefId).length
-  const ambiguous = addItemsRows.filter((row) => row.status !== 'resolved').length
-  statusEl.textContent = `${addItemsRows.length} rows • ${unresolved} unresolved • ${ambiguous} ambiguous`
-  statusEl.className = unresolved > 0 || ambiguous > 0 ? 'add-items-status add-items-status-warn' : 'add-items-status add-items-status-ok'
+  const reviewGuess = addItemsRows.filter((row) => row.status !== 'resolved').length
+  statusEl.textContent = `${addItemsRows.length} rows • ${reviewGuess} best-guess (pre-selected; review if needed)`
+  statusEl.className = reviewGuess > 0 ? 'add-items-status add-items-status-warn' : 'add-items-status add-items-status-ok'
 
   rowsEl.innerHTML = addItemsRows
     .map((row) => {
       const catalogPills = row.alternatives
         .map(
           (a) =>
-            `<button class="alt-pill ${a.itemId === row.itemDefId ? 'alt-pill-selected' : ''}" data-add-items-key="${escapeAttr(row.overrideKey)}" data-item-id="${escapeHtml(a.itemId)}" type="button">${escapeHtml(a.itemName)}</button>`,
+            `<button class="alt-pill alt-pill-tile ${a.itemId === row.itemDefId ? 'alt-pill-selected' : ''}" data-add-items-key="${escapeAttr(row.overrideKey)}" data-item-id="${escapeHtml(a.itemId)}" type="button"><span class="alt-pill-title">${escapeHtml(a.itemName)}</span><span class="alt-pill-meta">${escapeHtml(catalogEncMeta(a.itemId))}</span></button>`,
         )
         .join('')
-      const customPill = `<button class="alt-pill ${row.itemDefId?.startsWith('custom:') ? 'alt-pill-selected' : ''}" data-add-items-key="${escapeAttr(row.overrideKey)}" data-item-id="${escapeHtml(CUSTOM_ITEM_ID)}" type="button">As-is</button>`
+      const customPill = `<button class="alt-pill alt-pill-tile ${row.itemDefId?.startsWith('custom:') ? 'alt-pill-selected' : ''}" data-add-items-key="${escapeAttr(row.overrideKey)}" data-item-id="${escapeHtml(CUSTOM_ITEM_ID)}" type="button"><span class="alt-pill-title">Custom</span><span class="alt-pill-meta">${escapeHtml(addItemsCustomTileMeta(row))}</span></button>`
       const wornTag = row.wornClothing ? `<span class="parsed-qty">worn clothing</span>` : ''
+      const valueTag =
+        row.valueGp != null ? `<span class="parsed-qty">LLM ${escapeHtml(String(row.valueGp))} gp</span>` : ''
+      const hintRow = row.prototypeName
+        ? `<div class="add-items-hint">Match hint: ${escapeHtml(row.prototypeName)}</div>`
+        : ''
+      const reallyRow =
+        row.prototypeName &&
+        row.itemDefId &&
+        !row.itemDefId.startsWith('custom:') &&
+        row.itemName.trim().toLowerCase() !== row.prototypeName.trim().toLowerCase()
+          ? `<div class="add-items-really">e.g. really: ${escapeHtml(row.prototypeName)}</div>`
+          : ''
       return `<div class="parsed-item status-${row.status}" data-add-items-row="${escapeAttr(row.overrideKey)}">
         <div class="parsed-head">
           <span class="parsed-status">${row.status}</span>
           <span class="parsed-qty">qty ${row.quantity}</span>
           ${wornTag}
+          ${valueTag}
           <span class="parsed-conf">${Math.round(row.confidence * 100)}%</span>
         </div>
         <div class="parsed-text">${escapeHtml(row.raw)}</div>
+        ${hintRow}
         <div class="parsed-candidate">
           <span class="parsed-display-name">${escapeHtml(row.itemName)}</span>
+          ${reallyRow}
           <div class="alt-pills">${catalogPills}${customPill}</div>
         </div>
       </div>`
     })
     .join('')
 
-  applyBtn.disabled = unresolved > 0 || ambiguous > 0
+  const canApply = addItemsRows.every((row) => !!row.itemDefId)
+  applyBtn.disabled = !canApply
 }
 
 const applyAddItemsRowsToNode = (rows: readonly ParsedAddItemsRow[], mode: 'auto' | 'manual'): void => {
@@ -2019,11 +2065,6 @@ const refreshAddItemsParsed = (): void => {
   addItemsError = parsed.error
   addItemsRows = parsed.rows
   renderAddItemsRows()
-
-  const cleanRows = addItemsRows.length > 0 && addItemsRows.every((row) => row.status === 'resolved' && !!row.itemDefId)
-  if (!addItemsError && cleanRows) {
-    applyAddItemsRowsToNode(addItemsRows, 'auto')
-  }
 }
 
 const showAddItemsDialog = (nodeId: string, nodeTitle: string): void => {
@@ -2048,8 +2089,8 @@ const showAddItemsDialog = (nodeId: string, nodeTitle: string): void => {
       <div class="add-items-actions">
         <button type="button" class="tool-button" id="add-items-copy-prompt">Copy Prompt for LLM</button>
       </div>
-      <label class="tool-label" for="add-items-json">Paste LLM JSON Output</label>
-      <textarea id="add-items-json" class="tool-textarea add-items-json" rows="10" placeholder='{"schema":"vtt.inventory.ops.v1","ops":[...]}'></textarea>
+      <label class="tool-label" for="add-items-json">Paste LLM output (raw JSON or a ${'```'}json code block)</label>
+      <textarea id="add-items-json" class="tool-textarea add-items-json" rows="10" placeholder="${'```json&#10;{ "schema": "vtt.inventory.ops.v1", "ops": [...] }&#10;```'}"></textarea>
       <div id="add-items-status" class="add-items-status"></div>
       <div id="add-items-match-results" class="parsed-list add-items-results"></div>
       <div class="add-items-actions add-items-actions-end">
@@ -2078,7 +2119,7 @@ const showAddItemsDialog = (nodeId: string, nodeTitle: string): void => {
   })
   addItemsDialog.querySelector<HTMLButtonElement>('#add-items-apply')?.addEventListener('click', () => {
     if (addItemsRows.length === 0) return
-    const canApply = addItemsRows.every((row) => row.status === 'resolved' && !!row.itemDefId)
+    const canApply = addItemsRows.every((row) => !!row.itemDefId)
     if (!canApply) return
     applyAddItemsRowsToNode(addItemsRows, 'manual')
   })
