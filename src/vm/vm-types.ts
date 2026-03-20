@@ -22,6 +22,10 @@ export type SegmentVM = {
   readonly endSixth: number
   readonly sizeSixths: number
   readonly isOverflow: boolean
+  /** Row-major sixth indices when occupancy is non-contiguous in slot order. */
+  readonly occupiedSixths?: readonly number[]
+  readonly packStart?: number
+  readonly primarySixth?: number
   readonly labels: LabelLadder
   readonly tooltip: TooltipVM
   /** When true, contiguous same-type segments may be visually merged. Fallback: sizeSixths <= 1. */

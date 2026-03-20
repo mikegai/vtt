@@ -66,6 +66,7 @@ import RenameWorldReducer from "./rename_world_reducer";
 import SetDisplayNameReducer from "./set_display_name_reducer";
 import SetLayoutStateReducer from "./set_layout_state_reducer";
 import SetPresenceReducer from "./set_presence_reducer";
+import SetSerpentineInventoryPackingReducer from "./set_serpentine_inventory_packing_reducer";
 import SetUserRoleReducer from "./set_user_role_reducer";
 import SetWorldStateReducer from "./set_world_state_reducer";
 import UpdateCameraReducer from "./update_camera_reducer";
@@ -122,6 +123,7 @@ import NodeTitleOverridesRow from "./node_title_overrides_table";
 import SettingsRow from "./settings_table";
 import UserCamerasRow from "./user_cameras_table";
 import UserCursorsRow from "./user_cursors_table";
+import UserPreferencesRow from "./user_preferences_table";
 import UserPresencesRow from "./user_presences_table";
 import UsersRow from "./users_table";
 import WorldSlugHistoryRow from "./world_slug_history_table";
@@ -543,6 +545,17 @@ const tablesSchema = __schema({
       { name: 'user_cursors_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, UserCursorsRow),
+  user_preferences: __table({
+    name: 'user_preferences',
+    indexes: [
+      { accessor: 'identityHex', name: 'user_preferences_identity_hex_idx_btree', algorithm: 'btree', columns: [
+        'identityHex',
+      ] },
+    ],
+    constraints: [
+      { name: 'user_preferences_identity_hex_key', constraint: 'unique', columns: ['identityHex'] },
+    ],
+  }, UserPreferencesRow),
   user_presences: __table({
     name: 'user_presences',
     indexes: [
@@ -636,6 +649,7 @@ const reducersSchema = __reducers(
   __reducerSchema("set_display_name", SetDisplayNameReducer),
   __reducerSchema("set_layout_state", SetLayoutStateReducer),
   __reducerSchema("set_presence", SetPresenceReducer),
+  __reducerSchema("set_serpentine_inventory_packing", SetSerpentineInventoryPackingReducer),
   __reducerSchema("set_user_role", SetUserRoleReducer),
   __reducerSchema("set_world_state", SetWorldStateReducer),
   __reducerSchema("update_camera", UpdateCameraReducer),

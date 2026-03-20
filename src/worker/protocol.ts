@@ -14,6 +14,9 @@ export type SceneSegmentVM = {
   readonly startSixth: number
   readonly sizeSixths: number
   readonly isOverflow: boolean
+  readonly occupiedSixths?: readonly number[]
+  readonly packStart?: number
+  readonly primarySixth?: number
   /** True when this segment is the drop-preview placeholder (dashed outline). */
   readonly isDropPreview?: boolean
   readonly itemDefId: string
@@ -114,6 +117,8 @@ export type SceneGroupVM = {
 }
 
 export type SceneVM = {
+  /** Viewer preference: alternating column fill for inventory meter (legacy). */
+  readonly serpentineInventoryPacking: boolean
   readonly partyPaceText: string
   readonly hoveredSegmentId: string | null
   readonly filterCategory: ItemCategory | null
@@ -303,6 +308,7 @@ export type MainToWorkerMessage =
   | { readonly type: 'SET_SPACETIMEDB_TOKEN'; readonly token: string }
   | { readonly type: 'UPDATE_CURSOR'; readonly x: number; readonly y: number }
   | { readonly type: 'SET_DISPLAY_NAME'; readonly name: string }
+  | { readonly type: 'SET_SERPENTINE_INVENTORY_PACKING'; readonly enabled: boolean }
   | { readonly type: 'SET_WORLD_DISPLAY_NAME'; readonly displayName: string }
   | { readonly type: 'UPDATE_CAMERA'; readonly panX: number; readonly panY: number; readonly zoom: number }
   | { readonly type: 'GET_ITEM_CATALOG'; readonly requestId: string }

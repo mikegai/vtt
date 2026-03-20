@@ -23,6 +23,7 @@ import {
   updateMyCursor,
   updateMyCamera,
   setMyDisplayName,
+  setSerpentineInventoryPacking,
   refreshPresence,
   setAppSubscriptionRoute,
   getMyIdentityHex,
@@ -2604,6 +2605,10 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
   }
   if (message.type === 'SET_DISPLAY_NAME') {
     setMyDisplayName(message.name)
+    return
+  }
+  if (message.type === 'SET_SERPENTINE_INVENTORY_PACKING') {
+    setSerpentineInventoryPacking(message.enabled)
     return
   }
   if (message.type === 'UPDATE_CAMERA') {

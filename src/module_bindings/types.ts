@@ -264,6 +264,12 @@ export const UserCursors = __t.object("UserCursors", {
 });
 export type UserCursors = __Infer<typeof UserCursors>;
 
+export const UserPreferences = __t.object("UserPreferences", {
+  identityHex: __t.string(),
+  serpentineInventoryPacking: __t.bool(),
+});
+export type UserPreferences = __Infer<typeof UserPreferences>;
+
 export const UserPresences = __t.object("UserPresences", {
   id: __t.string(),
   identityHex: __t.string(),

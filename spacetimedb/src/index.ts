@@ -526,6 +526,16 @@ const users = table(
   }
 );
 
+/** Per-identity UI preferences (not world-scoped). */
+const user_preferences = table(
+  { name: 'user_preferences', public: true },
+  {
+    identityHex: t.string().primaryKey(),
+    /** When true, inventory meter uses alternating up/down columns (legacy). Default is column-major top→bottom only. */
+    serpentineInventoryPacking: t.bool(),
+  },
+);
+
 const user_presences = table(
   {
     name: 'user_presences',
@@ -629,6 +639,7 @@ const spacetimedb = schema({
   labels,
   settings,
   users,
+  user_preferences,
   user_presences,
   user_cursors,
   user_cameras,
@@ -694,6 +705,22 @@ export const set_display_name = spacetimedb.reducer(
       ctx.db.users.identityHex.update({ ...existing, displayName });
     }
   }
+);
+
+export const set_serpentine_inventory_packing = spacetimedb.reducer(
+  { enabled: t.bool() },
+  (ctx, { enabled }) => {
+    const hex = ctx.sender.toHexString();
+    const row = ctx.db.user_preferences.identityHex.find(hex);
+    if (row) {
+      ctx.db.user_preferences.identityHex.update({ ...row, serpentineInventoryPacking: enabled });
+    } else {
+      ctx.db.user_preferences.insert({
+        identityHex: hex,
+        serpentineInventoryPacking: enabled,
+      });
+    }
+  },
 );
 
 export const set_user_role = spacetimedb.reducer(
@@ -1511,6 +1538,7 @@ export const clear_all_tables = spacetimedb.reducer(
     for (const r of ctx.db.node_containment.iter()) ctx.db.node_containment.nodeId.delete(r.nodeId);
     for (const r of ctx.db.labels.iter()) ctx.db.labels.labelId.delete(r.labelId);
     for (const r of ctx.db.settings.iter()) ctx.db.settings.key.delete(r.key);
+    for (const r of ctx.db.user_preferences.iter()) ctx.db.user_preferences.identityHex.delete(r.identityHex);
   }
 );
 

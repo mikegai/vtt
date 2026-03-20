@@ -14,7 +14,11 @@ import type { WorldCanvasContext } from './context'
 import { canvasPrefix, withoutPrefix, worldPrefix } from './context'
 import { sampleState } from '../sample-data'
 
-export function reconstructCanonicalState(conn: DbConnection, context: WorldCanvasContext): CanonicalState {
+export function reconstructCanonicalState(
+  conn: DbConnection,
+  context: WorldCanvasContext,
+  viewerIdentityHex?: string,
+): CanonicalState {
   const wp = worldPrefix(context)
   const actors: Record<string, Actor> = {}
   for (const row of conn.db.actors.iter()) {
@@ -121,7 +125,20 @@ export function reconstructCanonicalState(conn: DbConnection, context: WorldCanv
     }
   }
 
-  return { actors, itemDefinitions, inventoryEntries, carryGroups, movementGroups }
+  let serpentineInventoryPacking: boolean | undefined
+  if (viewerIdentityHex) {
+    const pref = conn.db.user_preferences.identityHex.find(viewerIdentityHex)
+    if (pref?.serpentineInventoryPacking === true) serpentineInventoryPacking = true
+  }
+
+  return {
+    actors,
+    itemDefinitions,
+    inventoryEntries,
+    carryGroups,
+    movementGroups,
+    ...(serpentineInventoryPacking === true ? { serpentineInventoryPacking: true } : {}),
+  }
 }
 
 export function reconstructLayoutState(conn: DbConnection, context: WorldCanvasContext): Partial<PersistedLocalState> {

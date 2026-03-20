@@ -21,7 +21,15 @@ const memoizeLast = <T extends (...args: any[]) => any>(fn: T): T => {
     return lastResult
   }) as T
 }
+import { sliceFormsWholeStones } from '../domain/pack-trajectory'
+import { expandOccupiedSixths } from '../domain/segment-occupancy'
 import { groupContiguousSameType } from './group-contiguous-same-type'
+import {
+  drawRoundedPolygonFillStroke,
+  orthogonalUnionOutline,
+  polygonHitAreaFromOutline,
+  stoneIndicesToRowChunks,
+} from './multi-stone-wrap-outline'
 import { resolveDragStartFromSegment } from './drag-start-resolution'
 import { decideNodeMotion } from './drag-motion-policy'
 import { nodeHeightForRows as vmNodeHeightForRows, nodeWidthForCols as vmNodeWidthForCols } from '../shared/node-layout'
@@ -380,22 +388,23 @@ const measureTextWidth = (text: string, fontSize: number): number => {
   return measured
 }
 
-/** Days of rations in a group spanning [groupStartSixth, groupStartSixth + count). */
+/** Days of rations in a group spanning [groupStartSixth, groupStartSixth + count) in row-major cell indices. */
 const rationDaysInGroup = (
   run: readonly SceneSegmentVM[],
   groupStartSixth: number,
   count: number,
 ): number => {
   if (run[0]?.itemDefId !== 'ironRationsDay') return 0
-  const groupEnd = groupStartSixth + count
+  const inGroup = new Set<number>()
+  for (let s = groupStartSixth; s < groupStartSixth + count; s += 1) {
+    inGroup.add(s)
+  }
   let days = 0
   for (const seg of run) {
-    const segEnd = seg.startSixth + seg.sizeSixths
-    const overlapStart = Math.max(seg.startSixth, groupStartSixth)
-    const overlapEnd = Math.min(segEnd, groupEnd)
-    const overlapSixths = Math.max(0, overlapEnd - overlapStart)
     const daysPerSixth = seg.tooltip.title.toLowerCase().includes('2 daily') ? 4 : 1
-    days += overlapSixths * daysPerSixth
+    for (const sixth of expandSceneOccupied(seg)) {
+      if (inGroup.has(sixth)) days += daysPerSixth
+    }
   }
   return days
 }
@@ -573,6 +582,104 @@ const groupSixthsByStone = (
   return groups
 }
 
+const expandSceneOccupied = (segment: SceneSegmentVM): readonly number[] => expandOccupiedSixths(segment)
+
+/** Contiguous row ranges within each stone, sorted by stone and row (for arbitrary occupied sixth sets). */
+const groupSixthsFromOccupied = (occupied: readonly number[]): { stone: number; startRow: number; count: number }[] => {
+  const sorted = [...occupied].sort((a, b) => a - b)
+  const groups: { stone: number; startRow: number; count: number }[] = []
+  for (const sixth of sorted) {
+    const stone = Math.floor(sixth / 6)
+    const row = sixth % 6
+    const last = groups[groups.length - 1]
+    if (last && last.stone === stone && last.startRow + last.count === row) {
+      last.count += 1
+    } else {
+      groups.push({ stone, startRow: row, count: 1 })
+    }
+  }
+  return groups
+}
+
+const segmentStoneSpanFromSegment = (segment: SceneSegmentVM): { startStone: number; endStone: number } => {
+  const occ = expandSceneOccupied(segment)
+  if (occ.length === 0) return segmentStoneSpan(segment.startSixth, segment.sizeSixths)
+  let minS = Infinity
+  let maxS = -Infinity
+  for (const s of occ) {
+    const st = Math.floor(s / 6)
+    minS = Math.min(minS, st)
+    maxS = Math.max(maxS, st)
+  }
+  return { startStone: minS, endStone: maxS + 1 }
+}
+
+type PaddedRect = { x: number; y: number; w: number; h: number }
+
+const multiStonePaddedRects = (
+  occupied: readonly number[],
+  originX: number,
+  slotTopY: number,
+  stonesPerRowOverride: number,
+): PaddedRect[] => {
+  const stones = [...new Set(occupied.map((s) => Math.floor(s / 6)))]
+  const chunks = stoneIndicesToRowChunks(stones, stonesPerRowOverride)
+  const pad = 0.5
+  return chunks.map((chunk) => {
+    const cx = originX + stoneToX(chunk.start, stonesPerRowOverride)
+    const cy = slotTopY + stoneToY(chunk.start, stonesPerRowOverride)
+    const cw = (chunk.end - chunk.start) * (STONE_W + STONE_GAP) - STONE_GAP
+    const ch = STONE_H
+    return { x: cx + pad, y: cy + 2.5, w: cw - 1, h: ch - 5 }
+  })
+}
+
+const blendedPaddedRects = (
+  occupied: readonly number[],
+  originX: number,
+  slotTopY: number,
+  stonesPerRowOverride: number,
+): PaddedRect[] => {
+  const PAD = 1.2
+  const groups = groupSixthsFromOccupied(occupied)
+  return groups.map((g) => {
+    const x = originX + stoneToX(g.stone, stonesPerRowOverride)
+    const y = slotTopY + stoneToY(g.stone, stonesPerRowOverride) + g.startRow * CELL_H
+    return { x: x + PAD, y: y + PAD, w: STONE_W - PAD * 2, h: g.count * CELL_H - PAD * 2 }
+  })
+}
+
+const occupancyPaddedRects = (
+  occupied: readonly number[],
+  originX: number,
+  slotTopY: number,
+  stonesPerRowOverride: number,
+  mode: 'multiStone' | 'blended',
+): PaddedRect[] =>
+  mode === 'multiStone'
+    ? multiStonePaddedRects(occupied, originX, slotTopY, stonesPerRowOverride)
+    : blendedPaddedRects(occupied, originX, slotTopY, stonesPerRowOverride)
+
+const drawUnifiedOccupancyBlob = (
+  g: Graphics,
+  rects: readonly PaddedRect[],
+  radius: number,
+  fillOpt: { color: number; alpha: number },
+  strokeOpt: { width: number; color: number; alpha: number },
+): void => {
+  if (rects.length === 0) return
+  if (rects.length === 1) {
+    const r = rects[0]!
+    fillRoundedRect(g, r.x, r.y, r.w, r.h, { tl: radius, tr: radius, br: radius, bl: radius })
+    g.fill(fillOpt)
+    g.stroke(strokeOpt)
+    return
+  }
+  const outline = orthogonalUnionOutline(rects)
+  if (outline.length < 3) return
+  drawRoundedPolygonFillStroke(g, outline, radius, fillOpt, strokeOpt)
+}
+
 const segmentStoneSpan = (startSixth: number, sizeSixths: number): { startStone: number; endStone: number } => {
   const startStone = Math.floor(startSixth / 6)
   const endStone = Math.max(startStone + 1, Math.ceil((startSixth + sizeSixths) / 6))
@@ -581,16 +688,17 @@ const segmentStoneSpan = (startSixth: number, sizeSixths: number): { startStone:
 
 /** Position (top-left) of segment in node's local space (relative to node root). */
 const segmentPositionInNode = (segment: SceneSegmentVM, stonesPerRowOverride = stonesPerRow): { x: number; y: number } => {
-  const { startStone } = segmentStoneSpan(segment.startSixth, segment.sizeSixths)
-  const isMulti = segment.sizeSixths >= 6 && segment.sizeSixths % 6 === 0
+  const { startStone } = segmentStoneSpanFromSegment(segment)
+  const isMulti = isMultiStone(segment)
   if (isMulti) {
     return {
       x: SLOT_START_X + stoneToX(startStone, stonesPerRowOverride),
       y: TOP_BAND_H + stoneToY(startStone, stonesPerRowOverride),
     }
   }
-  const groups = groupSixthsByStone(segment.startSixth, segment.sizeSixths)
-  let minX = Infinity, minY = Infinity
+  const groups = groupSixthsFromOccupied(expandSceneOccupied(segment))
+  let minX = Infinity
+  let minY = Infinity
   groups.forEach((g) => {
     minX = Math.min(minX, stoneToX(g.stone, stonesPerRowOverride))
     minY = Math.min(minY, stoneToY(g.stone, stonesPerRowOverride) + g.startRow * CELL_H)
@@ -726,11 +834,14 @@ const redrawNodeSlotFillLayer = (
 /** Bounds of segment in node-local space (relative to node root). */
 const segmentBoundsInNodeLocal = (segment: SceneSegmentVM, stonesPerRowOverride = stonesPerRow, pillStripHeight = 0): { x: number; y: number; w: number; h: number } => {
   const slotStartY = TOP_BAND_H + pillStripHeight
-  const { startStone, endStone } = segmentStoneSpan(segment.startSixth, segment.sizeSixths)
+  const { startStone, endStone } = segmentStoneSpanFromSegment(segment)
   const isMulti = isMultiStone(segment)
   if (isMulti) {
     const chunks = splitStonesAtWrap(startStone, endStone, stonesPerRowOverride)
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+    let minX = Infinity
+    let minY = Infinity
+    let maxX = -Infinity
+    let maxY = -Infinity
     chunks.forEach((chunk) => {
       const cx = SLOT_START_X + stoneToX(chunk.start, stonesPerRowOverride)
       const cy = slotStartY + stoneToY(chunk.start, stonesPerRowOverride)
@@ -742,8 +853,11 @@ const segmentBoundsInNodeLocal = (segment: SceneSegmentVM, stonesPerRowOverride 
     })
     return { x: minX, y: minY, w: maxX - minX, h: maxY - minY }
   }
-  const groups = groupSixthsByStone(segment.startSixth, segment.sizeSixths)
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+  const groups = groupSixthsFromOccupied(expandSceneOccupied(segment))
+  let minX = Infinity
+  let minY = Infinity
+  let maxX = -Infinity
+  let maxY = -Infinity
   groups.forEach((g) => {
     const x = stoneToX(g.stone, stonesPerRowOverride)
     const y = stoneToY(g.stone, stonesPerRowOverride) + g.startRow * CELL_H
@@ -769,10 +883,13 @@ const segmentCenterInNode = (
   pillStripHeight = 0,
 ): { x: number; y: number } => {
   const slotStartY = TOP_BAND_H + pillStripHeight
-  const { startStone, endStone } = segmentStoneSpan(segment.startSixth, segment.sizeSixths)
-  const isMulti = segment.sizeSixths >= 6 && segment.sizeSixths % 6 === 0
+  const { startStone, endStone } = segmentStoneSpanFromSegment(segment)
+  const isMulti = isMultiStone(segment)
   if (isMulti) {
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+    let minX = Infinity
+    let minY = Infinity
+    let maxX = -Infinity
+    let maxY = -Infinity
     for (let s = startStone; s < endStone; s += 1) {
       const x = stoneToX(s, stonesPerRowOverride)
       const y = stoneToY(s, stonesPerRowOverride)
@@ -786,8 +903,11 @@ const segmentCenterInNode = (
       y: nodeY + slotStartY + (minY + maxY) / 2,
     }
   }
-  const groups = groupSixthsByStone(segment.startSixth, segment.sizeSixths)
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+  const groups = groupSixthsFromOccupied(expandSceneOccupied(segment))
+  let minX = Infinity
+  let minY = Infinity
+  let maxX = -Infinity
+  let maxY = -Infinity
   groups.forEach((g) => {
     const x = stoneToX(g.stone, stonesPerRowOverride)
     const y = stoneToY(g.stone, stonesPerRowOverride) + g.startRow * CELL_H
@@ -912,32 +1032,6 @@ const splitStonesAtWrap = (
   return chunks
 }
 
-/** Draw rect with fill and stroke on specific sides (for wrap continuity). */
-const drawChunkRect = (
-  g: Graphics,
-  x: number,
-  y: number,
-  w: number,
-  h: number,
-  sides: { left: boolean; top: boolean; right: boolean; bottom: boolean },
-  fillOpt: { color: number; alpha: number },
-  strokeOpt: { width: number; color: number; alpha: number },
-  cornerRadii: { tl: number; tr: number; br: number; bl: number },
-): void => {
-  fillRoundedRect(g, x, y, w, h, cornerRadii)
-  g.fill(fillOpt)
-  g.moveTo(x + w, y + h)
-  if (sides.bottom) g.lineTo(x, y + h)
-  else g.moveTo(x, y + h)
-  if (sides.left) g.lineTo(x, y)
-  else g.moveTo(x, y)
-  if (sides.top) g.lineTo(x + w, y)
-  else g.moveTo(x + w, y)
-  if (sides.right) g.lineTo(x + w, y + h)
-  else g.moveTo(x + w, y + h)
-  g.stroke(strokeOpt)
-}
-
 const occupiedSixthsFromSegments = (
   segments: readonly SceneSegmentVM[],
   totalSixths: number,
@@ -945,10 +1039,8 @@ const occupiedSixthsFromSegments = (
   const occupied = new Set<number>()
   segments.forEach((segment) => {
     if (segment.isOverflow) return
-    const start = Math.max(0, segment.startSixth)
-    const endExclusive = Math.min(totalSixths, segment.startSixth + segment.sizeSixths)
-    for (let idx = start; idx < endExclusive; idx += 1) {
-      occupied.add(idx)
+    for (const idx of expandSceneOccupied(segment)) {
+      if (idx >= 0 && idx < totalSixths) occupied.add(idx)
     }
   })
   return occupied
@@ -1082,8 +1174,8 @@ const drawBlendedSegmentRects = (
   dimmedAlpha: number,
   stonesPerRowOverride = stonesPerRow,
 ): { hitBounds: { x: number; y: number; w: number; h: number }; groupBounds: { x: number; y: number; w: number; h: number }[] } => {
-  const groups = groupSixthsByStone(segment.startSixth, segment.sizeSixths)
-  const PAD = 1.2
+  const occ = expandSceneOccupied(segment)
+  const groups = groupSixthsFromOccupied(occ)
   const strokeColor = darkenColor(color)
   let minX = Infinity
   let minY = Infinity
@@ -1095,42 +1187,21 @@ const drawBlendedSegmentRects = (
   const visualScale = textCompensationScale * zoomReadableScale
 
   const isDropPreview = segment.isDropPreview === true
+  const blendedRects = blendedPaddedRects(occ, baseX, baseY, stonesPerRowOverride)
+  const blobG = new Graphics()
+  blobG.eventMode = 'none'
+  const fillOpt = { color, alpha }
+  const strokeOpt = isDropPreview
+    ? { width: 2, color: 0x5cadee, alpha: 0.7 }
+    : { width: 0.5, color: strokeColor, alpha: 1 }
+  drawUnifiedOccupancyBlob(blobG, blendedRects, 4, fillOpt, strokeOpt)
+  container.addChild(blobG)
 
   groups.forEach((group, index) => {
     const x = baseX + stoneToX(group.stone, stonesPerRowOverride)
     const y = baseY + stoneToY(group.stone, stonesPerRowOverride) + group.startRow * CELL_H
     const w = STONE_W
     const h = group.count * CELL_H
-
-    const prev = index > 0 ? groups[index - 1] : undefined
-    const next = index < groups.length - 1 ? groups[index + 1] : undefined
-    const continuesFromPrev =
-      !!prev &&
-      prev.stone + 1 === group.stone &&
-      prev.startRow + prev.count >= SIXTH_ROWS &&
-      group.startRow === 0
-    const continuesToNext =
-      !!next &&
-      group.stone + 1 === next.stone &&
-      group.startRow + group.count >= SIXTH_ROWS &&
-      next.startRow === 0
-    const top = !continuesFromPrev
-    const bottom = !continuesToNext
-
-    const rect = new Graphics()
-    rect.eventMode = 'none'
-    drawChunkRect(
-      rect,
-      x + PAD,
-      y + PAD,
-      w - PAD * 2,
-      h - PAD * 2,
-      { left: true, top, right: true, bottom },
-      { color, alpha },
-      isDropPreview ? { width: 2, color: 0x5cadee, alpha: 0.7 } : { width: 0.5, color: strokeColor, alpha: 1 },
-      { tl: top ? 4 : 0, tr: top ? 4 : 0, br: bottom ? 4 : 0, bl: bottom ? 4 : 0 },
-    )
-    container.addChild(rect)
 
     minX = Math.min(minX, x)
     minY = Math.min(minY, y)
@@ -1203,71 +1274,45 @@ const drawRunVisuals = (
   dimmedAlpha: number,
   stonesPerRowOverride = stonesPerRow,
 ): void => {
-  const startSixth = run[0].startSixth
-  const sizeSixths = run.reduce((sum, s) => sum + s.sizeSixths, 0)
-  const { startStone, endStone } = segmentStoneSpan(startSixth, sizeSixths)
+  const runOccupied = run.flatMap((s) => [...expandSceneOccupied(s)])
   const strokeColor = darkenColor(color)
-  const isMulti = startSixth % 6 === 0 && sizeSixths >= 6 && sizeSixths % 6 === 0
+  const isMulti = runOccupied.length >= 6 && runOccupied.length % 6 === 0 && sliceFormsWholeStones(runOccupied)
+  const mode: 'multiStone' | 'blended' = isMulti ? 'multiStone' : 'blended'
+  const fillOpt = { color, alpha }
+  const strokeOpt = { width: 0.5, color: strokeColor, alpha: 1 }
+  const R = 5
+
+  const rects = occupancyPaddedRects(runOccupied, baseX, baseY, stonesPerRowOverride, mode)
+  const blobG = new Graphics()
+  blobG.eventMode = 'none'
+  drawUnifiedOccupancyBlob(blobG, rects, R, fillOpt, strokeOpt)
+  container.addChild(blobG)
 
   const zoomReadableScale = zoom < 0.45 ? 1.14 : 1
   const visualScale = textCompensationScale * zoomReadableScale
 
-  if (isMulti) {
-    const chunks = splitStonesAtWrap(startStone, endStone, stonesPerRowOverride)
-    const R = 5
-    const multi = chunks.length > 1
-    const fillOpt = { color, alpha }
-    const strokeOpt = { width: 0.5, color: strokeColor, alpha: 1 }
-    let labelBounds: { x: number; y: number; w: number; h: number } | null = null
-
-    chunks.forEach((chunk, idx) => {
-      const cx = baseX + stoneToX(chunk.start, stonesPerRowOverride)
-      const cy = baseY + stoneToY(chunk.start, stonesPerRowOverride)
-      const cw = (chunk.end - chunk.start) * (STONE_W + STONE_GAP) - STONE_GAP
-      const ch = STONE_H
-      const pad = 0.5
-      const rx = cx + pad
-      const ry = cy + 2.5
-      const rw = cw - 1
-      const rh = ch - 5
-      const isFirst = idx === 0
-      const isLast = idx === chunks.length - 1
-      const sides = { left: true, top: isFirst || !multi, right: true, bottom: isLast || !multi }
-      const cornerRadii = {
-        tl: isFirst ? R : 0,
-        tr: isFirst ? R : 0,
-        br: isLast ? R : 0,
-        bl: isLast ? R : 0,
-      }
-      const g = new Graphics()
-      g.eventMode = 'none'
-      drawChunkRect(g, rx, ry, rw, rh, sides, fillOpt, strokeOpt, cornerRadii)
-      container.addChild(g)
-      if (idx === 0) {
-        labelBounds = { x: rx, y: ry, w: rw, h: rh }
-      }
-    })
-
-    for (let i = 0; i < run.length - 1; i += 1) {
-      const boundarySixth = run[i].startSixth + run[i].sizeSixths
-      const div = new Graphics()
-      div.eventMode = 'none'
-      if (boundarySixth % 6 === 0) {
-        const stone = boundarySixth / 6
-        const x = baseX + stoneToX(stone - 1, stonesPerRowOverride) + STONE_W
-        const y = baseY + stoneToY(stone - 1, stonesPerRowOverride)
-        drawDashedLine(div, x, y, x, y + STONE_H, strokeColor, 0.85)
-      } else {
-        const stone = Math.floor(boundarySixth / 6)
-        const row = boundarySixth % 6
-        const x = baseX + stoneToX(stone, stonesPerRowOverride)
-        const y = baseY + stoneToY(stone, stonesPerRowOverride) + row * CELL_H
-        drawDashedLine(div, x, y, x + STONE_W, y, strokeColor, 0.85)
-      }
-      container.addChild(div)
+  for (let i = 0; i < run.length - 1; i += 1) {
+    const nextSeg = run[i + 1]!
+    const boundarySixth = nextSeg.primarySixth ?? Math.min(...expandSceneOccupied(nextSeg))
+    const div = new Graphics()
+    div.eventMode = 'none'
+    if (boundarySixth % 6 === 0) {
+      const stone = boundarySixth / 6
+      const x = baseX + stoneToX(stone - 1, stonesPerRowOverride) + STONE_W
+      const y = baseY + stoneToY(stone - 1, stonesPerRowOverride)
+      drawDashedLine(div, x, y, x, y + STONE_H, strokeColor, 0.85)
+    } else {
+      const stone = Math.floor(boundarySixth / 6)
+      const row = boundarySixth % 6
+      const x = baseX + stoneToX(stone, stonesPerRowOverride)
+      const y = baseY + stoneToY(stone, stonesPerRowOverride) + row * CELL_H
+      drawDashedLine(div, x, y, x + STONE_W, y, strokeColor, 0.85)
     }
+    container.addChild(div)
+  }
 
-    const lb = labelBounds ?? { x: baseX, y: baseY, w: STONE_W, h: STONE_H }
+  if (isMulti) {
+    const lb = rects[0] ?? { x: baseX, y: baseY, w: STONE_W, h: STONE_H }
     const centerX = lb.x + lb.w / 2
     const centerY = lb.y + lb.h / 2
     const steps = runLabelSteps(run)
@@ -1298,63 +1343,7 @@ const drawRunVisuals = (
     txt.mask = clip
     container.addChild(txt)
   } else {
-    const groups = groupSixthsByStone(startSixth, sizeSixths)
-    const PAD = 1.2
-
-    groups.forEach((group, idx) => {
-      const x = baseX + stoneToX(group.stone, stonesPerRowOverride)
-      const y = baseY + stoneToY(group.stone, stonesPerRowOverride) + group.startRow * CELL_H
-      const w = STONE_W
-      const h = group.count * CELL_H
-
-      const prev = idx > 0 ? groups[idx - 1] : undefined
-      const next = idx < groups.length - 1 ? groups[idx + 1] : undefined
-      const continuesFromPrev =
-        !!prev &&
-        prev.stone + 1 === group.stone &&
-        prev.startRow + prev.count >= SIXTH_ROWS &&
-        group.startRow === 0
-      const continuesToNext =
-        !!next &&
-        group.stone + 1 === next.stone &&
-        group.startRow + group.count >= SIXTH_ROWS &&
-        next.startRow === 0
-      const top = !continuesFromPrev
-      const bottom = !continuesToNext
-
-      const rect = new Graphics()
-      rect.eventMode = 'none'
-      drawChunkRect(
-        rect,
-        x + PAD,
-        y + PAD,
-        w - PAD * 2,
-        h - PAD * 2,
-        { left: true, top, right: true, bottom },
-        { color, alpha },
-        { width: 0.5, color: strokeColor, alpha: 1 },
-        { tl: top ? 4 : 0, tr: top ? 4 : 0, br: bottom ? 4 : 0, bl: bottom ? 4 : 0 },
-      )
-      container.addChild(rect)
-    })
-    for (let i = 0; i < run.length - 1; i += 1) {
-      const boundarySixth = run[i].startSixth + run[i].sizeSixths
-      const div = new Graphics()
-      div.eventMode = 'none'
-      if (boundarySixth % 6 === 0) {
-        const stone = boundarySixth / 6
-        const x = baseX + stoneToX(stone - 1, stonesPerRowOverride) + STONE_W
-        const y = baseY + stoneToY(stone - 1, stonesPerRowOverride)
-        drawDashedLine(div, x, y, x, y + STONE_H, strokeColor, 0.85)
-      } else {
-        const stone = Math.floor(boundarySixth / 6)
-        const row = boundarySixth % 6
-        const x = baseX + stoneToX(stone, stonesPerRowOverride)
-        const y = baseY + stoneToY(stone, stonesPerRowOverride) + row * CELL_H
-        drawDashedLine(div, x, y, x + STONE_W, y, strokeColor, 0.85)
-      }
-      container.addChild(div)
-    }
+    const groups = groupSixthsFromOccupied(runOccupied)
     const baseName = run[0]?.fullLabel ?? run[0]?.tooltip.title ?? '?'
     const isRations = run[0]?.itemDefId === 'ironRationsDay'
     groups.forEach((group) => {
@@ -1425,9 +1414,12 @@ const drawSegmentBlock = (
   allowInteraction?: () => boolean,
   visuallyMerged?: boolean,
   stonesPerRowOverride = stonesPerRow,
+  mergedHitRun?: readonly SceneSegmentVM[],
+  pillStripHeight = 0,
 ): void => {
   const o = baseOffset ?? { x: 0, y: 0 }
-  const { startStone, endStone } = segmentStoneSpan(segment.startSixth, segment.sizeSixths)
+  const slotTopAbs = TOP_BAND_H + pillStripHeight
+  const { startStone, endStone } = segmentStoneSpanFromSegment(segment)
   const isDropPreview = segment.isDropPreview === true
   const dimmed = filterCategory != null && segment.category !== filterCategory
   const color = isDropPreview
@@ -1491,18 +1483,41 @@ const drawSegmentBlock = (
     }
   }
 
+  const hitRun = mergedHitRun != null && mergedHitRun.length > 0 ? mergedHitRun : [segment]
+  const mergedOcc = hitRun.flatMap((s) => [...expandSceneOccupied(s)])
+  const hitMode: 'multiStone' | 'blended' =
+    sliceFormsWholeStones(mergedOcc) && mergedOcc.length >= 6 ? 'multiStone' : 'blended'
+  const hitAbsRects = occupancyPaddedRects(mergedOcc, SLOT_START_X, slotTopAbs, stonesPerRowOverride, hitMode)
+  const hitLocalRects = hitAbsRects.map((r) => ({ ...r, x: r.x - o.x, y: r.y - o.y }))
+  const hitOutline = orthogonalUnionOutline(hitLocalRects)
+  const hitPoly = hitOutline.length >= 3 ? polygonHitAreaFromOutline(hitOutline) : null
+  let hitMinX = Infinity
+  let hitMinY = Infinity
+  let hitMaxX = -Infinity
+  let hitMaxY = -Infinity
+  for (const r of hitLocalRects) {
+    hitMinX = Math.min(hitMinX, r.x)
+    hitMinY = Math.min(hitMinY, r.y)
+    hitMaxX = Math.max(hitMaxX, r.x + r.w)
+    hitMaxY = Math.max(hitMaxY, r.y + r.h)
+  }
+  const hitAabb =
+    hitMinX < Infinity ? { x: hitMinX, y: hitMinY, w: hitMaxX - hitMinX, h: hitMaxY - hitMinY } : { x: 0, y: 0, w: 1, h: 1 }
+
   if (visuallyMerged) {
-    const b = segmentBoundsInNodeLocal(segment, stonesPerRowOverride)
-    block.rect(b.x - o.x, b.y - o.y, b.w, b.h)
+    block.rect(hitAabb.x, hitAabb.y, hitAabb.w, hitAabb.h)
     block.fill({ color: 0xffffff, alpha: 0.001 })
-    block.hitArea = new Rectangle(b.x - o.x, b.y - o.y, b.w, b.h)
+    block.hitArea = hitPoly ?? new Rectangle(hitAabb.x, hitAabb.y, hitAabb.w, hitAabb.h)
     container.addChild(block)
     return
   }
 
   if (isMultiStone(segment)) {
     const chunks = splitStonesAtWrap(startStone, endStone, stonesPerRowOverride)
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+    let minX = Infinity
+    let minY = Infinity
+    let maxX = -Infinity
+    let maxY = -Infinity
     const strokeOpt = isDropPreview
       ? { width: 2, color: 0x5cadee, alpha: 0.7 }
       : { width: 0.5, color: darkenColor(color), alpha: 1 }
@@ -1510,7 +1525,15 @@ const drawSegmentBlock = (
 
     container.addChild(block)
     const R = 5
-    const multi = chunks.length > 1
+    const occ = expandSceneOccupied(segment)
+    const drawLocal = multiStonePaddedRects(occ, SLOT_START_X - o.x, TOP_BAND_H - o.y, stonesPerRowOverride)
+    drawUnifiedOccupancyBlob(block, drawLocal, R, fillOpt, strokeOpt)
+    for (const r of drawLocal) {
+      minX = Math.min(minX, r.x)
+      minY = Math.min(minY, r.y)
+      maxX = Math.max(maxX, r.x + r.w)
+      maxY = Math.max(maxY, r.y + r.h)
+    }
     chunks.forEach((chunk, idx) => {
       const cx = SLOT_START_X + stoneToX(chunk.start, stonesPerRowOverride) - o.x
       const cy = TOP_BAND_H + stoneToY(chunk.start, stonesPerRowOverride) - o.y
@@ -1521,26 +1544,6 @@ const drawSegmentBlock = (
       const ry = cy + 2.5
       const rw = cw - 1
       const rh = ch - 5
-      const isFirst = idx === 0
-      const isLast = idx === chunks.length - 1
-      const sides = {
-        left: true,
-        top: isFirst || !multi,
-        right: true,
-        bottom: isLast || !multi,
-      }
-      const cornerRadii = {
-        tl: isFirst ? R : 0,
-        tr: isFirst ? R : 0,
-        br: isLast ? R : 0,
-        bl: isLast ? R : 0,
-      }
-      drawChunkRect(block, rx, ry, rw, rh, sides, fillOpt, strokeOpt, cornerRadii)
-      minX = Math.min(minX, rx)
-      minY = Math.min(minY, ry)
-      maxX = Math.max(maxX, rx + rw)
-      maxY = Math.max(maxY, ry + rh)
-
       if (segment.sizeSixths >= 1) {
         const availableWorldWidth = Math.max(8, rw - 6)
         const availableWorldHeight = Math.max(8, rh - 8)
@@ -1582,7 +1585,7 @@ const drawSegmentBlock = (
     const blockBounds = { x: minX, y: minY, w: maxX - minX, h: maxY - minY }
     block.rect(blockBounds.x, blockBounds.y, blockBounds.w, blockBounds.h)
     block.fill({ color: 0xffffff, alpha: 0.001 })
-    block.hitArea = new Rectangle(blockBounds.x, blockBounds.y, blockBounds.w, blockBounds.h)
+    block.hitArea = hitPoly ?? new Rectangle(blockBounds.x, blockBounds.y, blockBounds.w, blockBounds.h)
     drawGripIndicators(container, segment.wield, blockBounds, dimmed, dimmedAlpha)
   } else {
     const { hitBounds, groupBounds } = drawBlendedSegmentRects(
@@ -1602,9 +1605,9 @@ const drawSegmentBlock = (
       dimmedAlpha,
       stonesPerRowOverride,
     )
-    block.rect(hitBounds.x, hitBounds.y, hitBounds.w, hitBounds.h)
+    block.rect(hitAabb.x, hitAabb.y, hitAabb.w, hitAabb.h)
     block.fill({ color: 0xffffff, alpha: 0.001 })
-    block.hitArea = {
+    block.hitArea = hitPoly ?? {
       contains: (x: number, y: number) =>
         groupBounds.some((b) => x >= b.x && x < b.x + b.w && y >= b.y && y < b.y + b.h),
     }
@@ -3719,6 +3722,14 @@ export class PixiBoardAdapter {
     mergedIds: Set<string>,
   ): void {
     const pillPositions = layoutWornPills(wornPills, totalWidth, tier)
+    const slotForMerge = node.segments.filter((s) => !s.isWornPill && !s.isOverflow)
+    const mergeRuns = groupContiguousSameType(slotForMerge)
+    const mergedHitById = new Map<string, SceneSegmentVM[]>()
+    for (const run of mergeRuns) {
+      if (run.length > 1) {
+        for (const s of run) mergedHitById.set(s.id, run)
+      }
+    }
     node.segments.forEach((segment) => {
       const unshiftedPos = segment.isWornPill ? null : segmentPositionInNode(segment, layoutCols)
       const pos = segment.isWornPill
@@ -3762,6 +3773,8 @@ export class PixiBoardAdapter {
             () => this.activeDrag.type === 'idle' || this.activeDrag.type === 'pendingSegment',
             mergedIds.has(segment.id),
             layoutCols,
+            mergedIds.has(segment.id) ? mergedHitById.get(segment.id) : undefined,
+            pillStripHeight,
           )
         }
         parentContainer.addChild(segContainer)
@@ -3807,6 +3820,8 @@ export class PixiBoardAdapter {
             () => this.activeDrag.type === 'idle' || this.activeDrag.type === 'pendingSegment',
             mergedIds.has(segment.id),
             layoutCols,
+            mergedIds.has(segment.id) ? mergedHitById.get(segment.id) : undefined,
+            pillStripHeight,
           )
         }
       }
@@ -4516,6 +4531,10 @@ export class PixiBoardAdapter {
       this.handlers.onSegmentDoubleClick,
       () => this.lastDragEndTime,
       () => this.activeDrag.type === 'idle' || this.activeDrag.type === 'pendingSegment',
+      false,
+      stonesPerRow,
+      undefined,
+      0,
     )
     const parent = free.groupId
       ? this.groupViews.get(free.groupId)?.root ?? this.worldLayer

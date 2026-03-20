@@ -1,5 +1,6 @@
 import { getItemCategory } from '../domain/item-category'
 import { buildLabelLadder } from '../domain/labels'
+import { expandOccupiedSixths } from '../domain/segment-occupancy'
 import { packDeterministic, type PackInput } from '../domain/packing'
 import {
   capacitySixthsForActor,
@@ -41,9 +42,12 @@ const buildSlots = (capacitySixths: number, packedSegments: readonly SegmentVM[]
     const filled = packedSegments
       .filter((segment) => !segment.isOverflow)
       .map((segment) => {
-        const start = Math.max(segment.startSixth, slotStart)
-        const end = Math.min(segment.endSixth, slotEnd)
-        return Math.max(0, end - start)
+        const occ = expandOccupiedSixths(segment)
+        let n = 0
+        for (const sixth of occ) {
+          if (sixth >= slotStart && sixth < slotEnd) n += 1
+        }
+        return n
       })
       .reduce((sum, value) => sum + value, 0)
 
@@ -142,6 +146,9 @@ const toSegmentVM = (
     readonly sizeSixths: number
     readonly isOverflow: boolean
     readonly isWornPill?: boolean
+    readonly occupiedSixths?: readonly number[]
+    readonly packStart?: number
+    readonly primarySixth?: number
   },
   definition: ItemDefinition,
 ): SegmentVM | SegmentVM[] => {
@@ -175,6 +182,11 @@ const toSegmentVM = (
     },
     ...(definition.isFungibleVisual != null && { isFungibleVisual: definition.isFungibleVisual }),
     ...(packedSegment.isWornPill ? { isWornPill: true } : {}),
+    ...(packedSegment.occupiedSixths != null && packedSegment.occupiedSixths.length > 0
+      ? { occupiedSixths: packedSegment.occupiedSixths }
+      : {}),
+    ...(packedSegment.packStart != null ? { packStart: packedSegment.packStart } : {}),
+    ...(packedSegment.primarySixth != null ? { primarySixth: packedSegment.primarySixth } : {}),
   }
 }
 
@@ -192,7 +204,9 @@ const buildRow = (
   const entryMap = new Map(entries.map((entry) => [entry.id, entry]))
   const normalizedDefById = new Map(normalizedInputs.map((input) => [input.entry.id, input.definition]))
 
-  const packed = packDeterministic(normalizedInputs, capacitySixths)
+  const packed = packDeterministic(normalizedInputs, capacitySixths, {
+    serpentineInventoryPacking: state.serpentineInventoryPacking === true,
+  })
   const segments = packed.flatMap((segment) => {
     const normalizedId = segment.inventoryEntryId.replace(':overflow', '')
     const baseId = segmentIdToBaseEntryId(segment.inventoryEntryId)
