@@ -196,7 +196,9 @@ function applyServerState(
 function maybePushWorldHub(): void {
   if (appRoute.mode !== 'hub') return
   const conn = getConnection()
-  if (!conn || !isConnected()) return
+  // Snapshots only need a live client handle; do not gate on `isConnected()` which
+  // also requires `initialApplied` — hub data never loads if we wait for that.
+  if (!conn) return
   try {
     const snapshot = buildWorldHubSnapshot(conn, currentContext, getMyIdentityHex())
     post({ type: 'WORLD_HUB', requestId: null, snapshot })
@@ -2481,7 +2483,7 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
   }
   if (message.type === 'GET_WORLD_HUB') {
     const conn = getConnection()
-    if (!conn || !isConnected()) return
+    if (!conn) return
     try {
       const snapshot = buildWorldHubSnapshot(conn, currentContext, getMyIdentityHex())
       post({ type: 'WORLD_HUB', requestId: message.requestId, snapshot })
