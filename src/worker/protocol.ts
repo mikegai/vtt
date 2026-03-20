@@ -1,6 +1,9 @@
-import type { ActorKind, CanonicalState, CarryZone, EquipmentState, ItemKind, WieldGrip } from '../domain/types'
+import type { ActorKind, CanonicalState, CarryZone, EquipmentState, ItemCatalogRow, ItemDefinition, ItemKind, WieldGrip } from '../domain/types'
 import type { ItemCategory } from '../domain/item-category'
-import type { WorldCanvasContext } from '../spacetimedb/context'
+import type { AppRoute, WorldCanvasContext } from '../spacetimedb/context'
+import type { WorldHubSnapshot } from '../spacetimedb/world-hub-snapshot'
+
+export type { ItemCatalogRow }
 
 export type SceneSegmentVM = {
   readonly id: string
@@ -253,6 +256,8 @@ export type WorkerIntent =
       }
     }
   | { readonly type: 'SET_WORLD_STATE'; readonly worldState: CanonicalState }
+  | { readonly type: 'CATALOG_UPSERT_DEFINITION'; readonly definition: ItemDefinition }
+  | { readonly type: 'CATALOG_REMOVE_DEFINITION'; readonly id: string }
   | { readonly type: 'DRAG_START' }
   | { readonly type: 'DRAG_END' }
 
@@ -276,14 +281,19 @@ export type MainToWorkerMessage =
       readonly stonesPerRow?: number
       readonly token?: string
       readonly context: WorldCanvasContext
+      readonly appRoute: AppRoute
     }
   | { readonly type: 'RESET'; readonly worldState: CanonicalState; readonly stonesPerRow?: number }
+  | { readonly type: 'SET_APP_ROUTE'; readonly appRoute: AppRoute }
   | { readonly type: 'SET_STONES_PER_ROW'; readonly stonesPerRow: number }
   | { readonly type: 'INTENT'; readonly intent: WorkerIntent }
   | { readonly type: 'SET_SPACETIMEDB_TOKEN'; readonly token: string }
   | { readonly type: 'UPDATE_CURSOR'; readonly x: number; readonly y: number }
   | { readonly type: 'SET_DISPLAY_NAME'; readonly name: string }
+  | { readonly type: 'SET_WORLD_DISPLAY_NAME'; readonly displayName: string }
   | { readonly type: 'UPDATE_CAMERA'; readonly panX: number; readonly panY: number; readonly zoom: number }
+  | { readonly type: 'GET_ITEM_CATALOG'; readonly requestId: string }
+  | { readonly type: 'GET_WORLD_HUB'; readonly requestId: string }
 
 export type WorkerToMainMessage =
   | { readonly type: 'SCENE_INIT'; readonly scene: SceneVM }
@@ -293,4 +303,6 @@ export type WorkerToMainMessage =
   | { readonly type: 'STORE_TOKEN'; readonly token: string }
   | { readonly type: 'PRESENCE_UPDATE'; readonly users: ConnectedUser[]; readonly cursors: RemoteCursor[]; readonly myIdentityHex: string }
   | { readonly type: 'CAMERA_RESTORE'; readonly panX: number; readonly panY: number; readonly zoom: number }
+  | { readonly type: 'ITEM_CATALOG'; readonly requestId: string; readonly definitions: readonly ItemCatalogRow[] }
+  | { readonly type: 'WORLD_HUB'; readonly requestId: string | null; readonly snapshot: WorldHubSnapshot }
 

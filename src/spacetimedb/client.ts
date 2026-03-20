@@ -58,6 +58,94 @@ let shouldReconnect = true
 let myIdentityHex = ''
 let currentContext: WorldCanvasContext = { worldSlug: 'default-world', canvasSlug: 'main' }
 
+export type AppSubscriptionMode = 'hub' | 'canvas'
+let appSubscriptionMode: AppSubscriptionMode = 'canvas'
+let onWorldHubRefresh: (() => void) | null = null
+
+/** Escape a string for use as a single-quoted SQL literal. */
+function sqlStringLiteral(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`
+}
+
+/**
+ * Subscription queries scoped to the active world/canvas (and global `users`).
+ *
+ * Column identifiers MUST match the module schema’s product field names (camelCase),
+ * e.g. "worldSlug", not the generated client binding rename (world_slug). Spacetime
+ * SQL is case-sensitive; wrong names yield empty subscriptions after refresh.
+ */
+function subscriptionQueriesForContext(ctx: WorldCanvasContext): string[] {
+  const w = sqlStringLiteral(ctx.worldSlug)
+  const c = sqlStringLiteral(ctx.canvasSlug)
+  const room = `"worldSlug" = ${w} AND "canvasSlug" = ${c}`
+  return [
+    `SELECT * FROM actors WHERE "worldSlug" = ${w}`,
+    `SELECT * FROM item_definitions WHERE "worldSlug" = ${w}`,
+    `SELECT * FROM inventory_entries WHERE "worldSlug" = ${w}`,
+    `SELECT * FROM carry_groups WHERE "worldSlug" = ${w}`,
+    `SELECT * FROM movement_groups WHERE "worldSlug" = ${w}`,
+    `SELECT * FROM node_positions WHERE ${room}`,
+    `SELECT * FROM group_positions WHERE ${room}`,
+    `SELECT * FROM group_size_overrides WHERE ${room}`,
+    `SELECT * FROM node_size_overrides WHERE ${room}`,
+    `SELECT * FROM group_list_view WHERE ${room}`,
+    `SELECT * FROM node_group_overrides WHERE ${room}`,
+    `SELECT * FROM group_node_positions WHERE ${room}`,
+    `SELECT * FROM free_segment_positions WHERE ${room}`,
+    `SELECT * FROM group_free_segment_positions WHERE ${room}`,
+    `SELECT * FROM group_node_orders WHERE ${room}`,
+    `SELECT * FROM custom_groups WHERE ${room}`,
+    `SELECT * FROM group_title_overrides WHERE ${room}`,
+    `SELECT * FROM node_title_overrides WHERE ${room}`,
+    `SELECT * FROM node_containment WHERE ${room}`,
+    `SELECT * FROM labels WHERE ${room}`,
+    `SELECT * FROM settings WHERE ${room}`,
+    'SELECT * FROM users',
+    `SELECT * FROM user_presences WHERE ${room}`,
+    `SELECT * FROM user_cursors WHERE ${room}`,
+    `SELECT * FROM user_cameras WHERE ${room}`,
+  ]
+}
+
+/** World hub: all layout + presence rows for the world (any canvas). Domain still world-scoped. */
+export function subscriptionQueriesForHubWorld(worldSlug: string): string[] {
+  const w = sqlStringLiteral(worldSlug)
+  const worldOnly = `"worldSlug" = ${w}`
+  return [
+    `SELECT * FROM actors WHERE ${worldOnly}`,
+    `SELECT * FROM item_definitions WHERE ${worldOnly}`,
+    `SELECT * FROM inventory_entries WHERE ${worldOnly}`,
+    `SELECT * FROM carry_groups WHERE ${worldOnly}`,
+    `SELECT * FROM movement_groups WHERE ${worldOnly}`,
+    `SELECT * FROM node_positions WHERE ${worldOnly}`,
+    `SELECT * FROM group_positions WHERE ${worldOnly}`,
+    `SELECT * FROM group_size_overrides WHERE ${worldOnly}`,
+    `SELECT * FROM node_size_overrides WHERE ${worldOnly}`,
+    `SELECT * FROM group_list_view WHERE ${worldOnly}`,
+    `SELECT * FROM node_group_overrides WHERE ${worldOnly}`,
+    `SELECT * FROM group_node_positions WHERE ${worldOnly}`,
+    `SELECT * FROM free_segment_positions WHERE ${worldOnly}`,
+    `SELECT * FROM group_free_segment_positions WHERE ${worldOnly}`,
+    `SELECT * FROM group_node_orders WHERE ${worldOnly}`,
+    `SELECT * FROM custom_groups WHERE ${worldOnly}`,
+    `SELECT * FROM group_title_overrides WHERE ${worldOnly}`,
+    `SELECT * FROM node_title_overrides WHERE ${worldOnly}`,
+    `SELECT * FROM node_containment WHERE ${worldOnly}`,
+    `SELECT * FROM labels WHERE ${worldOnly}`,
+    `SELECT * FROM settings WHERE ${worldOnly}`,
+    'SELECT * FROM users',
+    `SELECT * FROM user_presences WHERE ${worldOnly}`,
+    `SELECT * FROM user_cursors WHERE ${worldOnly}`,
+    `SELECT * FROM user_cameras WHERE ${worldOnly}`,
+  ]
+}
+
+function activeSubscriptionQueries(): string[] {
+  return appSubscriptionMode === 'hub'
+    ? subscriptionQueriesForHubWorld(currentContext.worldSlug)
+    : subscriptionQueriesForContext(currentContext)
+}
+
 function canvasPresenceKey(identityHex: string): string {
   return `${currentContext.worldSlug}::${currentContext.canvasSlug}::${identityHex}`
 }
@@ -68,6 +156,11 @@ function markPresence(): void {
     worldSlug: currentContext.worldSlug,
     canvasSlug: currentContext.canvasSlug,
   })
+}
+
+/** Re-send room presence after switching world/canvas route. */
+export function refreshPresence(): void {
+  markPresence()
 }
 
 function getStoredToken(): string | undefined {
@@ -93,6 +186,10 @@ function handleSubscriptionApplied(): void {
   onServerState(worldState, layoutState)
   rebuildPresence()
   restoreCamera()
+}
+
+function tickWorldHubIfNeeded(): void {
+  if (appSubscriptionMode === 'hub' && onWorldHubRefresh) onWorldHubRefresh()
 }
 
 function rebuildPresence(): void {
@@ -121,6 +218,7 @@ function rebuildPresence(): void {
     cursors.push({ identityHex: row.identityHex, x: row.x, y: row.y })
   }
   onPresence(users, cursors, myIdentityHex)
+  tickWorldHubIfNeeded()
 }
 
 function restoreCamera(): void {
@@ -135,33 +233,20 @@ function subscribeToAllTables(): void {
   if (!conn) return
   conn.subscriptionBuilder()
     .onApplied(() => handleSubscriptionApplied())
-    .subscribe([
-      'SELECT * FROM actors',
-      'SELECT * FROM item_definitions',
-      'SELECT * FROM inventory_entries',
-      'SELECT * FROM carry_groups',
-      'SELECT * FROM movement_groups',
-      'SELECT * FROM node_positions',
-      'SELECT * FROM group_positions',
-      'SELECT * FROM group_size_overrides',
-      'SELECT * FROM node_size_overrides',
-      'SELECT * FROM group_list_view',
-      'SELECT * FROM node_group_overrides',
-      'SELECT * FROM group_node_positions',
-      'SELECT * FROM free_segment_positions',
-      'SELECT * FROM group_free_segment_positions',
-      'SELECT * FROM group_node_orders',
-      'SELECT * FROM custom_groups',
-      'SELECT * FROM group_title_overrides',
-      'SELECT * FROM node_title_overrides',
-      'SELECT * FROM node_containment',
-      'SELECT * FROM labels',
-      'SELECT * FROM settings',
-      'SELECT * FROM users',
-      'SELECT * FROM user_presences',
-      'SELECT * FROM user_cursors',
-      'SELECT * FROM user_cameras',
-    ])
+    .subscribe(activeSubscriptionQueries())
+}
+
+/**
+ * Switch hub vs canvas cache scope and re-subscribe (connected state only).
+ */
+export function setAppSubscriptionRoute(context: WorldCanvasContext, mode: AppSubscriptionMode): void {
+  currentContext = context
+  appSubscriptionMode = mode
+  if (conn && initialApplied) subscribeToAllTables()
+}
+
+export function getAppSubscriptionMode(): AppSubscriptionMode {
+  return appSubscriptionMode
 }
 
 function registerTableCallbacks(): void {
@@ -172,6 +257,7 @@ function registerTableCallbacks(): void {
     const worldState = reconstructCanonicalState(conn, currentContext)
     const layoutState = reconstructLayoutState(conn, currentContext)
     onServerState(worldState, layoutState)
+    tickWorldHubIfNeeded()
   }
 
   const domainTables = [
@@ -276,13 +362,17 @@ export function connect(
   cameraRestoreCb: CameraRestoreCallback,
   context: WorldCanvasContext,
   token?: string,
+  subscriptionMode: AppSubscriptionMode = 'canvas',
+  worldHubRefreshCb?: () => void,
 ): void {
   onServerState = serverStateCb
   onConnectionStatus = connectionStatusCb
   onToken = tokenCb
   onPresence = presenceCb
   onCameraRestore = cameraRestoreCb
+  onWorldHubRefresh = worldHubRefreshCb ?? null
   currentContext = context
+  appSubscriptionMode = subscriptionMode
   shouldReconnect = true
   reconnectAttempt = 0
 

@@ -1,6 +1,7 @@
 import './style.css'
 import { parseInventoryImportPlan } from './domain/inventory-import-plan'
-import { parseInventoryText } from './domain/inventory-text-parser'
+import { extractQuantityAndName, parseInventoryText, splitInventoryClauses } from './domain/inventory-text-parser'
+import { resolveAddItemsCatalogMatch } from './domain/add-items-catalog-match'
 import { buildInventoryLlmPrompt } from './domain/inventory-llm-prompt'
 import {
   parseInventoryOpsDocument,
@@ -9,6 +10,7 @@ import {
   type MutateAddItemsOp,
 } from './domain/inventory-ops-schema'
 import { allSourceItems, itemSourceCatalog, type EncumbranceExpr, type SourceItem } from './domain/item-source-catalog'
+import type { ItemCatalogRow } from './domain/types'
 import { formatSixthsAsStone, stoneToSixths } from './domain/rules'
 import { createSourceItemSearchIndex } from './domain/item-source-search'
 import { getWieldOptions } from './domain/weapon-metadata'
@@ -17,17 +19,26 @@ import { sampleState } from './sample-data'
 import type { ActorKind, CarryZone } from './domain/types'
 import type { ConnectedUser, MainToWorkerMessage, RemoteCursor, SceneSegmentVM, SceneVM, WorkerToMainMessage } from './worker/protocol'
 import type { ItemCategory } from './domain/item-category'
-import { canonicalPathForContext, contextFromPathname } from './spacetimedb/context'
+import {
+  canonicalPathForRoute,
+  parseAppRoute,
+  worldCanvasContextFromRoute,
+  type AppRoute,
+} from './spacetimedb/context'
+import { createWorldHubAdapter } from './world-hub/world-hub-adapter'
 import { attachTooltip } from './tooltip'
 
 const app = document.querySelector<HTMLDivElement>('#app')
 if (!app) throw new Error('App root missing')
 
-const worldCanvasContext = contextFromPathname(window.location.pathname)
-const canonicalPath = canonicalPathForContext(worldCanvasContext)
+let appRoute: AppRoute = parseAppRoute(window.location.pathname)
+let canonicalPath = canonicalPathForRoute(appRoute)
 if (window.location.pathname !== canonicalPath) {
   history.replaceState(null, '', canonicalPath)
+  appRoute = parseAppRoute(window.location.pathname)
+  canonicalPath = canonicalPathForRoute(appRoute)
 }
+let worldCanvasContext = worldCanvasContextFromRoute(appRoute)
 
 // Temporary visual marker to confirm this exact VTT bundle is loaded.
 const debugBuildMarker = 'VTT DEBUG BUILD LOADED (marker: 2026-03-16-01)'
@@ -769,6 +780,7 @@ const formatEncumbrance = (enc: EncumbranceExpr): string => {
 }
 
 app.innerHTML = `
+  <div id="canvas-shell">
   <div id="category-bar" class="category-bar">
     <button type="button" class="category-btn" data-category="armor-and-barding">Armor</button>
     <button type="button" class="category-btn" data-category="weapons">Weapons</button>
@@ -801,6 +813,8 @@ app.innerHTML = `
       </div>
     </div>
   </div>
+  </div>
+  <div id="world-hub-root" hidden></div>
 
   <button id="drawer-toggle" class="drawer-toggle" aria-label="Toggle tools panel">
     <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><rect y="3" width="20" height="2" rx="1" fill="currentColor"/><rect y="9" width="20" height="2" rx="1" fill="currentColor"/><rect y="15" width="20" height="2" rx="1" fill="currentColor"/></svg>
@@ -909,8 +923,79 @@ categoryBar.querySelectorAll<HTMLButtonElement>('.category-btn').forEach((btn) =
 })
 
 const vmWorker = new Worker(new URL('./worker/vm-worker.ts', import.meta.url), { type: 'module' })
+
+let cachedItemCatalogRows: ItemCatalogRow[] | null = null
+let addItemsCatalogById = new Map<string, ItemCatalogRow>()
+let catalogRequestSeq = 0
+const pendingCatalogResolvers = new Map<string, (rows: readonly ItemCatalogRow[]) => void>()
+
 const postToWorker = (message: MainToWorkerMessage): void => {
   vmWorker.postMessage(message)
+}
+
+let worldHubAdapter: ReturnType<typeof createWorldHubAdapter> | null = null
+let hubListRequestSeq = 0
+
+const refreshWorldHubData = (): void => {
+  if (appRoute.mode !== 'hub') return
+  postToWorker({ type: 'GET_WORLD_HUB', requestId: `wh-${Date.now()}-${(hubListRequestSeq += 1)}` })
+}
+
+/** DOM visibility + hub list fetch; does not post to the worker (route is set by INIT / SET_APP_ROUTE). */
+const syncHubCanvasShell = (): void => {
+  const route = appRoute
+  const shell = document.getElementById('canvas-shell')
+  const hubRoot = document.getElementById('world-hub-root')
+  if (route.mode === 'hub') {
+    shell?.setAttribute('hidden', '')
+    hubRoot?.removeAttribute('hidden')
+    if (!worldHubAdapter && hubRoot) {
+      worldHubAdapter = createWorldHubAdapter({
+        onNavigateCanvas: (w, c) => applyAppRoute({ mode: 'canvas', worldSlug: w, canvasSlug: c }, true),
+        onSaveDisplayName: (displayName) => postToWorker({ type: 'SET_WORLD_DISPLAY_NAME', displayName }),
+        onCatalogUpsert: (definition) => postToWorker({ type: 'INTENT', intent: { type: 'CATALOG_UPSERT_DEFINITION', definition } }),
+        onCatalogRemove: (id) => postToWorker({ type: 'INTENT', intent: { type: 'CATALOG_REMOVE_DEFINITION', id } }),
+        onCreateCanvas: (slug) => {
+          if (appRoute.mode !== 'hub') return
+          applyAppRoute({ mode: 'canvas', worldSlug: appRoute.worldSlug, canvasSlug: slug }, true)
+        },
+      })
+      hubRoot.appendChild(worldHubAdapter.root)
+    }
+    refreshWorldHubData()
+  } else {
+    hubRoot?.setAttribute('hidden', '')
+    shell?.removeAttribute('hidden')
+  }
+}
+
+const applyAppRoute = (route: AppRoute, pushHistory: boolean): void => {
+  const path = canonicalPathForRoute(route)
+  if (pushHistory) history.pushState(null, '', path)
+  appRoute = route
+  worldCanvasContext = worldCanvasContextFromRoute(route)
+  postToWorker({ type: 'SET_APP_ROUTE', appRoute: route })
+  syncHubCanvasShell()
+}
+
+window.addEventListener('popstate', () => {
+  const next = parseAppRoute(window.location.pathname)
+  applyAppRoute(next, false)
+})
+
+const fetchItemCatalogFromWorker = (): Promise<readonly ItemCatalogRow[]> => {
+  return new Promise((resolve, reject) => {
+    const requestId = `ic-${Date.now()}-${(catalogRequestSeq += 1)}`
+    const timer = window.setTimeout(() => {
+      pendingCatalogResolvers.delete(requestId)
+      reject(new Error('Item catalog request timed out'))
+    }, 12_000)
+    pendingCatalogResolvers.set(requestId, (rows) => {
+      clearTimeout(timer)
+      resolve(rows)
+    })
+    postToWorker({ type: 'GET_ITEM_CATALOG', requestId })
+  })
 }
 
 let currentScene: SceneVM | null = null
@@ -1307,6 +1392,20 @@ const deriveItemKind = (source: SourceItem): { kind: string; sixthsPerUnit: numb
   return { kind: 'standard', sixthsPerUnit: perUnit }
 }
 
+const deriveItemKindFromCatalogRow = (row: ItemCatalogRow): { kind: string; sixthsPerUnit: number; armorClass?: number } => {
+  const perUnit = row.sixthsPerUnit ?? 6
+  if (row.kind === 'armor') {
+    return {
+      kind: 'armor',
+      sixthsPerUnit: perUnit,
+      armorClass: row.armorClass ?? Math.max(1, Math.round(perUnit / SIXTHS_PER_STONE)),
+    }
+  }
+  if (row.kind === 'bulky') return { kind: 'bulky', sixthsPerUnit: perUnit }
+  if (row.kind === 'coins') return { kind: 'coins', sixthsPerUnit: perUnit }
+  return { kind: 'standard', sixthsPerUnit: perUnit }
+}
+
 const consumedParsedIds = new Set<string>()
 let parsedSpawnItems: ParsedSpawnItem[] = []
 let activeParsedDrag: {
@@ -1334,6 +1433,7 @@ const resolveParsedItem = (
   resolvedItemName: string | undefined,
   alternatives: readonly { itemId: string; itemName: string }[],
   overrideKey: string,
+  catalogById: ReadonlyMap<string, ItemCatalogRow>,
   stoneOverride?: number,
   wornClothing?: boolean,
   zoneHint?: CarryZone,
@@ -1365,8 +1465,8 @@ const resolveParsedItem = (
     if (resolvedStone != null) {
       perUnitSixths = Math.max(0, Math.round(stoneToSixths(resolvedStone)))
     } else if (alternatives.length > 0) {
-      const best = sourceItemById.get(alternatives[0].itemId)
-      perUnitSixths = best ? perUnitSixthsFromSource(best) : 1
+      const best = catalogById.get(alternatives[0].itemId)
+      perUnitSixths = best?.sixthsPerUnit !== undefined ? Math.max(0, best.sixthsPerUnit) : 1
     } else {
       perUnitSixths = 1
     }
@@ -1375,13 +1475,14 @@ const resolveParsedItem = (
     itemDefId = catalogId
     itemName =
       alternatives.find((a) => a.itemId === catalogId)?.itemName ??
-      sourceItemById.get(catalogId)?.name ??
+      catalogById.get(catalogId)?.canonicalName ??
       resolvedItemName ??
       candidateName
-    const sourceItem = sourceItemById.get(catalogId)
-    perUnitSixths = sourceItem
-      ? perUnitSixthsFromSource(sourceItem)
-      : Math.max(0, Math.round(stoneToSixths(resolvedStone ?? 1 / 6)))
+    const catRow = catalogById.get(catalogId)
+    perUnitSixths =
+      catRow?.sixthsPerUnit !== undefined
+        ? Math.max(0, catRow.sixthsPerUnit)
+        : Math.max(0, Math.round(stoneToSixths(resolvedStone ?? 1 / 6)))
   }
 
   return {
@@ -1400,7 +1501,10 @@ const resolveParsedItem = (
   }
 }
 
-const parseAddItemsRowsFromJson = (jsonText: string): { rows: ParsedAddItemsRow[]; error: string | null; ops: readonly MutateAddItemsOp[] } => {
+const parseAddItemsRowsFromJson = (
+  jsonText: string,
+  catalogRows: readonly ItemCatalogRow[],
+): { rows: ParsedAddItemsRow[]; error: string | null; ops: readonly MutateAddItemsOp[] } => {
   const normalizedJson = unwrapPastedInventoryJson(jsonText)
   if (normalizedJson.length === 0) return { rows: [], error: null, ops: [] }
   let parsedRaw: unknown
@@ -1415,25 +1519,32 @@ const parseAddItemsRowsFromJson = (jsonText: string): { rows: ParsedAddItemsRow[
   const addOps = parsed.value.ops.filter((op): op is MutateAddItemsOp => op.op === 'mutate.add-items')
   if (addOps.length === 0) return { rows: [], error: 'No mutate.add-items operation found', ops: [] }
 
+  const catalogById = new Map(catalogRows.map((r) => [r.id, r]))
+  addItemsCatalogById = catalogById
+
   const rows: ParsedAddItemsRow[] = []
   addOps.forEach((op, opIndex) => {
     op.items.forEach((item: InventoryItemInput, itemIndex: number) => {
-      const parsedBatch = parseInventoryText(item.text, sourceItemSearch, {
-        prototypeName: item.prototypeName,
-      })
-      parsedBatch.chunks.forEach((chunk, chunkIndex) => {
+      const clauses = splitInventoryClauses(item.text)
+      const useProto =
+        item.prototypeName?.trim() && clauses.length === 1 ? item.prototypeName.trim() : undefined
+      clauses.forEach((clause, chunkIndex) => {
+        const extracted = extractQuantityAndName(clause)
+        const match = resolveAddItemsCatalogMatch(extracted.candidateName, useProto, catalogRows)
+        const alts = match.alternatives.map((a) => ({ itemId: a.itemId, itemName: a.itemName }))
         const rowKey = normalizeRowKey(opIndex, itemIndex, chunkIndex)
         const resolved = resolveParsedItem(
-          chunk.raw,
-          chunk.candidateName,
-          (item.quantity ?? 1) * chunk.quantity,
-          chunk.confidence,
-          chunk.status,
-          chunk.resolvedItemId,
-          chunk.resolvedItemName,
-          chunk.alternatives.map((a) => ({ itemId: a.itemId, itemName: a.itemName })),
+          clause,
+          extracted.candidateName,
+          (item.quantity ?? 1) * extracted.quantity,
+          match.confidence,
+          match.status,
+          match.resolvedItemId,
+          match.resolvedItemName,
+          alts,
           rowKey,
-          item.encumbranceStone ?? chunk.stoneOverride,
+          catalogById,
+          item.encumbranceStone ?? extracted.stoneOverride,
           item.wornClothing,
           item.zoneHint,
         )
@@ -1717,6 +1828,19 @@ let pendingCameraRestore: { panX: number; panY: number; zoom: number } | null = 
 
 vmWorker.onmessage = (event: MessageEvent<WorkerToMainMessage>) => {
   const msg = event.data
+  if (msg.type === 'ITEM_CATALOG') {
+    cachedItemCatalogRows = [...msg.definitions]
+    const resolve = pendingCatalogResolvers.get(msg.requestId)
+    if (resolve) {
+      pendingCatalogResolvers.delete(msg.requestId)
+      resolve(msg.definitions)
+    }
+    return
+  }
+  if (msg.type === 'WORLD_HUB') {
+    if (appRoute.mode === 'hub') worldHubAdapter?.render(msg.snapshot)
+    return
+  }
   if (msg.type === 'SCENE_INIT') {
     document.getElementById('loading-overlay')?.remove()
     closeInlineTitleEditor()
@@ -1747,6 +1871,7 @@ vmWorker.onmessage = (event: MessageEvent<WorkerToMainMessage>) => {
   if (msg.type === 'CONNECTION_STATUS') {
     console.info('[spacetimedb]', msg.status)
     updateConnectionBadge(msg.status)
+    if (msg.status === 'connected') refreshWorldHubData()
     return
   }
   if (msg.type === 'STORE_TOKEN') {
@@ -1799,7 +1924,9 @@ postToWorker({
   stonesPerRow: initialStonesPerRow,
   token: savedSpacetimeToken,
   context: worldCanvasContext,
+  appRoute,
 })
+syncHubCanvasShell()
 
 canvasHost.addEventListener('pointermove', (e) => {
   broadcastCursorPosition(e.clientX, e.clientY)
@@ -1938,6 +2065,8 @@ const escapeHtml = (s: string): string =>
     .replace(/"/g, '&quot;')
 
 const catalogEncMeta = (itemId: string): string => {
+  const row = addItemsCatalogById.get(itemId)
+  if (row?.sixthsPerUnit != null) return formatEncumbrance({ kind: 'fixed', sixths: Math.max(0, row.sixthsPerUnit) })
   const src = sourceItemById.get(itemId)
   return src ? formatEncumbrance(src.encumbrance) : '—'
 }
@@ -2036,8 +2165,13 @@ const applyAddItemsRowsToNode = (rows: readonly ParsedAddItemsRow[], mode: 'auto
         zoneHint: 'worn' as const,
       }
     }
+    const catRow = row.itemDefId && !row.itemDefId.startsWith('custom:') ? addItemsCatalogById.get(row.itemDefId) : null
     const sourceItem = row.itemDefId && !row.itemDefId.startsWith('custom:') ? sourceItemById.get(row.itemDefId) : null
-    const derived = sourceItem ? deriveItemKind(sourceItem) : { kind: 'standard', sixthsPerUnit: row.sixthsPerUnit ?? 1 }
+    const derived = catRow
+      ? deriveItemKindFromCatalogRow(catRow)
+      : sourceItem
+        ? deriveItemKind(sourceItem)
+        : { kind: 'standard', sixthsPerUnit: row.sixthsPerUnit ?? 1 }
     return {
       itemDefId: row.itemDefId!,
       itemName: row.itemName,
@@ -2061,7 +2195,7 @@ const applyAddItemsRowsToNode = (rows: readonly ParsedAddItemsRow[], mode: 'auto
 }
 
 const refreshAddItemsParsed = (): void => {
-  const parsed = parseAddItemsRowsFromJson(addItemsJson)
+  const parsed = parseAddItemsRowsFromJson(addItemsJson, cachedItemCatalogRows ?? [])
   addItemsError = parsed.error
   addItemsRows = parsed.rows
   renderAddItemsRows()
@@ -2104,12 +2238,21 @@ const showAddItemsDialog = (nodeId: string, nodeTitle: string): void => {
     addItemsDescription = (e.target as HTMLTextAreaElement).value
   })
   addItemsDialog.querySelector<HTMLButtonElement>('#add-items-copy-prompt')?.addEventListener('click', async () => {
-    const prompt = buildInventoryLlmPrompt({ userDescription: addItemsDescription })
     try {
-      await navigator.clipboard.writeText(prompt)
-      addItemsError = null
-    } catch {
-      addItemsError = 'Clipboard copy failed. Copy manually from devtools if needed.'
+      let rows = cachedItemCatalogRows ?? []
+      if (rows.length === 0) {
+        rows = [...await fetchItemCatalogFromWorker()]
+        cachedItemCatalogRows = rows
+      }
+      const prompt = buildInventoryLlmPrompt({ userDescription: addItemsDescription, catalogRows: rows })
+      try {
+        await navigator.clipboard.writeText(prompt)
+        addItemsError = null
+      } catch {
+        addItemsError = 'Clipboard copy failed. Copy manually from devtools if needed.'
+      }
+    } catch (e) {
+      addItemsError = e instanceof Error ? e.message : 'Could not load catalog or build prompt.'
     }
     renderAddItemsRows()
   })
@@ -2135,6 +2278,20 @@ const showAddItemsDialog = (nodeId: string, nodeTitle: string): void => {
   })
 
   renderAddItemsRows()
+  void fetchItemCatalogFromWorker()
+    .then((rows) => {
+      cachedItemCatalogRows = [...rows]
+      if (addItemsError?.startsWith('Could not load world item catalog')) {
+        addItemsError = null
+      }
+      refreshAddItemsParsed()
+      renderAddItemsRows()
+    })
+    .catch(() => {
+      addItemsError = 'Could not load world item catalog. Matches use Custom until catalog loads; retry or reopen.'
+      renderAddItemsRows()
+    })
+
   addItemsDialog.showModal()
 }
 

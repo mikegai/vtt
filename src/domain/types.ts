@@ -31,6 +31,16 @@ export type ItemDefinition = {
   readonly isFungibleVisual?: boolean
 }
 
+/** Snapshot of item definitions for LLM prompt + add-items exact matching (main ↔ worker). */
+export type ItemCatalogRow = {
+  readonly id: string
+  readonly canonicalName: string
+  readonly kind: ItemKind
+  readonly sixthsPerUnit?: number
+  readonly armorClass?: number
+  readonly priceInGp?: number
+}
+
 export type InventoryEntry = {
   readonly id: string
   readonly actorId: string

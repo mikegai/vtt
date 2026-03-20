@@ -12,6 +12,7 @@ import {
 
 export default __t.row({
   id: __t.string().primaryKey(),
+  worldSlug: __t.string().name("world_slug"),
   canonicalName: __t.string().name("canonical_name"),
   kind: __t.string(),
   sixthsPerUnit: __t.option(__t.u32()).name("sixths_per_unit"),

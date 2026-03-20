@@ -126,6 +126,9 @@ const tablesSchema = __schema({
       { accessor: 'id', name: 'actors_id_idx_btree', algorithm: 'btree', columns: [
         'id',
       ] },
+      { accessor: 'worldSlug', name: 'actors_world_slug_idx_btree', algorithm: 'btree', columns: [
+        'worldSlug',
+      ] },
     ],
     constraints: [
       { name: 'actors_id_key', constraint: 'unique', columns: ['id'] },
@@ -140,6 +143,9 @@ const tablesSchema = __schema({
       { accessor: 'ownerActorId', name: 'carry_groups_owner_actor_id_idx_btree', algorithm: 'btree', columns: [
         'ownerActorId',
       ] },
+      { accessor: 'worldSlug', name: 'carry_groups_world_slug_idx_btree', algorithm: 'btree', columns: [
+        'worldSlug',
+      ] },
     ],
     constraints: [
       { name: 'carry_groups_id_key', constraint: 'unique', columns: ['id'] },
@@ -151,6 +157,10 @@ const tablesSchema = __schema({
       { accessor: 'groupId', name: 'custom_groups_group_id_idx_btree', algorithm: 'btree', columns: [
         'groupId',
       ] },
+      { accessor: 'byWorldCanvas', name: 'custom_groups_world_slug_canvas_slug_idx_btree', algorithm: 'btree', columns: [
+        'worldSlug',
+        'canvasSlug',
+      ] },
     ],
     constraints: [
       { name: 'custom_groups_group_id_key', constraint: 'unique', columns: ['groupId'] },
@@ -161,6 +171,10 @@ const tablesSchema = __schema({
     indexes: [
       { accessor: 'segmentId', name: 'free_segment_positions_segment_id_idx_btree', algorithm: 'btree', columns: [
         'segmentId',
+      ] },
+      { accessor: 'byWorldCanvas', name: 'free_segment_positions_world_slug_canvas_slug_idx_btree', algorithm: 'btree', columns: [
+        'worldSlug',
+        'canvasSlug',
       ] },
     ],
     constraints: [
@@ -176,6 +190,13 @@ const tablesSchema = __schema({
       { accessor: 'id', name: 'group_free_segment_positions_id_idx_btree', algorithm: 'btree', columns: [
         'id',
       ] },
+      { accessor: 'segmentId', name: 'group_free_segment_positions_segment_id_idx_btree', algorithm: 'btree', columns: [
+        'segmentId',
+      ] },
+      { accessor: 'byWorldCanvas', name: 'group_free_segment_positions_world_slug_canvas_slug_idx_btree', algorithm: 'btree', columns: [
+        'worldSlug',
+        'canvasSlug',
+      ] },
     ],
     constraints: [
       { name: 'group_free_segment_positions_id_key', constraint: 'unique', columns: ['id'] },
@@ -187,6 +208,10 @@ const tablesSchema = __schema({
       { accessor: 'groupId', name: 'group_list_view_group_id_idx_btree', algorithm: 'btree', columns: [
         'groupId',
       ] },
+      { accessor: 'byWorldCanvas', name: 'group_list_view_world_slug_canvas_slug_idx_btree', algorithm: 'btree', columns: [
+        'worldSlug',
+        'canvasSlug',
+      ] },
     ],
     constraints: [
       { name: 'group_list_view_group_id_key', constraint: 'unique', columns: ['groupId'] },
@@ -197,6 +222,10 @@ const tablesSchema = __schema({
     indexes: [
       { accessor: 'groupId', name: 'group_node_orders_group_id_idx_btree', algorithm: 'btree', columns: [
         'groupId',
+      ] },
+      { accessor: 'byWorldCanvas', name: 'group_node_orders_world_slug_canvas_slug_idx_btree', algorithm: 'btree', columns: [
+        'worldSlug',
+        'canvasSlug',
       ] },
     ],
     constraints: [
@@ -212,6 +241,13 @@ const tablesSchema = __schema({
       { accessor: 'id', name: 'group_node_positions_id_idx_btree', algorithm: 'btree', columns: [
         'id',
       ] },
+      { accessor: 'nodeId', name: 'group_node_positions_node_id_idx_btree', algorithm: 'btree', columns: [
+        'nodeId',
+      ] },
+      { accessor: 'byWorldCanvas', name: 'group_node_positions_world_slug_canvas_slug_idx_btree', algorithm: 'btree', columns: [
+        'worldSlug',
+        'canvasSlug',
+      ] },
     ],
     constraints: [
       { name: 'group_node_positions_id_key', constraint: 'unique', columns: ['id'] },
@@ -222,6 +258,10 @@ const tablesSchema = __schema({
     indexes: [
       { accessor: 'groupId', name: 'group_positions_group_id_idx_btree', algorithm: 'btree', columns: [
         'groupId',
+      ] },
+      { accessor: 'byWorldCanvas', name: 'group_positions_world_slug_canvas_slug_idx_btree', algorithm: 'btree', columns: [
+        'worldSlug',
+        'canvasSlug',
       ] },
     ],
     constraints: [
@@ -234,6 +274,10 @@ const tablesSchema = __schema({
       { accessor: 'groupId', name: 'group_size_overrides_group_id_idx_btree', algorithm: 'btree', columns: [
         'groupId',
       ] },
+      { accessor: 'byWorldCanvas', name: 'group_size_overrides_world_slug_canvas_slug_idx_btree', algorithm: 'btree', columns: [
+        'worldSlug',
+        'canvasSlug',
+      ] },
     ],
     constraints: [
       { name: 'group_size_overrides_group_id_key', constraint: 'unique', columns: ['groupId'] },
@@ -244,6 +288,10 @@ const tablesSchema = __schema({
     indexes: [
       { accessor: 'groupId', name: 'group_title_overrides_group_id_idx_btree', algorithm: 'btree', columns: [
         'groupId',
+      ] },
+      { accessor: 'byWorldCanvas', name: 'group_title_overrides_world_slug_canvas_slug_idx_btree', algorithm: 'btree', columns: [
+        'worldSlug',
+        'canvasSlug',
       ] },
     ],
     constraints: [
@@ -259,6 +307,9 @@ const tablesSchema = __schema({
       { accessor: 'id', name: 'inventory_entries_id_idx_btree', algorithm: 'btree', columns: [
         'id',
       ] },
+      { accessor: 'worldSlug', name: 'inventory_entries_world_slug_idx_btree', algorithm: 'btree', columns: [
+        'worldSlug',
+      ] },
     ],
     constraints: [
       { name: 'inventory_entries_id_key', constraint: 'unique', columns: ['id'] },
@@ -269,6 +320,9 @@ const tablesSchema = __schema({
     indexes: [
       { accessor: 'id', name: 'item_definitions_id_idx_btree', algorithm: 'btree', columns: [
         'id',
+      ] },
+      { accessor: 'worldSlug', name: 'item_definitions_world_slug_idx_btree', algorithm: 'btree', columns: [
+        'worldSlug',
       ] },
     ],
     constraints: [
@@ -281,6 +335,10 @@ const tablesSchema = __schema({
       { accessor: 'labelId', name: 'labels_label_id_idx_btree', algorithm: 'btree', columns: [
         'labelId',
       ] },
+      { accessor: 'byWorldCanvas', name: 'labels_world_slug_canvas_slug_idx_btree', algorithm: 'btree', columns: [
+        'worldSlug',
+        'canvasSlug',
+      ] },
     ],
     constraints: [
       { name: 'labels_label_id_key', constraint: 'unique', columns: ['labelId'] },
@@ -292,6 +350,9 @@ const tablesSchema = __schema({
       { accessor: 'id', name: 'movement_groups_id_idx_btree', algorithm: 'btree', columns: [
         'id',
       ] },
+      { accessor: 'worldSlug', name: 'movement_groups_world_slug_idx_btree', algorithm: 'btree', columns: [
+        'worldSlug',
+      ] },
     ],
     constraints: [
       { name: 'movement_groups_id_key', constraint: 'unique', columns: ['id'] },
@@ -300,8 +361,15 @@ const tablesSchema = __schema({
   node_containment: __table({
     name: 'node_containment',
     indexes: [
+      { accessor: 'containerNodeId', name: 'node_containment_container_node_id_idx_btree', algorithm: 'btree', columns: [
+        'containerNodeId',
+      ] },
       { accessor: 'nodeId', name: 'node_containment_node_id_idx_btree', algorithm: 'btree', columns: [
         'nodeId',
+      ] },
+      { accessor: 'byWorldCanvas', name: 'node_containment_world_slug_canvas_slug_idx_btree', algorithm: 'btree', columns: [
+        'worldSlug',
+        'canvasSlug',
       ] },
     ],
     constraints: [
@@ -314,6 +382,10 @@ const tablesSchema = __schema({
       { accessor: 'nodeId', name: 'node_group_overrides_node_id_idx_btree', algorithm: 'btree', columns: [
         'nodeId',
       ] },
+      { accessor: 'byWorldCanvas', name: 'node_group_overrides_world_slug_canvas_slug_idx_btree', algorithm: 'btree', columns: [
+        'worldSlug',
+        'canvasSlug',
+      ] },
     ],
     constraints: [
       { name: 'node_group_overrides_node_id_key', constraint: 'unique', columns: ['nodeId'] },
@@ -324,6 +396,10 @@ const tablesSchema = __schema({
     indexes: [
       { accessor: 'nodeId', name: 'node_positions_node_id_idx_btree', algorithm: 'btree', columns: [
         'nodeId',
+      ] },
+      { accessor: 'byWorldCanvas', name: 'node_positions_world_slug_canvas_slug_idx_btree', algorithm: 'btree', columns: [
+        'worldSlug',
+        'canvasSlug',
       ] },
     ],
     constraints: [
@@ -336,6 +412,10 @@ const tablesSchema = __schema({
       { accessor: 'nodeId', name: 'node_size_overrides_node_id_idx_btree', algorithm: 'btree', columns: [
         'nodeId',
       ] },
+      { accessor: 'byWorldCanvas', name: 'node_size_overrides_world_slug_canvas_slug_idx_btree', algorithm: 'btree', columns: [
+        'worldSlug',
+        'canvasSlug',
+      ] },
     ],
     constraints: [
       { name: 'node_size_overrides_node_id_key', constraint: 'unique', columns: ['nodeId'] },
@@ -347,6 +427,10 @@ const tablesSchema = __schema({
       { accessor: 'nodeId', name: 'node_title_overrides_node_id_idx_btree', algorithm: 'btree', columns: [
         'nodeId',
       ] },
+      { accessor: 'byWorldCanvas', name: 'node_title_overrides_world_slug_canvas_slug_idx_btree', algorithm: 'btree', columns: [
+        'worldSlug',
+        'canvasSlug',
+      ] },
     ],
     constraints: [
       { name: 'node_title_overrides_node_id_key', constraint: 'unique', columns: ['nodeId'] },
@@ -357,6 +441,10 @@ const tablesSchema = __schema({
     indexes: [
       { accessor: 'key', name: 'settings_key_idx_btree', algorithm: 'btree', columns: [
         'key',
+      ] },
+      { accessor: 'byWorldCanvas', name: 'settings_world_slug_canvas_slug_idx_btree', algorithm: 'btree', columns: [
+        'worldSlug',
+        'canvasSlug',
       ] },
     ],
     constraints: [
@@ -372,6 +460,10 @@ const tablesSchema = __schema({
       { accessor: 'identityHex', name: 'user_cameras_identity_hex_idx_btree', algorithm: 'btree', columns: [
         'identityHex',
       ] },
+      { accessor: 'byWorldCanvas', name: 'user_cameras_world_slug_canvas_slug_idx_btree', algorithm: 'btree', columns: [
+        'worldSlug',
+        'canvasSlug',
+      ] },
     ],
     constraints: [
       { name: 'user_cameras_id_key', constraint: 'unique', columns: ['id'] },
@@ -386,6 +478,10 @@ const tablesSchema = __schema({
       { accessor: 'identityHex', name: 'user_cursors_identity_hex_idx_btree', algorithm: 'btree', columns: [
         'identityHex',
       ] },
+      { accessor: 'byWorldCanvas', name: 'user_cursors_world_slug_canvas_slug_idx_btree', algorithm: 'btree', columns: [
+        'worldSlug',
+        'canvasSlug',
+      ] },
     ],
     constraints: [
       { name: 'user_cursors_id_key', constraint: 'unique', columns: ['id'] },
@@ -399,6 +495,10 @@ const tablesSchema = __schema({
       ] },
       { accessor: 'identityHex', name: 'user_presences_identity_hex_idx_btree', algorithm: 'btree', columns: [
         'identityHex',
+      ] },
+      { accessor: 'byWorldCanvas', name: 'user_presences_world_slug_canvas_slug_idx_btree', algorithm: 'btree', columns: [
+        'worldSlug',
+        'canvasSlug',
       ] },
     ],
     constraints: [

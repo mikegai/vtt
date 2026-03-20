@@ -12,6 +12,7 @@ import {
 
 export const Actors = __t.object("Actors", {
   id: __t.string(),
+  worldSlug: __t.string(),
   name: __t.string(),
   kind: __t.string(),
   strengthMod: __t.i32(),
@@ -31,6 +32,7 @@ export type Actors = __Infer<typeof Actors>;
 
 export const CarryGroups = __t.object("CarryGroups", {
   id: __t.string(),
+  worldSlug: __t.string(),
   ownerActorId: __t.string(),
   name: __t.string(),
   dropped: __t.bool(),
@@ -39,12 +41,16 @@ export type CarryGroups = __Infer<typeof CarryGroups>;
 
 export const CustomGroups = __t.object("CustomGroups", {
   groupId: __t.string(),
+  worldSlug: __t.string(),
+  canvasSlug: __t.string(),
   title: __t.string(),
 });
 export type CustomGroups = __Infer<typeof CustomGroups>;
 
 export const FreeSegmentPositions = __t.object("FreeSegmentPositions", {
   segmentId: __t.string(),
+  worldSlug: __t.string(),
+  canvasSlug: __t.string(),
   x: __t.f64(),
   y: __t.f64(),
 });
@@ -54,6 +60,8 @@ export const GroupFreeSegmentPositions = __t.object("GroupFreeSegmentPositions",
   id: __t.string(),
   groupId: __t.string(),
   segmentId: __t.string(),
+  worldSlug: __t.string(),
+  canvasSlug: __t.string(),
   x: __t.f64(),
   y: __t.f64(),
 });
@@ -61,12 +69,16 @@ export type GroupFreeSegmentPositions = __Infer<typeof GroupFreeSegmentPositions
 
 export const GroupListView = __t.object("GroupListView", {
   groupId: __t.string(),
+  worldSlug: __t.string(),
+  canvasSlug: __t.string(),
   enabled: __t.bool(),
 });
 export type GroupListView = __Infer<typeof GroupListView>;
 
 export const GroupNodeOrders = __t.object("GroupNodeOrders", {
   groupId: __t.string(),
+  worldSlug: __t.string(),
+  canvasSlug: __t.string(),
   nodeIdsJson: __t.string(),
 });
 export type GroupNodeOrders = __Infer<typeof GroupNodeOrders>;
@@ -75,6 +87,8 @@ export const GroupNodePositions = __t.object("GroupNodePositions", {
   id: __t.string(),
   groupId: __t.string(),
   nodeId: __t.string(),
+  worldSlug: __t.string(),
+  canvasSlug: __t.string(),
   x: __t.f64(),
   y: __t.f64(),
 });
@@ -82,6 +96,8 @@ export type GroupNodePositions = __Infer<typeof GroupNodePositions>;
 
 export const GroupPositions = __t.object("GroupPositions", {
   groupId: __t.string(),
+  worldSlug: __t.string(),
+  canvasSlug: __t.string(),
   x: __t.f64(),
   y: __t.f64(),
 });
@@ -89,6 +105,8 @@ export type GroupPositions = __Infer<typeof GroupPositions>;
 
 export const GroupSizeOverrides = __t.object("GroupSizeOverrides", {
   groupId: __t.string(),
+  worldSlug: __t.string(),
+  canvasSlug: __t.string(),
   width: __t.f64(),
   height: __t.f64(),
 });
@@ -96,12 +114,15 @@ export type GroupSizeOverrides = __Infer<typeof GroupSizeOverrides>;
 
 export const GroupTitleOverrides = __t.object("GroupTitleOverrides", {
   groupId: __t.string(),
+  worldSlug: __t.string(),
+  canvasSlug: __t.string(),
   title: __t.string(),
 });
 export type GroupTitleOverrides = __Infer<typeof GroupTitleOverrides>;
 
 export const InventoryEntries = __t.object("InventoryEntries", {
   id: __t.string(),
+  worldSlug: __t.string(),
   actorId: __t.string(),
   itemDefId: __t.string(),
   quantity: __t.u32(),
@@ -117,6 +138,7 @@ export type InventoryEntries = __Infer<typeof InventoryEntries>;
 
 export const ItemDefinitions = __t.object("ItemDefinitions", {
   id: __t.string(),
+  worldSlug: __t.string(),
   canonicalName: __t.string(),
   kind: __t.string(),
   sixthsPerUnit: __t.option(__t.u32()),
@@ -128,6 +150,8 @@ export type ItemDefinitions = __Infer<typeof ItemDefinitions>;
 
 export const Labels = __t.object("Labels", {
   labelId: __t.string(),
+  worldSlug: __t.string(),
+  canvasSlug: __t.string(),
   text: __t.string(),
   x: __t.f64(),
   y: __t.f64(),
@@ -136,6 +160,7 @@ export type Labels = __Infer<typeof Labels>;
 
 export const MovementGroups = __t.object("MovementGroups", {
   id: __t.string(),
+  worldSlug: __t.string(),
   name: __t.string(),
   active: __t.bool(),
 });
@@ -144,17 +169,23 @@ export type MovementGroups = __Infer<typeof MovementGroups>;
 export const NodeContainment = __t.object("NodeContainment", {
   nodeId: __t.string(),
   containerNodeId: __t.string(),
+  worldSlug: __t.string(),
+  canvasSlug: __t.string(),
 });
 export type NodeContainment = __Infer<typeof NodeContainment>;
 
 export const NodeGroupOverrides = __t.object("NodeGroupOverrides", {
   nodeId: __t.string(),
+  worldSlug: __t.string(),
+  canvasSlug: __t.string(),
   groupId: __t.option(__t.string()),
 });
 export type NodeGroupOverrides = __Infer<typeof NodeGroupOverrides>;
 
 export const NodePositions = __t.object("NodePositions", {
   nodeId: __t.string(),
+  worldSlug: __t.string(),
+  canvasSlug: __t.string(),
   x: __t.f64(),
   y: __t.f64(),
 });
@@ -162,6 +193,8 @@ export type NodePositions = __Infer<typeof NodePositions>;
 
 export const NodeSizeOverrides = __t.object("NodeSizeOverrides", {
   nodeId: __t.string(),
+  worldSlug: __t.string(),
+  canvasSlug: __t.string(),
   slotCols: __t.u32(),
   slotRows: __t.u32(),
 });
@@ -169,13 +202,18 @@ export type NodeSizeOverrides = __Infer<typeof NodeSizeOverrides>;
 
 export const NodeTitleOverrides = __t.object("NodeTitleOverrides", {
   nodeId: __t.string(),
+  worldSlug: __t.string(),
+  canvasSlug: __t.string(),
   title: __t.string(),
 });
 export type NodeTitleOverrides = __Infer<typeof NodeTitleOverrides>;
 
 export const Settings = __t.object("Settings", {
   key: __t.string(),
+  worldSlug: __t.string(),
+  canvasSlug: __t.string(),
   valueNum: __t.option(__t.u32()),
+  valueText: __t.option(__t.string()),
 });
 export type Settings = __Infer<typeof Settings>;
 

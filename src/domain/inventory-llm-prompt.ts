@@ -1,49 +1,31 @@
-import { allSourceItems, type EncumbranceExpr, type SourceItemGroup } from './item-source-catalog'
 import { INVENTORY_OPS_SCHEMA_V1 } from './inventory-ops-schema'
+import type { ItemCatalogRow } from './types'
+import { formatSixthsAsStone } from './rules'
 import instructionsMarkdown from './inventory-llm-instructions.md?raw'
 
 export type BuildInventoryLlmPromptInput = {
   readonly userDescription: string
+  readonly catalogRows: readonly ItemCatalogRow[]
 }
 
 const MAX_CATALOG_LINES = 400
 
-const groupCode = (g: SourceItemGroup): string => {
-  if (g === 'armor-and-barding') return 'arm'
-  if (g === 'weapons') return 'wpn'
-  return 'adv'
-}
+const encFromSixths = (sixths: number): string => formatSixthsAsStone(sixths).replace(/\s+stone/g, ' st')
 
-const encShort = (e: EncumbranceExpr): string => {
-  switch (e.kind) {
-    case 'fixed': {
-      const s = e.sixths
-      const whole = Math.floor(s / 6)
-      const frac = s % 6
-      if (frac === 0) return whole === 0 ? '0' : String(whole)
-      if (whole === 0) return `${frac}/6`
-      return `${whole} ${frac}/6`
-    }
-    case 'range':
-      return `${encShort({ kind: 'fixed', sixths: e.minSixths })}-${encShort({ kind: 'fixed', sixths: e.maxSixths })}`
-    case 'at-least':
-      return `${encShort({ kind: 'fixed', sixths: e.minSixths })}+`
-    case 'by-weight':
-      return 'wt'
-    case 'varies':
-      return 'var'
-    case 'not-carried':
-      return '-'
-  }
-}
-
-const buildCompactCatalogSection = (): string => {
-  const slice = allSourceItems.slice(0, MAX_CATALOG_LINES)
-  const lines = slice.map((item) => `${item.name}\t${groupCode(item.group)}\t${encShort(item.encumbrance)}`)
-  const more = allSourceItems.length > MAX_CATALOG_LINES
-    ? `\n… (+${allSourceItems.length - MAX_CATALOG_LINES} more in app)`
-    : ''
-  return `## Source catalog (compact)\nTab-separated: name\tgroup\tenc (stone, sixths as n/6, wt=by weight, var, -)\n\n${lines.join('\n')}${more}`
+/** Tab-separated block for the prompt (world item definitions). */
+export const formatWorldCatalogForPrompt = (
+  rows: readonly ItemCatalogRow[],
+  maxLines = MAX_CATALOG_LINES,
+): string => {
+  const slice = rows.slice(0, maxLines)
+  const lines = slice.map((r) => {
+    const enc = r.sixthsPerUnit != null ? encFromSixths(r.sixthsPerUnit) : ''
+    const gp = r.priceInGp != null ? String(r.priceInGp) : ''
+    return [r.canonicalName, r.id, r.kind, enc, gp].filter((c) => c.length > 0).join('\t')
+  })
+  const more =
+    rows.length > maxLines ? `\n… (+${rows.length - maxLines} more definitions in world)` : ''
+  return `## Source catalog (world, compact)\nTab-separated: canonicalName • id • kind • enc • gp (when set)\n\n${lines.join('\n')}${more}`
 }
 
 const schemaExampleBody = `{
@@ -116,7 +98,7 @@ type InventoryItemInput = {
   quantity?: number;
   encumbranceStone?: number;
   valueGp?: number;
-  /** Catalog-style base name when text is ornate; helps matching. Omit for multi-item comma lines in text. */
+  /** Must equal a catalog canonicalName exactly when anchoring to an existing definition. */
   prototypeName?: string;
   zoneHint?: "worn"|"attached"|"accessible"|"stowed"|"dropped";
   wornClothing?: boolean;
@@ -146,7 +128,7 @@ type MutateMoveEntriesToGroundOp = {
   y?: number;
 };`
 
-export const buildInventoryLlmPrompt = ({ userDescription }: BuildInventoryLlmPromptInput): string => {
+export const buildInventoryLlmPrompt = ({ userDescription, catalogRows }: BuildInventoryLlmPromptInput): string => {
   const cleanDescription = userDescription.trim()
   return [
     'You are a deterministic inventory-ops JSON generator.',
@@ -169,10 +151,9 @@ export const buildInventoryLlmPrompt = ({ userDescription }: BuildInventoryLlmPr
     '## Example Output',
     schemaExample,
     '',
-    buildCompactCatalogSection(),
+    formatWorldCatalogForPrompt(catalogRows),
     '',
     '## User Description',
     cleanDescription.length > 0 ? cleanDescription : '(empty)',
   ].join('\n')
 }
-

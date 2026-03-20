@@ -18,6 +18,7 @@ export function reconstructCanonicalState(conn: DbConnection, context: WorldCanv
   const wp = worldPrefix(context)
   const actors: Record<string, Actor> = {}
   for (const row of conn.db.actors.iter()) {
+    if (row.worldSlug !== context.worldSlug) continue
     const localActorId = withoutPrefix(row.id, wp)
     if (!localActorId) continue
     const baseSpeedProfile =
@@ -50,6 +51,7 @@ export function reconstructCanonicalState(conn: DbConnection, context: WorldCanv
 
   const itemDefinitions: Record<string, ItemDefinition> = { ...sampleState.itemDefinitions }
   for (const row of conn.db.item_definitions.iter()) {
+    if (row.worldSlug !== context.worldSlug) continue
     const localItemId = withoutPrefix(row.id, wp)
     if (!localItemId) continue
     if (row.kind === '__deleted__') {
@@ -69,6 +71,7 @@ export function reconstructCanonicalState(conn: DbConnection, context: WorldCanv
 
   const inventoryEntries: Record<string, InventoryEntry> = {}
   for (const row of conn.db.inventory_entries.iter()) {
+    if (row.worldSlug !== context.worldSlug) continue
     const localEntryId = withoutPrefix(row.id, wp)
     const localActorId = withoutPrefix(row.actorId, wp)
     const localItemDefId = withoutPrefix(row.itemDefId, wp)
@@ -94,6 +97,7 @@ export function reconstructCanonicalState(conn: DbConnection, context: WorldCanv
 
   const carryGroups: Record<string, CarryGroup> = {}
   for (const row of conn.db.carry_groups.iter()) {
+    if (row.worldSlug !== context.worldSlug) continue
     const localCarryGroupId = withoutPrefix(row.id, wp)
     const localOwnerActorId = withoutPrefix(row.ownerActorId, wp)
     if (!localCarryGroupId || !localOwnerActorId) continue
@@ -107,6 +111,7 @@ export function reconstructCanonicalState(conn: DbConnection, context: WorldCanv
 
   const movementGroups: Record<string, MovementGroup> = {}
   for (const row of conn.db.movement_groups.iter()) {
+    if (row.worldSlug !== context.worldSlug) continue
     const localMovementGroupId = withoutPrefix(row.id, wp)
     if (!localMovementGroupId) continue
     movementGroups[localMovementGroupId] = {
@@ -123,6 +128,7 @@ export function reconstructLayoutState(conn: DbConnection, context: WorldCanvasC
   const cp = canvasPrefix(context)
   const nodePositions: Record<string, { x: number; y: number }> = {}
   for (const row of conn.db.node_positions.iter()) {
+    if (row.worldSlug !== context.worldSlug || row.canvasSlug !== context.canvasSlug) continue
     const nodeId = withoutPrefix(row.nodeId, cp)
     if (!nodeId) continue
     nodePositions[nodeId] = { x: row.x, y: row.y }
@@ -130,6 +136,7 @@ export function reconstructLayoutState(conn: DbConnection, context: WorldCanvasC
 
   const groupPositions: Record<string, { x: number; y: number }> = {}
   for (const row of conn.db.group_positions.iter()) {
+    if (row.worldSlug !== context.worldSlug || row.canvasSlug !== context.canvasSlug) continue
     const groupId = withoutPrefix(row.groupId, cp)
     if (!groupId) continue
     groupPositions[groupId] = { x: row.x, y: row.y }
@@ -137,6 +144,7 @@ export function reconstructLayoutState(conn: DbConnection, context: WorldCanvasC
 
   const groupSizeOverrides: Record<string, { width: number; height: number }> = {}
   for (const row of conn.db.group_size_overrides.iter()) {
+    if (row.worldSlug !== context.worldSlug || row.canvasSlug !== context.canvasSlug) continue
     const groupId = withoutPrefix(row.groupId, cp)
     if (!groupId) continue
     groupSizeOverrides[groupId] = { width: row.width, height: row.height }
@@ -144,6 +152,7 @@ export function reconstructLayoutState(conn: DbConnection, context: WorldCanvasC
 
   const nodeSizeOverrides: Record<string, { slotCols: number; slotRows: number }> = {}
   for (const row of conn.db.node_size_overrides.iter()) {
+    if (row.worldSlug !== context.worldSlug || row.canvasSlug !== context.canvasSlug) continue
     const nodeId = withoutPrefix(row.nodeId, cp)
     if (!nodeId) continue
     nodeSizeOverrides[nodeId] = { slotCols: row.slotCols, slotRows: row.slotRows }
@@ -151,6 +160,7 @@ export function reconstructLayoutState(conn: DbConnection, context: WorldCanvasC
 
   const groupListViewEnabled: Record<string, boolean> = {}
   for (const row of conn.db.group_list_view.iter()) {
+    if (row.worldSlug !== context.worldSlug || row.canvasSlug !== context.canvasSlug) continue
     const groupId = withoutPrefix(row.groupId, cp)
     if (!groupId) continue
     groupListViewEnabled[groupId] = row.enabled
@@ -158,6 +168,7 @@ export function reconstructLayoutState(conn: DbConnection, context: WorldCanvasC
 
   const nodeGroupOverrides: Record<string, string | null> = {}
   for (const row of conn.db.node_group_overrides.iter()) {
+    if (row.worldSlug !== context.worldSlug || row.canvasSlug !== context.canvasSlug) continue
     const nodeId = withoutPrefix(row.nodeId, cp)
     if (!nodeId) continue
     nodeGroupOverrides[nodeId] = row.groupId ? (withoutPrefix(row.groupId, cp) ?? null) : null
@@ -165,6 +176,7 @@ export function reconstructLayoutState(conn: DbConnection, context: WorldCanvasC
 
   const groupNodePositions: Record<string, Record<string, { x: number; y: number }>> = {}
   for (const row of conn.db.group_node_positions.iter()) {
+    if (row.worldSlug !== context.worldSlug || row.canvasSlug !== context.canvasSlug) continue
     const groupId = withoutPrefix(row.groupId, cp)
     const nodeId = withoutPrefix(row.nodeId, cp)
     if (!groupId || !nodeId) continue
@@ -174,6 +186,7 @@ export function reconstructLayoutState(conn: DbConnection, context: WorldCanvasC
 
   const freeSegmentPositions: Record<string, { x: number; y: number }> = {}
   for (const row of conn.db.free_segment_positions.iter()) {
+    if (row.worldSlug !== context.worldSlug || row.canvasSlug !== context.canvasSlug) continue
     const segmentId = withoutPrefix(row.segmentId, cp)
     if (!segmentId) continue
     freeSegmentPositions[segmentId] = { x: row.x, y: row.y }
@@ -181,6 +194,7 @@ export function reconstructLayoutState(conn: DbConnection, context: WorldCanvasC
 
   const groupFreeSegmentPositions: Record<string, Record<string, { x: number; y: number }>> = {}
   for (const row of conn.db.group_free_segment_positions.iter()) {
+    if (row.worldSlug !== context.worldSlug || row.canvasSlug !== context.canvasSlug) continue
     const groupId = withoutPrefix(row.groupId, cp)
     const segmentId = withoutPrefix(row.segmentId, cp)
     if (!groupId || !segmentId) continue
@@ -190,6 +204,7 @@ export function reconstructLayoutState(conn: DbConnection, context: WorldCanvasC
 
   const groupNodeOrders: Record<string, readonly string[]> = {}
   for (const row of conn.db.group_node_orders.iter()) {
+    if (row.worldSlug !== context.worldSlug || row.canvasSlug !== context.canvasSlug) continue
     const groupId = withoutPrefix(row.groupId, cp)
     if (!groupId) continue
     try {
@@ -204,6 +219,7 @@ export function reconstructLayoutState(conn: DbConnection, context: WorldCanvasC
 
   const customGroups: Record<string, { title: string }> = {}
   for (const row of conn.db.custom_groups.iter()) {
+    if (row.worldSlug !== context.worldSlug || row.canvasSlug !== context.canvasSlug) continue
     const groupId = withoutPrefix(row.groupId, cp)
     if (!groupId) continue
     customGroups[groupId] = { title: row.title }
@@ -211,6 +227,7 @@ export function reconstructLayoutState(conn: DbConnection, context: WorldCanvasC
 
   const groupTitleOverrides: Record<string, string> = {}
   for (const row of conn.db.group_title_overrides.iter()) {
+    if (row.worldSlug !== context.worldSlug || row.canvasSlug !== context.canvasSlug) continue
     const groupId = withoutPrefix(row.groupId, cp)
     if (!groupId) continue
     groupTitleOverrides[groupId] = row.title
@@ -218,6 +235,7 @@ export function reconstructLayoutState(conn: DbConnection, context: WorldCanvasC
 
   const nodeTitleOverrides: Record<string, string> = {}
   for (const row of conn.db.node_title_overrides.iter()) {
+    if (row.worldSlug !== context.worldSlug || row.canvasSlug !== context.canvasSlug) continue
     const nodeId = withoutPrefix(row.nodeId, cp)
     if (!nodeId) continue
     nodeTitleOverrides[nodeId] = row.title
@@ -225,6 +243,7 @@ export function reconstructLayoutState(conn: DbConnection, context: WorldCanvasC
 
   const nodeContainment: Record<string, string> = {}
   for (const row of conn.db.node_containment.iter()) {
+    if (row.worldSlug !== context.worldSlug || row.canvasSlug !== context.canvasSlug) continue
     const nodeId = withoutPrefix(row.nodeId, cp)
     const containerNodeId = withoutPrefix(row.containerNodeId, cp)
     if (!nodeId || !containerNodeId) continue
@@ -233,6 +252,7 @@ export function reconstructLayoutState(conn: DbConnection, context: WorldCanvasC
 
   const labels: Record<string, { text: string; x: number; y: number }> = {}
   for (const row of conn.db.labels.iter()) {
+    if (row.worldSlug !== context.worldSlug || row.canvasSlug !== context.canvasSlug) continue
     const labelId = withoutPrefix(row.labelId, cp)
     if (!labelId) continue
     labels[labelId] = { text: row.text, x: row.x, y: row.y }
@@ -240,6 +260,7 @@ export function reconstructLayoutState(conn: DbConnection, context: WorldCanvasC
 
   let stonesPerRow: number | undefined
   for (const row of conn.db.settings.iter()) {
+    if (row.worldSlug !== context.worldSlug || row.canvasSlug !== context.canvasSlug) continue
     if (row.key === `${cp}settings:stonesPerRow` && row.valueNum != null) stonesPerRow = row.valueNum
   }
 

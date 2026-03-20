@@ -228,9 +228,11 @@ export const adventuringSourceItems: readonly SourceItem[] = [
   mk('adventuring-equipment', 'Prosthesis, Leg', '-'),
   mk('adventuring-equipment', 'Quill, writing', '-'),
   mk('adventuring-equipment', 'Quintain', '20'),
-  mk('adventuring-equipment', 'Rations, Iron (one day)', '1/6'),
-  mk('adventuring-equipment', 'Rations, Iron (one week)', '1'),
-  mk('adventuring-equipment', 'Rations, Standard (one week)', '1'),
+  mk('adventuring-equipment', 'Daily iron rations', '1/6', {
+    notes:
+      'One day’s iron ration (nominally 1/6 stone). In this VTT, every 7 daily lines pack to 6 sixths of encumbrance—not 7—so bulk carried weight is slightly less than 7×1/6.',
+  }),
+  mk('adventuring-equipment', 'Rations, Standard (one day)', '1/6'),
   mk('adventuring-equipment', "Rope, 50'", '1'),
   mk('adventuring-equipment', 'Rucksack (holds 2 stone)', '1/6'),
   mk('adventuring-equipment', 'Sack, Large (holds 6 stone)', '1/6'),
@@ -251,7 +253,9 @@ export const adventuringSourceItems: readonly SourceItem[] = [
   mk('adventuring-equipment', "Thieves' Tools, Expanded", '1/6'),
   mk('adventuring-equipment', "Thieves' Tools, Superior", '1/6'),
   mk('adventuring-equipment', 'Tinderbox (flint & steel)', '1/6'),
-  mk('adventuring-equipment', 'Torch', '1/6'),
+  mk('adventuring-equipment', 'Torch', '1/6', {
+    notes: 'Single torch (1/6 stone each); use quantity for multiple torches—not a multi-torch bundle row.',
+  }),
   mk('adventuring-equipment', 'Treatise, Apprentice', '5'),
   mk('adventuring-equipment', 'Treatise, Journeyman', '5'),
   mk('adventuring-equipment', 'Treatise, Master', '5'),

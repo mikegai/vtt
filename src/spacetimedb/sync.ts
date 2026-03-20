@@ -136,7 +136,9 @@ export function syncLocalState(
     (id) => safe(`deleteLabel(${id})`, () => conn.reducers.deleteLabel({ labelId: c(id) })))
 
   if (oldP.stonesPerRow !== newP.stonesPerRow) {
-    safe('upsertStonesPerRow', () => conn.reducers.upsertSetting({ key: `${c('settings:stonesPerRow')}`, valueNum: newP.stonesPerRow }))
+    safe('upsertStonesPerRow', () =>
+      conn.reducers.upsertSetting({ key: `${c('settings:stonesPerRow')}`, valueNum: newP.stonesPerRow, valueText: undefined }),
+    )
   }
 }
 

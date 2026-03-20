@@ -4,7 +4,7 @@ self.addEventListener('unhandledrejection', (event: PromiseRejectionEvent) => {
   console.error('[worker] unhandled promise rejection:', event.reason)
 })
 
-import type { Actor, CanonicalState, InventoryEntry, ItemDefinition, ItemKind } from '../domain/types'
+import type { Actor, CanonicalState, InventoryEntry, ItemCatalogRow, ItemDefinition, ItemKind } from '../domain/types'
 import { getWieldOptions, isTwoHandedOnly } from '../domain/weapon-metadata'
 import { parseNodeId, segmentIdToEntryId } from '../vm/drop-intent'
 import type { ActorRowVM } from '../vm/vm-types'
@@ -15,10 +15,22 @@ import { buildSceneVM, type WorkerLocalState } from './scene-vm'
 import type { MainToWorkerMessage, SceneVM, WorkerIntent, WorkerToMainMessage } from './protocol'
 import type { PersistenceBackend, PersistedLocalState } from '../persistence/backend'
 import { IndexedDBBackend } from '../persistence/indexeddb-backend'
-import { connect as stdbConnect, getConnection, isConnected, updateMyCursor, updateMyCamera, setMyDisplayName } from '../spacetimedb/client'
+import {
+  connect as stdbConnect,
+  getConnection,
+  isConnected,
+  updateMyCursor,
+  updateMyCamera,
+  setMyDisplayName,
+  refreshPresence,
+  setAppSubscriptionRoute,
+  getMyIdentityHex,
+} from '../spacetimedb/client'
 import type { ConnectedUser, RemoteCursor } from '../spacetimedb/client'
 import { syncWorldState, syncLocalState } from '../spacetimedb/sync'
-import type { WorldCanvasContext } from '../spacetimedb/context'
+import type { AppRoute, WorldCanvasContext } from '../spacetimedb/context'
+import { worldCanvasContextFromRoute, worldDisplayNameSettingKey } from '../spacetimedb/context'
+import { buildWorldHubSnapshot } from '../spacetimedb/world-hub-snapshot'
 import {
   NODE_VM_TOP_BAND_H as TOP_BAND_H,
   SLOT_START_X,
@@ -30,6 +42,7 @@ import {
 
 let worldState: CanonicalState | null = null
 let currentContext: WorldCanvasContext = { worldSlug: 'default-world', canvasSlug: 'main' }
+let appRoute: AppRoute = { mode: 'canvas', worldSlug: 'default-world', canvasSlug: 'main' }
 let localState: WorkerLocalState = {
   hoveredSegmentId: null,
   groupPositions: {},
@@ -175,6 +188,18 @@ function applyServerState(
   scheduleSave()
 }
 
+function maybePushWorldHub(): void {
+  if (appRoute.mode !== 'hub') return
+  const conn = getConnection()
+  if (!conn || !isConnected()) return
+  try {
+    const snapshot = buildWorldHubSnapshot(conn, currentContext.worldSlug, getMyIdentityHex())
+    post({ type: 'WORLD_HUB', requestId: null, snapshot })
+  } catch (err) {
+    console.warn('[world-hub] snapshot failed', err)
+  }
+}
+
 function onServerState(
   newWorldState: CanonicalState,
   newLayoutState: Partial<PersistedLocalState>,
@@ -216,6 +241,8 @@ function initSpacetimeDB(token?: string): void {
     },
     currentContext,
     token,
+    appRoute.mode === 'hub' ? 'hub' : 'canvas',
+    maybePushWorldHub,
   )
 }
 
@@ -599,6 +626,24 @@ const migrateWieldToActor = (state: CanonicalState): CanonicalState => {
 
   if (!changed) return state
   return { ...state, actors, inventoryEntries }
+}
+
+const buildItemCatalogRows = (state: CanonicalState | null): readonly ItemCatalogRow[] => {
+  if (!state) return []
+  const defs = Object.values(state.itemDefinitions)
+  defs.sort((a, b) => {
+    const byName = a.canonicalName.localeCompare(b.canonicalName)
+    if (byName !== 0) return byName
+    return a.id.localeCompare(b.id)
+  })
+  return defs.map((d) => ({
+    id: d.id,
+    canonicalName: d.canonicalName,
+    kind: d.kind,
+    ...(d.sixthsPerUnit !== undefined ? { sixthsPerUnit: d.sixthsPerUnit } : {}),
+    ...(d.armorClass !== undefined ? { armorClass: d.armorClass } : {}),
+    ...(d.priceInGp !== undefined ? { priceInGp: d.priceInGp } : {}),
+  }))
 }
 
 const recompute = (sendInitIfFirst = false): void => {
@@ -2322,6 +2367,33 @@ const applyIntent = (intent: WorkerIntent): void => {
     return
   }
 
+  if (intent.type === 'CATALOG_UPSERT_DEFINITION') {
+    if (!worldState) return
+    const d = intent.definition
+    worldState = {
+      ...worldState,
+      itemDefinitions: {
+        ...worldState.itemDefinitions,
+        [d.id]: { ...d },
+      },
+    }
+    recompute()
+    return
+  }
+
+  if (intent.type === 'CATALOG_REMOVE_DEFINITION') {
+    if (!worldState) return
+    const stillUsed = Object.values(worldState.inventoryEntries).some((e) => e.itemDefId === intent.id)
+    if (stillUsed) {
+      post({ type: 'LOG', message: `[catalog] cannot remove "${intent.id}": in use on board` })
+      return
+    }
+    const { [intent.id]: _removed, ...rest } = worldState.itemDefinitions
+    worldState = { ...worldState, itemDefinitions: rest }
+    recompute()
+    return
+  }
+
   if (intent.type === 'SET_WORLD_STATE') {
     worldState = migrateWieldToActor(intent.worldState)
     recompute()
@@ -2387,8 +2459,39 @@ async function initFromPersistence(fallbackWorldState: CanonicalState, stonesPer
 self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
   const message = event.data
   if (message.type === 'INIT') {
+    appRoute = message.appRoute
     currentContext = message.context
     void initFromPersistence(message.worldState, message.stonesPerRow, message.token)
+    return
+  }
+  if (message.type === 'SET_APP_ROUTE') {
+    appRoute = message.appRoute
+    currentContext = worldCanvasContextFromRoute(message.appRoute)
+    setAppSubscriptionRoute(currentContext, message.appRoute.mode === 'hub' ? 'hub' : 'canvas')
+    refreshPresence()
+    return
+  }
+  if (message.type === 'GET_WORLD_HUB') {
+    const conn = getConnection()
+    if (!conn || !isConnected()) return
+    try {
+      const snapshot = buildWorldHubSnapshot(conn, currentContext.worldSlug, getMyIdentityHex())
+      post({ type: 'WORLD_HUB', requestId: message.requestId, snapshot })
+    } catch (err) {
+      console.warn('[world-hub] GET_WORLD_HUB failed', err)
+    }
+    return
+  }
+  if (message.type === 'SET_WORLD_DISPLAY_NAME') {
+    const conn = getConnection()
+    if (!conn || !isConnected()) return
+    const name = message.displayName.trim()
+    if (!name) return
+    conn.reducers.upsertSetting({
+      key: worldDisplayNameSettingKey(currentContext.worldSlug),
+      valueNum: undefined,
+      valueText: name,
+    })
     return
   }
   if (message.type === 'RESET') {
@@ -2446,6 +2549,14 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
   }
   if (message.type === 'UPDATE_CAMERA') {
     updateMyCamera(message.panX, message.panY, message.zoom)
+    return
+  }
+  if (message.type === 'GET_ITEM_CATALOG') {
+    post({
+      type: 'ITEM_CATALOG',
+      requestId: message.requestId,
+      definitions: buildItemCatalogRows(worldState),
+    })
     return
   }
   if (message.type === 'INTENT') {

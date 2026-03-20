@@ -12,6 +12,7 @@ import {
 
 export default __t.row({
   id: __t.string().primaryKey(),
+  worldSlug: __t.string().name("world_slug"),
   name: __t.string(),
   kind: __t.string(),
   strengthMod: __t.i32().name("strength_mod"),

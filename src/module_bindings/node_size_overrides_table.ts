@@ -12,6 +12,8 @@ import {
 
 export default __t.row({
   nodeId: __t.string().primaryKey().name("node_id"),
+  worldSlug: __t.string().name("world_slug"),
+  canvasSlug: __t.string().name("canvas_slug"),
   slotCols: __t.u32().name("slot_cols"),
   slotRows: __t.u32().name("slot_rows"),
 });

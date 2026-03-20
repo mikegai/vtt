@@ -12,6 +12,7 @@ import {
 
 export default __t.row({
   id: __t.string().primaryKey(),
+  worldSlug: __t.string().name("world_slug"),
   name: __t.string(),
   active: __t.bool(),
 });

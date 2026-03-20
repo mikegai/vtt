@@ -12,6 +12,8 @@ import {
 
 export default __t.row({
   segmentId: __t.string().primaryKey().name("segment_id"),
+  worldSlug: __t.string().name("world_slug"),
+  canvasSlug: __t.string().name("canvas_slug"),
   x: __t.f64(),
   y: __t.f64(),
 });

@@ -133,21 +133,29 @@ This:
 
 **WARNING:** `--delete-data=always` destroys all data. Use `--delete-data=on-conflict` for additive schema changes that SpacetimeDB can't auto-migrate. Adding new tables is usually safe without any flag.
 
+**World/canvas scope columns:** Domain and layout tables store indexed `world_slug` / `canvas_slug` (see module `table({ indexes: … })`). Existing cloud data without those columns may need `--delete-data=on-conflict` (or a backfill) when you publish; then run `npm run stdb:generate`.
+
 ### Generate client bindings
 
 ```bash
-# From project root
+# From project root (or: npm run stdb:generate)
 spacetime generate --lang typescript --out-dir src/module_bindings
 ```
 
 This regenerates all files in `src/module_bindings/` from the published module. These files are auto-generated — never hand-edit them.
 
+### npm shortcuts
+
+- `npm run stdb:build` — `spacetime build`
+- `npm run stdb:generate` — regenerate bindings
+- `npm run stdb:publish` — `spacetime publish vtt -y`
+
 ### Full workflow for schema changes
 
-1. Edit `spacetimedb/src/index.ts` (add table, add reducer, etc.)
-2. `spacetime publish vtt` (add `--delete-data=on-conflict` if needed)
+1. Edit `spacetimedb/src/index.ts` (tables, reducers, indexes, scope columns).
+2. `spacetime publish vtt` (add `--delete-data=on-conflict` if needed).
 3. `spacetime generate --lang typescript --out-dir src/module_bindings`
-4. Update client code to use new tables/reducers
+4. Update client code if the public API changed.
 
 ## Client-Side Architecture
 
@@ -156,8 +164,8 @@ This regenerates all files in `src/module_bindings/` from the published module. 
 1. `main.ts` checks `localStorage` for `spacetimedb_vtt_token` and sends it to the worker.
 2. Worker calls `stdbConnect()` in `client.ts`, which builds a `DbConnection` with the saved token (or gets a new one).
 3. On connect, the server's `clientConnected` hook fires, upserting a `users` row.
-4. Client subscribes to all tables via `subscriptionBuilder().subscribe([...queries...])`.
-5. On `onApplied`, `reconstruct.ts` rebuilds `CanonicalState` + layout from the cached table data.
+4. Client subscribes with **scoped SQL**: filters use quoted **schema field names** (`"worldSlug"`, `"canvasSlug"`) as Spacetime SQL expects, not the client binding’s `world_slug` rename; `users` stays `SELECT *` (global identities).
+5. On `onApplied`, `reconstruct.ts` rebuilds `CanonicalState` + layout from the cached table data (still strips id prefixes for the active room).
 6. Worker sends `SCENE_INIT` to main thread.
 
 ### Token persistence
@@ -169,18 +177,9 @@ This regenerates all files in `src/module_bindings/` from the published module. 
 
 ### Subscriptions
 
-In `client.ts`, all tables are subscribed to with `SELECT * FROM <table>`:
+In [`client.ts`](../src/spacetimedb/client.ts), `subscriptionQueriesForContext()` builds the query list from `currentContext` (SQL uses `world_slug` / `canvas_slug` column names). Only rows for the active world/canvas are replicated, except the full `users` table.
 
-```typescript
-conn.subscriptionBuilder()
-  .onApplied(() => handleSubscriptionApplied())
-  .subscribe([
-    'SELECT * FROM actors',
-    'SELECT * FROM users',
-    'SELECT * FROM user_cursors',
-    // ... all tables
-  ])
-```
+Indexes for those filters are declared on the module tables (e.g. composite `byWorldCanvas` on layout and presence tables, `world_slug` on domain tables).
 
 Table callbacks (`onInsert`, `onUpdate`, `onDelete`) trigger state rebuilds.
 

@@ -12,6 +12,7 @@ import {
 
 export default __t.row({
   id: __t.string().primaryKey(),
+  worldSlug: __t.string().name("world_slug"),
   ownerActorId: __t.string().name("owner_actor_id"),
   name: __t.string(),
   dropped: __t.bool(),

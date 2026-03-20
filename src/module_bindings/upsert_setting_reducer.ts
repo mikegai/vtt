@@ -13,4 +13,5 @@ import {
 export default {
   key: __t.string(),
   valueNum: __t.option(__t.u32()),
+  valueText: __t.option(__t.string()),
 };

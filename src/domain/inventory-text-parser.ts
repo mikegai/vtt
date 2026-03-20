@@ -125,7 +125,7 @@ export const extractQuantityAndName = (
   }
 }
 
-const singularize = (value: string): string => {
+export const singularizeInventoryWord = (value: string): string => {
   if (value.endsWith('ies')) return `${value.slice(0, -3)}y`
   if (value.endsWith('es')) return value.slice(0, -2)
   if (value.endsWith('s')) return value.slice(0, -1)
@@ -138,7 +138,7 @@ const collectNamedHits = (name: string, index: SourceItemSearchIndex): ReturnTyp
   const q = `name:"${name}"`
   const hits = index.search(q, MAX_ALTS)
   if (hits.length > 0) return hits
-  return index.search(`name:"${singularize(name)}"`, MAX_ALTS)
+  return index.search(`name:"${singularizeInventoryWord(name)}"`, MAX_ALTS)
 }
 
 /** Merge Fuse hit lists by item id, keeping the best (lowest) score per id. */

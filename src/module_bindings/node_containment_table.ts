@@ -13,4 +13,6 @@ import {
 export default __t.row({
   nodeId: __t.string().primaryKey().name("node_id"),
   containerNodeId: __t.string().name("container_node_id"),
+  worldSlug: __t.string().name("world_slug"),
+  canvasSlug: __t.string().name("canvas_slug"),
 });
