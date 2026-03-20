@@ -934,12 +934,25 @@ const applyIntent = (intent: WorkerIntent): void => {
       recompute()
       return
     }
+    const groupId = intent.groupId ?? null
+    let x = intent.x
+    let y = intent.y
+    // Canvas clicks are in world space; grouped node layout stores offsets from the group origin
+    // (see buildSceneVM: node.x = pos.x + relPos.x). Same adjustment as MOVE_NODE_IN_GROUP.
+    if (groupId) {
+      const scene = buildSceneVM(worldState, localState)
+      const g = scene.groups?.[groupId]
+      if (g) {
+        x = intent.x - g.x
+        y = intent.y - g.y
+      }
+    }
     const result = addInventoryNodeToState({
       worldState,
       localState,
-      x: intent.x,
-      y: intent.y,
-      groupId: intent.groupId ?? null,
+      x,
+      y,
+      groupId,
     })
     worldState = result.worldState
     localState = result.localState
