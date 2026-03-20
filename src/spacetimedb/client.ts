@@ -266,9 +266,11 @@ function handleSubscriptionApplied(): void {
     actorCount: Object.keys(worldState.actors).length,
     inventoryEntryCount: Object.keys(worldState.inventoryEntries).length,
   })
+  // Queue CAMERA_RESTORE before SCENE_INIT so main can apply saved pan/zoom without running fitAll()
+  // first (fitAll schedules notifyCameraChange and would overwrite user_cameras with fitted bounds).
+  restoreCamera()
   onServerState(worldState, layoutState)
   rebuildPresence()
-  restoreCamera()
 }
 
 function tickWorldHubIfNeeded(): void {

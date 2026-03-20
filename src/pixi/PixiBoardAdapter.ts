@@ -1857,7 +1857,7 @@ export class PixiBoardAdapter {
       }
       if (event.button === 1 || event.button === 2) {
         panning = true
-        last = { x: event.clientX, y: event.clientY }
+        last = canvasCoords(event)
       }
     }
 
@@ -1949,21 +1949,24 @@ export class PixiBoardAdapter {
           break
       }
       if (!panning) return
-      this.pan.x += event.clientX - last.x
-      this.pan.y += event.clientY - last.y
-      last = { x: event.clientX, y: event.clientY }
+      const cur = canvasCoords(event)
+      this.pan.x += cur.x - last.x
+      this.pan.y += cur.y - last.y
+      last = cur
       this.applyCamera()
     }
 
     const onWheel = (event: WheelEvent): void => {
       event.preventDefault()
+      const { x: cx, y: cy } = this.clientToCanvasLocal(event.clientX, event.clientY)
       const direction = event.deltaY > 0 ? -1 : 1
       const factor = direction > 0 ? 1.12 : 0.9
       const prev = this.zoom
       this.zoom = Math.min(3.0, Math.max(0.18, this.zoom * factor))
       const ratio = this.zoom / prev
-      this.pan.x = event.offsetX - (event.offsetX - this.pan.x) * ratio
-      this.pan.y = event.offsetY - (event.offsetY - this.pan.y) * ratio
+      // Same CSS canvas space as screenToWorld / pan (offsetX/Y can disagree with client−rect on some browsers)
+      this.pan.x = cx - (cx - this.pan.x) * ratio
+      this.pan.y = cy - (cy - this.pan.y) * ratio
       this.applyCamera()
       this.handlers.onZoomChange(this.zoom)
       this.notifyCameraChange()
@@ -2037,8 +2040,10 @@ export class PixiBoardAdapter {
     const worldH = maxY - minY
     if (worldW <= 0 || worldH <= 0) return
 
-    const canvasW = this.app.canvas.width
-    const canvasH = this.app.canvas.height
+    const rect = this.app.canvas.getBoundingClientRect()
+    const canvasW = rect.width
+    const canvasH = rect.height
+    if (canvasW <= 0 || canvasH <= 0) return
     const PADDING = 60
     const zoom = Math.min(
       3.0,
@@ -2784,10 +2789,14 @@ export class PixiBoardAdapter {
     this.handlers.onResizeNode(drag.nodeId, nextCols, nextRows)
   }
 
-  private screenToWorld(clientX: number, clientY: number): { x: number; y: number } {
+  /** Pointer position in the same CSS pixel space as `sceneRoot.position` / pan (matches Pixi stage for resizeTo canvas). */
+  private clientToCanvasLocal(clientX: number, clientY: number): { x: number; y: number } {
     const rect = this.app.canvas.getBoundingClientRect()
-    const canvasX = clientX - rect.left
-    const canvasY = clientY - rect.top
+    return { x: clientX - rect.left, y: clientY - rect.top }
+  }
+
+  private screenToWorld(clientX: number, clientY: number): { x: number; y: number } {
+    const { x: canvasX, y: canvasY } = this.clientToCanvasLocal(clientX, clientY)
     return {
       x: (canvasX - this.pan.x) / this.zoom,
       y: (canvasY - this.pan.y) / this.zoom,
@@ -2850,8 +2859,9 @@ export class PixiBoardAdapter {
   }
 
   getWorldCenter(): { x: number; y: number } {
-    const x = (this.app.screen.width / 2 - this.pan.x) / this.zoom
-    const y = (this.app.screen.height / 2 - this.pan.y) / this.zoom
+    const rect = this.app.canvas.getBoundingClientRect()
+    const x = (rect.width / 2 - this.pan.x) / this.zoom
+    const y = (rect.height / 2 - this.pan.y) / this.zoom
     return { x, y }
   }
 

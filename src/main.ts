@@ -29,7 +29,7 @@ import {
   type AppRoute,
 } from './spacetimedb/context'
 import type { RegistryAdjust } from './spacetimedb/registry-reconcile'
-import { readRoomIdDebugFromStorage } from './spacetimedb/debug-room-ids'
+import { logCameraDebug, readRoomIdDebugFromStorage } from './spacetimedb/debug-room-ids'
 import { createWorldHubAdapter } from './world-hub/world-hub-adapter'
 import type { WorldHubAdapter } from './world-hub/world-hub-adapter'
 import { attachTooltip } from './tooltip'
@@ -1894,9 +1894,14 @@ vmWorker.onmessage = (event: MessageEvent<WorkerToMainMessage>) => {
     selectedLabelId = msg.scene.selectedLabelId ?? null
     pixiAdapter.applyInit(msg.scene)
     if (pendingCameraRestore) {
+      logCameraDebug('SCENE_INIT → setCamera from pending (skipped fitAll)', {
+        pan: { x: pendingCameraRestore.panX, y: pendingCameraRestore.panY },
+        zoom: pendingCameraRestore.zoom,
+      })
       pixiAdapter.setCamera(pendingCameraRestore.panX, pendingCameraRestore.panY, pendingCameraRestore.zoom)
       pendingCameraRestore = null
     } else {
+      logCameraDebug('SCENE_INIT → fitAll (no pending restore)', {})
       pixiAdapter.fitAll()
     }
     syncLabelEditor()
@@ -1934,6 +1939,11 @@ vmWorker.onmessage = (event: MessageEvent<WorkerToMainMessage>) => {
     return
   }
   if (msg.type === 'CAMERA_RESTORE') {
+    logCameraDebug('CAMERA_RESTORE', {
+      hasScene: !!currentScene,
+      pan: { x: msg.panX, y: msg.panY },
+      zoom: msg.zoom,
+    })
     if (currentScene) {
       pixiAdapter.setCamera(msg.panX, msg.panY, msg.zoom)
     } else {
