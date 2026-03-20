@@ -836,6 +836,38 @@ html, body {
   overflow: auto;
 }
 
+.add-items-live-wrap {
+  margin: 6px 0 4px;
+}
+
+.add-items-live-wrap-empty .add-items-live-preview {
+  min-height: 0;
+}
+
+p.add-items-live-hint {
+  margin: 0 0 6px;
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.35;
+}
+
+.add-items-live-preview {
+  max-height: 200px;
+}
+
+.add-items-live-row .add-items-live-row-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+  align-items: center;
+}
+
+.add-items-live-row .add-items-live-row-actions .tool-button {
+  font-size: 10px;
+  padding: 2px 8px;
+}
+
 /* --- World hub (/{world}) --- */
 
 .world-hub {

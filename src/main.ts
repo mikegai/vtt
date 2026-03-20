@@ -1,6 +1,11 @@
 import './style.css'
 import { parseInventoryImportPlan } from './domain/inventory-import-plan'
-import { extractQuantityAndName, parseInventoryText, splitInventoryClauses } from './domain/inventory-text-parser'
+import {
+  extractQuantityAndName,
+  parseInventoryText,
+  splitInventoryClauses,
+  type ParsedInventoryChunk,
+} from './domain/inventory-text-parser'
 import { resolveAddItemsCatalogMatch } from './domain/add-items-catalog-match'
 import { buildInventoryLlmPrompt } from './domain/inventory-llm-prompt'
 import {
@@ -1457,6 +1462,15 @@ let addItemsError: string | null = null
 let addItemsJson = ''
 let addItemsDescription = ''
 const addItemsDisambiguationOverrides: Record<string, string> = {}
+let addItemsLivePreviewRows: ParsedAddItemsRow[] = []
+const addItemsLiveOverrides: Record<string, string> = {}
+let addItemsLiveDebounce: ReturnType<typeof setTimeout> | null = null
+
+const addItemsLiveRowKey = (idx: number): string => `live-${idx}`
+
+const syncAddItemsCatalogById = (rows: readonly ItemCatalogRow[]): void => {
+  addItemsCatalogById = new Map(rows.map((r) => [r.id, r]))
+}
 
 const normalizeRowKey = (opIndex: number, itemIndex: number, chunkIndex: number): string =>
   `${opIndex}:${itemIndex}:${chunkIndex}`
@@ -1558,7 +1572,7 @@ const parseAddItemsRowsFromJson = (
   if (addOps.length === 0) return { rows: [], error: 'No mutate.add-items operation found', ops: [] }
 
   const catalogById = new Map(catalogRows.map((r) => [r.id, r]))
-  addItemsCatalogById = catalogById
+  syncAddItemsCatalogById(catalogRows)
 
   const rows: ParsedAddItemsRow[] = []
   addOps.forEach((op, opIndex) => {
@@ -2137,6 +2151,152 @@ const addItemsCustomTileMeta = (row: ParsedAddItemsRow): string => {
   return 'Custom'
 }
 
+const mapChunkToLiveAddRow = (c: ParsedInventoryChunk, idx: number): ParsedAddItemsRow => {
+  const overrideKey = addItemsLiveRowKey(idx)
+  const override = addItemsLiveOverrides[overrideKey]
+  const isCustom = override === CUSTOM_ITEM_ID
+  let customSlug = slugify(c.candidateName) || slugify(c.raw) || 'custom-item'
+  if (isCustom && c.stoneOverride != null) {
+    const sixths = Math.round(stoneToSixths(c.stoneOverride))
+    customSlug = `${customSlug}-${sixths}`
+  }
+  const customDefId = `custom:${customSlug}`
+
+  let itemDefId: string | null
+  let itemName: string
+  let perUnitSixths: number
+  let sixthsPerUnit: number | undefined
+
+  if (isCustom) {
+    itemDefId = customDefId
+    itemName = c.candidateName || c.raw || 'Custom item'
+    if (c.stoneOverride != null) {
+      perUnitSixths = Math.max(1, Math.round(stoneToSixths(c.stoneOverride)))
+    } else if (c.alternatives.length > 0) {
+      const best = sourceItemById.get(c.alternatives[0]!.itemId)
+      perUnitSixths = best ? perUnitSixthsFromSource(best) : 1
+    } else {
+      perUnitSixths = 1
+    }
+    sixthsPerUnit = perUnitSixths
+  } else {
+    itemDefId = override ?? c.resolvedItemId ?? null
+    itemName = override
+      ? (c.alternatives.find((a) => a.itemId === override)?.itemName ?? c.candidateName)
+      : (c.resolvedItemName ?? c.candidateName)
+    const sourceItem = itemDefId ? sourceItemById.get(itemDefId) : null
+    perUnitSixths = sourceItem ? perUnitSixthsFromSource(sourceItem) : 1
+  }
+
+  const alts = c.alternatives.map((a) => ({ itemId: a.itemId, itemName: a.itemName }))
+  return {
+    id: overrideKey,
+    raw: c.raw,
+    status: override ? 'resolved' : c.status,
+    confidence: c.confidence,
+    quantity: c.quantity,
+    itemDefId,
+    itemName,
+    sizeSixths: Math.max(1, perUnitSixths * c.quantity),
+    ...(sixthsPerUnit != null && { sixthsPerUnit }),
+    alternatives: alts,
+    opIndex: 0,
+    overrideKey,
+  }
+}
+
+const removeLiveClauseAtIndex = (clauseIndex: number): void => {
+  const clauses = [...splitInventoryClauses(addItemsDescription)]
+  if (clauseIndex < 0 || clauseIndex >= clauses.length) return
+  clauses.splice(clauseIndex, 1)
+  addItemsDescription = clauses.length > 0 ? clauses.join(', ') : ''
+  const ta = addItemsDialog.querySelector<HTMLTextAreaElement>('#add-items-description')
+  if (ta) ta.value = addItemsDescription
+  Object.keys(addItemsLiveOverrides).forEach((k) => delete addItemsLiveOverrides[k])
+  refreshAddItemsLivePreview()
+}
+
+const refreshAddItemsLivePreview = (): void => {
+  const desc = addItemsDescription.trim()
+  if (desc.length === 0) {
+    addItemsLivePreviewRows = []
+  } else {
+    const parsed = parseInventoryText(desc, sourceItemSearch)
+    addItemsLivePreviewRows = parsed.chunks.map((c, idx) => mapChunkToLiveAddRow(c, idx))
+  }
+  renderAddItemsLivePreview()
+}
+
+const scheduleRefreshAddItemsLivePreview = (): void => {
+  if (addItemsLiveDebounce != null) clearTimeout(addItemsLiveDebounce)
+  addItemsLiveDebounce = setTimeout(() => {
+    addItemsLiveDebounce = null
+    refreshAddItemsLivePreview()
+  }, 120)
+}
+
+const renderAddItemsLivePreview = (): void => {
+  const wrap = addItemsDialog.querySelector<HTMLElement>('#add-items-live-wrap')
+  const statusEl = addItemsDialog.querySelector<HTMLElement>('#add-items-live-status')
+  const prevEl = addItemsDialog.querySelector<HTMLElement>('#add-items-live-preview')
+  const quickBtn = addItemsDialog.querySelector<HTMLButtonElement>('#add-items-quick-apply')
+  if (!wrap || !statusEl || !prevEl || !quickBtn) return
+
+  if (addItemsDescription.trim().length === 0) {
+    wrap.classList.add('add-items-live-wrap-empty')
+    statusEl.textContent = 'Type a comma-separated list for fuzzy catalog match, or use prose for the LLM prompt only.'
+    statusEl.className = 'add-items-status'
+    prevEl.innerHTML = ''
+    quickBtn.disabled = true
+    return
+  }
+
+  wrap.classList.remove('add-items-live-wrap-empty')
+  if (addItemsLivePreviewRows.length === 0) {
+    statusEl.textContent = 'No clauses detected — try commas between items.'
+    statusEl.className = 'add-items-status'
+    prevEl.innerHTML = ''
+    quickBtn.disabled = true
+    return
+  }
+
+  const review = addItemsLivePreviewRows.filter((row) => row.status !== 'resolved').length
+  statusEl.textContent = `${addItemsLivePreviewRows.length} items • ${review} need review`
+  statusEl.className = review > 0 ? 'add-items-status add-items-status-warn' : 'add-items-status add-items-status-ok'
+
+  prevEl.innerHTML = addItemsLivePreviewRows
+    .map((row, clauseIndex) => {
+      const catalogPills = row.alternatives
+        .map(
+          (a) =>
+            `<button class="alt-pill alt-pill-tile ${a.itemId === row.itemDefId ? 'alt-pill-selected' : ''}" data-add-items-live-key="${escapeAttr(row.overrideKey)}" data-item-id="${escapeHtml(a.itemId)}" type="button"><span class="alt-pill-title">${escapeHtml(a.itemName)}</span><span class="alt-pill-meta">${escapeHtml(catalogEncMeta(a.itemId))}</span></button>`,
+        )
+        .join('')
+      const customPill = `<button class="alt-pill alt-pill-tile ${row.itemDefId?.startsWith('custom:') ? 'alt-pill-selected' : ''}" data-add-items-live-key="${escapeAttr(row.overrideKey)}" data-item-id="${escapeHtml(CUSTOM_ITEM_ID)}" type="button"><span class="alt-pill-title">Custom</span><span class="alt-pill-meta">${escapeHtml(addItemsCustomTileMeta(row))}</span></button>`
+      const canAdd = !!row.itemDefId
+      return `<div class="parsed-item add-items-live-row status-${row.status}" data-add-items-live-row="${escapeAttr(row.overrideKey)}">
+        <div class="parsed-head">
+          <span class="parsed-status">${row.status}</span>
+          <span class="parsed-qty">qty ${row.quantity}</span>
+          <span class="parsed-conf">${Math.round(row.confidence * 100)}%</span>
+          <div class="add-items-live-row-actions">
+            <button type="button" class="tool-button add-items-live-add" data-live-clause-index="${clauseIndex}" ${canAdd ? '' : 'disabled'}>Add</button>
+            <button type="button" class="tool-button tool-button-danger add-items-live-delete" data-live-clause-index="${clauseIndex}">Delete</button>
+          </div>
+        </div>
+        <div class="parsed-text">${escapeHtml(row.raw)}</div>
+        <div class="parsed-candidate">
+          <span class="parsed-display-name">${escapeHtml(row.itemName)}</span>
+          <div class="alt-pills">${catalogPills}${customPill}</div>
+        </div>
+      </div>`
+    })
+    .join('')
+
+  const canQuick = addItemsLivePreviewRows.every((row) => !!row.itemDefId)
+  quickBtn.disabled = !canQuick
+}
+
 const renderAddItemsRows = (): void => {
   const rowsEl = addItemsDialog.querySelector<HTMLElement>('#add-items-match-results')
   const statusEl = addItemsDialog.querySelector<HTMLElement>('#add-items-status')
@@ -2208,7 +2368,11 @@ const renderAddItemsRows = (): void => {
   applyBtn.disabled = !canApply
 }
 
-const applyAddItemsRowsToNode = (rows: readonly ParsedAddItemsRow[], mode: 'auto' | 'manual'): void => {
+const applyAddItemsRowsToNode = (
+  rows: readonly ParsedAddItemsRow[],
+  mode: 'auto' | 'manual',
+  options?: { readonly closeDialog?: boolean },
+): void => {
   if (!addItemsTargetNodeId) return
   const spawnRows = rows.filter((row) => row.itemDefId)
   const items = spawnRows.map((row) => {
@@ -2251,7 +2415,9 @@ const applyAddItemsRowsToNode = (rows: readonly ParsedAddItemsRow[], mode: 'auto
       items,
     },
   })
-  addItemsDialog.close(mode === 'auto' ? 'auto' : 'manual')
+  if (options?.closeDialog !== false) {
+    addItemsDialog.close(mode === 'auto' ? 'auto' : 'manual')
+  }
 }
 
 const refreshAddItemsParsed = (): void => {
@@ -2262,12 +2428,18 @@ const refreshAddItemsParsed = (): void => {
 }
 
 const showAddItemsDialog = (nodeId: string, nodeTitle: string): void => {
+  if (addItemsLiveDebounce != null) {
+    clearTimeout(addItemsLiveDebounce)
+    addItemsLiveDebounce = null
+  }
   addItemsTargetNodeId = nodeId
   addItemsRows = []
   addItemsError = null
   addItemsJson = ''
   addItemsDescription = ''
+  addItemsLivePreviewRows = []
   Object.keys(addItemsDisambiguationOverrides).forEach((k) => delete addItemsDisambiguationOverrides[k])
+  Object.keys(addItemsLiveOverrides).forEach((k) => delete addItemsLiveOverrides[k])
 
   addItemsDialog.innerHTML = `
     <form method="dialog" class="add-items-form">
@@ -2278,9 +2450,15 @@ const showAddItemsDialog = (nodeId: string, nodeTitle: string): void => {
         </div>
         <button type="button" class="tool-button" id="add-items-close">Close</button>
       </div>
-      <label class="tool-label" for="add-items-description">Description for LLM</label>
-      <textarea id="add-items-description" class="tool-textarea add-items-input" rows="5" placeholder="Describe items, treasure, nodes, or operations."></textarea>
+      <label class="tool-label" for="add-items-description">Description (quick-add + LLM)</label>
+      <textarea id="add-items-description" class="tool-textarea add-items-input" rows="5" placeholder="e.g. 2 torches, shield — or longer prose for the LLM only."></textarea>
+      <div id="add-items-live-wrap" class="add-items-live-wrap add-items-live-wrap-empty">
+        <p class="add-items-live-hint">Comma-separated lines use the same fuzzy catalog search as the spawn bar. Prose still works for Copy Prompt.</p>
+        <div id="add-items-live-status" class="add-items-status"></div>
+        <div id="add-items-live-preview" class="parsed-list add-items-results add-items-live-preview"></div>
+      </div>
       <div class="add-items-actions">
+        <button type="button" class="tool-button" id="add-items-quick-apply" disabled>Add matched items</button>
         <button type="button" class="tool-button" id="add-items-copy-prompt">Copy Prompt for LLM</button>
       </div>
       <label class="tool-label" for="add-items-json">Paste LLM output (raw JSON or a ${'```'}json code block)</label>
@@ -2296,6 +2474,7 @@ const showAddItemsDialog = (nodeId: string, nodeTitle: string): void => {
   addItemsDialog.querySelector<HTMLButtonElement>('#add-items-close')?.addEventListener('click', () => addItemsDialog.close())
   addItemsDialog.querySelector<HTMLTextAreaElement>('#add-items-description')?.addEventListener('input', (e) => {
     addItemsDescription = (e.target as HTMLTextAreaElement).value
+    scheduleRefreshAddItemsLivePreview()
   })
   addItemsDialog.querySelector<HTMLButtonElement>('#add-items-copy-prompt')?.addEventListener('click', async () => {
     try {
@@ -2304,6 +2483,7 @@ const showAddItemsDialog = (nodeId: string, nodeTitle: string): void => {
         rows = [...await fetchItemCatalogFromWorker()]
         cachedItemCatalogRows = rows
       }
+      syncAddItemsCatalogById(rows)
       const prompt = buildInventoryLlmPrompt({ userDescription: addItemsDescription, catalogRows: rows })
       try {
         await navigator.clipboard.writeText(prompt)
@@ -2315,6 +2495,38 @@ const showAddItemsDialog = (nodeId: string, nodeTitle: string): void => {
       addItemsError = e instanceof Error ? e.message : 'Could not load catalog or build prompt.'
     }
     renderAddItemsRows()
+    renderAddItemsLivePreview()
+  })
+  addItemsDialog.querySelector<HTMLButtonElement>('#add-items-quick-apply')?.addEventListener('click', () => {
+    if (addItemsLivePreviewRows.length === 0) return
+    const canQuick = addItemsLivePreviewRows.every((row) => !!row.itemDefId)
+    if (!canQuick) return
+    applyAddItemsRowsToNode(addItemsLivePreviewRows, 'auto')
+  })
+  addItemsDialog.querySelector<HTMLElement>('#add-items-live-preview')?.addEventListener('click', (e) => {
+    const target = e.target as HTMLElement
+    const addOne = target.closest<HTMLButtonElement>('.add-items-live-add')
+    if (addOne && addOne.dataset.liveClauseIndex != null && !addOne.disabled) {
+      const idx = Number(addOne.dataset.liveClauseIndex)
+      const row = addItemsLivePreviewRows[idx]
+      if (row?.itemDefId) {
+        applyAddItemsRowsToNode([row], 'auto', { closeDialog: false })
+        removeLiveClauseAtIndex(idx)
+      }
+      return
+    }
+    const delOne = target.closest<HTMLButtonElement>('.add-items-live-delete')
+    if (delOne && delOne.dataset.liveClauseIndex != null) {
+      removeLiveClauseAtIndex(Number(delOne.dataset.liveClauseIndex))
+      return
+    }
+    const pill = target.closest<HTMLElement>('.alt-pill[data-add-items-live-key][data-item-id]')
+    if (!pill) return
+    const key = pill.dataset.addItemsLiveKey
+    const itemId = pill.dataset.itemId
+    if (!key || !itemId) return
+    addItemsLiveOverrides[key] = itemId
+    refreshAddItemsLivePreview()
   })
   addItemsDialog.querySelector<HTMLTextAreaElement>('#add-items-json')?.addEventListener('input', (e) => {
     addItemsJson = (e.target as HTMLTextAreaElement).value
@@ -2338,18 +2550,22 @@ const showAddItemsDialog = (nodeId: string, nodeTitle: string): void => {
   })
 
   renderAddItemsRows()
+  refreshAddItemsLivePreview()
   void fetchItemCatalogFromWorker()
     .then((rows) => {
       cachedItemCatalogRows = [...rows]
+      syncAddItemsCatalogById(rows)
       if (addItemsError?.startsWith('Could not load world item catalog')) {
         addItemsError = null
       }
       refreshAddItemsParsed()
       renderAddItemsRows()
+      renderAddItemsLivePreview()
     })
     .catch(() => {
       addItemsError = 'Could not load world item catalog. Matches use Custom until catalog loads; retry or reopen.'
       renderAddItemsRows()
+      renderAddItemsLivePreview()
     })
 
   addItemsDialog.showModal()

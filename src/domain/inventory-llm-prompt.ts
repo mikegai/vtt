@@ -1,4 +1,4 @@
-import { INVENTORY_OPS_SCHEMA_V1 } from './inventory-ops-schema'
+import { INVENTORY_OPS_LLM_TYPE_CONTRACTS, INVENTORY_OPS_SCHEMA_V1 } from './inventory-ops-schema'
 import type { ItemCatalogRow } from './types'
 import { formatSixthsAsStone } from './rules'
 import instructionsMarkdown from './inventory-llm-instructions.md?raw'
@@ -48,86 +48,6 @@ const schemaExampleBody = `{
 
 const schemaExample = ['```json', schemaExampleBody, '```'].join('\n')
 
-const typeContracts = `type InventoryOpsDocumentV1 = {
-  schema: "vtt.inventory.ops.v1";
-  ops: InventoryOpV1[];
-};
-
-type InventoryOpV1 =
-  | QueryNodesOp
-  | QueryGroupsOp
-  | QueryEntriesOp
-  | MutateAddItemsOp
-  | MutateAddNodesOp
-  | MutateAddGroupsOp
-  | MutateMoveEntriesToGroundOp;
-
-type QueryNodesOp = {
-  op: "query.nodes";
-  into: string;
-  where?: {
-    partyId?: string;
-    nameContains?: string;
-    kinds?: ("pc"|"retainer"|"hireling"|"animal"|"vehicle"|"loot-pile"|"space")[];
-    groupId?: string;
-  };
-};
-
-type QueryGroupsOp = {
-  op: "query.groups";
-  into: string;
-  where?: { titleContains?: string };
-};
-
-type QueryEntriesOp = {
-  op: "query.entries";
-  into: string;
-  from: { ref: string };
-  where?: { zone?: "worn"|"attached"|"accessible"|"stowed"|"dropped"; nameContains?: string };
-};
-
-type MutateAddItemsOp = {
-  op: "mutate.add-items";
-  target: { nodeId: string } | { groupId: string } | { ref: string; selector?: "first"|"all" };
-  applyMode?: "auto-if-clean" | "manual";
-  items: InventoryItemInput[];
-};
-
-type InventoryItemInput = {
-  text: string;
-  quantity?: number;
-  encumbranceStone?: number;
-  valueGp?: number;
-  /** Must equal a catalog canonicalName exactly when anchoring to an existing definition. */
-  prototypeName?: string;
-  zoneHint?: "worn"|"attached"|"accessible"|"stowed"|"dropped";
-  wornClothing?: boolean;
-};
-
-type MutateAddNodesOp = {
-  op: "mutate.add-nodes";
-  nodes: {
-    kind: "pc"|"retainer"|"hireling"|"animal"|"vehicle"|"loot-pile"|"space";
-    name: string;
-    x?: number;
-    y?: number;
-    groupId?: string;
-  }[];
-};
-
-type MutateAddGroupsOp = {
-  op: "mutate.add-groups";
-  groups: { title: string; x?: number; y?: number; width?: number; height?: number }[];
-};
-
-type MutateMoveEntriesToGroundOp = {
-  op: "mutate.move-entries-to-ground";
-  from: { ref: string };
-  placement: "near-owner" | "at-position";
-  x?: number;
-  y?: number;
-};`
-
 export const buildInventoryLlmPrompt = ({ userDescription, catalogRows }: BuildInventoryLlmPromptInput): string => {
   const cleanDescription = userDescription.trim()
   return [
@@ -146,7 +66,7 @@ export const buildInventoryLlmPrompt = ({ userDescription, catalogRows }: BuildI
     `Use schema: ${INVENTORY_OPS_SCHEMA_V1}`,
     '',
     '## Type Contracts (follow exactly)',
-    typeContracts,
+    INVENTORY_OPS_LLM_TYPE_CONTRACTS,
     '',
     '## Example Output',
     schemaExample,

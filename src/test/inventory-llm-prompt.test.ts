@@ -26,6 +26,8 @@ describe('inventory llm prompt', () => {
     expect(prompt).toContain('code box')
     expect(prompt).toContain('Copy')
     expect(prompt).toContain('type InventoryOpsDocumentV1')
+    expect(prompt).toContain('readonly schema:')
+    expect(prompt).toContain('Catalog-style base name when text is ornate')
     expect(prompt).toContain('type InventoryItemInput')
     expect(prompt).toContain('## Source catalog (world, compact)')
     expect(prompt).toContain('Short Sword')

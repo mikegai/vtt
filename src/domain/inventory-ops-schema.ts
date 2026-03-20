@@ -108,6 +108,101 @@ export type InventoryOpsDocumentV1 = {
   readonly ops: readonly InventoryOpV1[]
 }
 
+/** TypeScript-shaped contract block embedded in the inventory LLM prompt (keep in sync with types above). */
+export const INVENTORY_OPS_LLM_TYPE_CONTRACTS = `type InventoryOpsDocumentV1 = {
+  readonly schema: "${INVENTORY_OPS_SCHEMA_V1}";
+  readonly ops: readonly InventoryOpV1[];
+};
+
+type InventoryOpV1 =
+  | QueryNodesOp
+  | QueryGroupsOp
+  | QueryEntriesOp
+  | MutateAddItemsOp
+  | MutateAddNodesOp
+  | MutateAddGroupsOp
+  | MutateMoveEntriesToGroundOp;
+
+type QueryNodesOp = {
+  readonly op: "query.nodes";
+  readonly into: string;
+  readonly where?: {
+    readonly partyId?: string;
+    readonly nameContains?: string;
+    readonly kinds?: readonly ("pc"|"retainer"|"hireling"|"animal"|"vehicle"|"loot-pile"|"space")[];
+    readonly groupId?: string;
+  };
+};
+
+type QueryGroupsOp = {
+  readonly op: "query.groups";
+  readonly into: string;
+  readonly where?: { readonly titleContains?: string };
+};
+
+type QueryEntriesOp = {
+  readonly op: "query.entries";
+  readonly into: string;
+  readonly from: { readonly ref: string };
+  readonly where?: {
+    readonly zone?: "worn"|"attached"|"accessible"|"stowed"|"dropped";
+    readonly nameContains?: string;
+  };
+};
+
+type MutateAddItemsOp = {
+  readonly op: "mutate.add-items";
+  readonly target:
+    | { readonly nodeId: string }
+    | { readonly groupId: string }
+    | { readonly ref: string; readonly selector?: "first"|"all" };
+  readonly items: readonly InventoryItemInput[];
+  readonly applyMode?: "auto-if-clean" | "manual";
+};
+
+type InventoryItemInput = {
+  readonly text: string;
+  readonly quantity?: number;
+  readonly encumbranceStone?: number;
+  readonly valueGp?: number;
+  /** Catalog-style base name when text is ornate; improves matching. */
+  readonly prototypeName?: string;
+  readonly zoneHint?: "worn"|"attached"|"accessible"|"stowed"|"dropped";
+  /** Non-encumbering worn clothing displayed as pills. */
+  readonly wornClothing?: boolean;
+};
+
+type MutateAddNodesOp = {
+  readonly op: "mutate.add-nodes";
+  readonly nodes: readonly {
+    readonly kind: "pc"|"retainer"|"hireling"|"animal"|"vehicle"|"loot-pile"|"space";
+    readonly name: string;
+    readonly x?: number;
+    readonly y?: number;
+    readonly groupId?: string;
+  }[];
+};
+
+type MutateAddGroupsOp = {
+  readonly op: "mutate.add-groups";
+  readonly groups: readonly {
+    readonly title: string;
+    readonly x?: number;
+    readonly y?: number;
+    readonly width?: number;
+    readonly height?: number;
+  }[];
+};
+
+type MutateMoveEntriesToGroundOp = {
+  readonly op: "mutate.move-entries-to-ground";
+  readonly from: { readonly ref: string };
+  readonly placement: "near-owner" | "at-position";
+  readonly x?: number;
+  readonly y?: number;
+};
+`
+
 type ParseOk<T> = { readonly ok: true; readonly value: T }
 type ParseErr = { readonly ok: false; readonly error: string }
 export type ParseResult<T> = ParseOk<T> | ParseErr
