@@ -933,6 +933,9 @@ const postToWorker = (message: MainToWorkerMessage): void => {
   vmWorker.postMessage(message)
 }
 
+/** Set after `pixiAdapter` init; pauses the board on hub route. */
+let applyRouteBoardRender: (() => void) | null = null
+
 let worldHubAdapter: ReturnType<typeof createWorldHubAdapter> | null = null
 let hubListRequestSeq = 0
 
@@ -967,6 +970,7 @@ const syncHubCanvasShell = (): void => {
     hubRoot?.setAttribute('hidden', '')
     shell?.removeAttribute('hidden')
   }
+  applyRouteBoardRender?.()
 }
 
 const applyAppRoute = (route: AppRoute, pushHistory: boolean): void => {
@@ -1823,6 +1827,10 @@ const pixiAdapter = new PixiBoardAdapter(canvasHost, {
     postToWorker({ type: 'INTENT', intent: { type: 'DRAG_END' } })
   },
 })
+
+applyRouteBoardRender = (): void => {
+  pixiAdapter.setBoardRenderActive(appRoute.mode === 'canvas')
+}
 
 let pendingCameraRestore: { panX: number; panY: number; zoom: number } | null = null
 

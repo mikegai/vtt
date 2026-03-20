@@ -1613,6 +1613,9 @@ const drawSegmentBlock = (
 
 export class PixiBoardAdapter {
   private app: Application
+  /** When false, board is not visible (e.g. world hub); ticker stopped after mount completes. */
+  private boardRenderActive = true
+  private mountComplete = false
   private sceneRoot: Container
   private groupLayer: Container
   private worldLayer: Container
@@ -1771,6 +1774,35 @@ export class PixiBoardAdapter {
     this.applyCamera()
 
     if (this.currentScene) this.rebuildAllNodes(this.currentScene)
+
+    this.mountComplete = true
+    this.applyBoardRenderActive()
+  }
+
+  /**
+   * Show board (canvas route) or suspend rendering (hub route). VM stays in memory; only GPU/ticker + visibility change.
+   */
+  setBoardRenderActive(active: boolean): void {
+    this.boardRenderActive = active
+    this.applyBoardRenderActive()
+  }
+
+  private applyBoardRenderActive(): void {
+    if (!this.mountComplete) return
+    if (this.boardRenderActive) {
+      this.app.canvas.style.visibility = ''
+      this.app.ticker.start()
+      const host = this.app.canvas.parentElement
+      if (host && host.clientWidth > 0 && host.clientHeight > 0) {
+        this.app.renderer.resize(host.clientWidth, host.clientHeight)
+      }
+      this.applyCamera()
+    } else {
+      this.cancelMarquee()
+      this.app.ticker.stop()
+      this.hideTooltip()
+      this.app.canvas.style.visibility = 'hidden'
+    }
   }
 
   private setupPanZoom(): void {

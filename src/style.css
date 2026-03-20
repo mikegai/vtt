@@ -37,14 +37,23 @@ html, body {
   flex-direction: column;
 }
 
-#canvas-shell {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
+/*
+ * `[hidden]` alone is overridden by `#id { display: flex }` (higher specificity).
+ * Force display:none so hub vs canvas are never split in one flex row.
+ */
+#canvas-shell[hidden],
+#world-hub-root[hidden] {
+  display: none !important;
 }
 
-#world-hub-root {
+#canvas-shell:not([hidden]) {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+#world-hub-root:not([hidden]) {
   flex: 1;
   min-height: 0;
   overflow: auto;
