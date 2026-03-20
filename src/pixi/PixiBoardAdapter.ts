@@ -2654,6 +2654,36 @@ export class PixiBoardAdapter {
     return true
   }
 
+  /**
+   * Group chrome and in-group free segments are under `groupView.root` and move with it, but member
+   * nodes sit on `worldLayer` at absolute coordinates. While MOVE_GROUP patches are in flight, scene
+   * `group.x/y` lags behind the live drag — apply the same delta to node visuals every frame.
+   */
+  private applyLiveGroupDragOffsetToMemberNodes(groupId: string, liveGroupX: number, liveGroupY: number): void {
+    if (!this.currentScene) return
+    const group = this.currentScene.groups?.[groupId]
+    if (!group) return
+    const dx = liveGroupX - group.x
+    const dy = liveGroupY - group.y
+    if (dx === 0 && dy === 0) return
+    for (const nodeId of group.nodeIds) {
+      const view = this.nodeViews.get(nodeId)
+      const node = this.currentScene.nodes[nodeId]
+      if (!view || !node) continue
+      const base = this.getNodeDisplayPosition(node)
+      const x = base.x + dx
+      const y = base.y + dy
+      view.positionSpring.x = x
+      view.positionSpring.y = y
+      view.positionSpring.targetX = x
+      view.positionSpring.targetY = y
+      view.positionSpring.vx = 0
+      view.positionSpring.vy = 0
+      view.positionSpring.active = false
+      view.root.position.set(x, y)
+    }
+  }
+
   private updateGroupDrag(clientX: number, clientY: number): void {
     if (this.activeDrag.type !== 'group' || !this.currentScene || !this.handlers.onMoveGroup) return
     const drag = this.activeDrag.state
@@ -2664,6 +2694,7 @@ export class PixiBoardAdapter {
     if (groupView) {
       groupView.root.position.set(nextX, nextY)
     }
+    this.applyLiveGroupDragOffsetToMemberNodes(drag.groupId, nextX, nextY)
     this.updateSelectionOverlay()
     this.handlers.onMoveGroup(drag.groupId, nextX, nextY)
   }
