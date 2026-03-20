@@ -14,7 +14,8 @@ import type { Identity } from 'spacetimedb'
 import type { CanonicalState } from '../domain/types'
 import type { PersistedLocalState } from '../persistence/backend'
 import { reconstructCanonicalState, reconstructLayoutState } from './reconstruct'
-import type { AppRoute, WorldCanvasContext } from './context'
+import { worldCanvasContextFromRoute, type AppRoute, type WorldCanvasContext } from './context'
+import { logRoomDebug } from './debug-room-ids'
 import { computeRegistryAdjust, type RegistryAdjust } from './registry-reconcile'
 
 export interface ConnectedUser {
@@ -85,23 +86,35 @@ function displayNameFromSlug(slug: string): string {
   )
 }
 
-function bootstrapRegistry(conn: DbConnection, ctx: WorldCanvasContext): void {
+/**
+ * Reducers return Promises; rejections are async (try/catch won’t see them).
+ * Catches “no such reducer” when the published module is older than client bindings.
+ */
+function runReducer(label: string, call: () => void | Promise<void>): void {
   try {
+    void Promise.resolve(call()).catch((err) => console.warn(`[spacetimedb] ${label} failed:`, err))
+  } catch (err) {
+    console.warn(`[spacetimedb] ${label} threw:`, err)
+  }
+}
+
+function bootstrapRegistry(conn: DbConnection, ctx: WorldCanvasContext): void {
+  runReducer('ensureWorld', () =>
     conn.reducers.ensureWorld({
       id: ctx.worldId,
       slug: ctx.worldSlug,
       displayName: displayNameFromSlug(ctx.worldSlug),
       description: undefined,
-    })
+    }),
+  )
+  runReducer('ensureCanvas', () =>
     conn.reducers.ensureCanvas({
       id: ctx.canvasId,
       worldId: ctx.worldId,
       slug: ctx.canvasSlug,
       displayName: undefined,
-    })
-  } catch (e) {
-    console.warn('[spacetimedb] ensure world/canvas', e)
-  }
+    }),
+  )
 }
 
 const registrySubs = (): string[] => [
@@ -195,11 +208,14 @@ function canvasPresenceKey(identityHex: string): string {
 }
 
 function markPresence(): void {
-  if (!conn) return
-  conn.reducers.setPresence({
-    worldId: currentContext.worldId,
-    canvasId: currentContext.canvasId,
-  })
+  const c = conn
+  if (!c) return
+  runReducer('setPresence', () =>
+    c.reducers.setPresence({
+      worldId: currentContext.worldId,
+      canvasId: currentContext.canvasId,
+    }),
+  )
 }
 
 /** Re-send room presence after switching world/canvas route. */
@@ -226,12 +242,30 @@ function handleSubscriptionApplied(): void {
   if (!conn || !onServerState) return
   const adjust = computeRegistryAdjust(conn, currentAppRoute, currentContext)
   if (adjust && onRegistryAdjust) {
+    // Match server registry ids before any reducers run; otherwise sync uses URL/localStorage
+    // ids that disagree with subscribed rows, and data appears to vanish on refresh.
+    currentContext = worldCanvasContextFromRoute(adjust.route, adjust.worldId, adjust.canvasId)
+    currentAppRoute = adjust.route
+    appSubscriptionMode = adjust.route.mode === 'hub' ? 'hub' : 'canvas'
+    logRoomDebug('subscription: registry adjust → context + re-subscribe', {
+      authorityWorldId: adjust.worldId,
+      authorityCanvasId: adjust.canvasId,
+      canonicalRouteMode: adjust.route.mode,
+    })
     onRegistryAdjust(adjust)
+    subscribeToAllTables()
     return
   }
   const worldState = reconstructCanonicalState(conn, currentContext)
   const layoutState = reconstructLayoutState(conn, currentContext)
   initialApplied = true
+  logRoomDebug('subscription: snapshot loaded', {
+    worldId: currentContext.worldId,
+    canvasId: currentContext.canvasId,
+    subscriptionMode: appSubscriptionMode,
+    actorCount: Object.keys(worldState.actors).length,
+    inventoryEntryCount: Object.keys(worldState.inventoryEntries).length,
+  })
   onServerState(worldState, layoutState)
   rebuildPresence()
   restoreCamera()
@@ -280,9 +314,23 @@ function restoreCamera(): void {
 
 function subscribeToAllTables(): void {
   if (!conn) return
+  const queries = activeSubscriptionQueries()
+  logRoomDebug('subscribe (SQL)', {
+    subscriptionMode: appSubscriptionMode,
+    worldId: currentContext.worldId,
+    canvasId: currentContext.canvasId,
+    worldSlug: currentContext.worldSlug,
+    canvasSlug: currentContext.canvasSlug,
+    queryCount: queries.length,
+    layoutScope:
+      appSubscriptionMode === 'hub'
+        ? 'hub: layout rows filtered by worldId only in SQL; reconstruct still uses canvasId'
+        : 'canvas: layout rows use worldId + canvasId',
+    sampleQueries: queries.slice(0, 4),
+  })
   conn.subscriptionBuilder()
     .onApplied(() => handleSubscriptionApplied())
-    .subscribe(activeSubscriptionQueries())
+    .subscribe(queries)
 }
 
 /**
@@ -293,6 +341,12 @@ export function setAppSubscriptionRoute(
   mode: AppSubscriptionMode,
   appRoute: AppRoute,
 ): void {
+  logRoomDebug('setAppSubscriptionRoute', {
+    worldId: context.worldId,
+    canvasId: context.canvasId,
+    subscriptionMode: mode,
+    routeMode: appRoute.mode,
+  })
   currentContext = context
   currentAppRoute = appRoute
   appSubscriptionMode = mode
@@ -441,41 +495,56 @@ export function connect(
 
   if (token) storeToken(token)
 
+  logRoomDebug('connect()', {
+    worldId: currentContext.worldId,
+    canvasId: currentContext.canvasId,
+    subscriptionMode: appSubscriptionMode,
+    routeMode: appRoute.mode,
+  })
+
   buildConnection()
 }
 
 export function updateMyCursor(x: number, y: number): void {
-  if (!conn || !initialApplied) return
+  const c = conn
+  if (!c || !initialApplied) return
   markPresence()
-  conn.reducers.updateCursor({
-    worldId: currentContext.worldId,
-    canvasId: currentContext.canvasId,
-    x,
-    y,
-    viewportScale: undefined,
-  })
+  runReducer('updateCursor', () =>
+    c.reducers.updateCursor({
+      worldId: currentContext.worldId,
+      canvasId: currentContext.canvasId,
+      x,
+      y,
+      viewportScale: undefined,
+    }),
+  )
 }
 
 export function updateMyCamera(panX: number, panY: number, zoom: number): void {
-  if (!conn || !initialApplied) return
+  const c = conn
+  if (!c || !initialApplied) return
   markPresence()
-  conn.reducers.updateCamera({
-    worldId: currentContext.worldId,
-    canvasId: currentContext.canvasId,
-    panX,
-    panY,
-    zoom,
-  })
+  runReducer('updateCamera', () =>
+    c.reducers.updateCamera({
+      worldId: currentContext.worldId,
+      canvasId: currentContext.canvasId,
+      panX,
+      panY,
+      zoom,
+    }),
+  )
 }
 
 export function setMyDisplayName(name: string): void {
-  if (!conn || !initialApplied) return
-  conn.reducers.setDisplayName({ displayName: name })
+  const c = conn
+  if (!c || !initialApplied) return
+  runReducer('setDisplayName', () => c.reducers.setDisplayName({ displayName: name }))
 }
 
 export function setUserRole(targetIdentityHex: string, role: 'gm' | 'player'): void {
-  if (!conn || !initialApplied) return
-  conn.reducers.setUserRole({ targetIdentityHex, role })
+  const c = conn
+  if (!c || !initialApplied) return
+  runReducer('setUserRole', () => c.reducers.setUserRole({ targetIdentityHex, role }))
 }
 
 export function getMyIdentityHex(): string {
@@ -501,4 +570,9 @@ export function getConnection(): DbConnection | null {
 
 export function isConnected(): boolean {
   return conn != null && initialApplied
+}
+
+/** WebSocket is up and reducers can run (may be before first subscription snapshot). */
+export function isReducerTransportReady(): boolean {
+  return conn != null
 }

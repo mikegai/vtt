@@ -7,6 +7,7 @@
 import type { DbConnection } from '../module_bindings'
 import type { AppRoute, WorldCanvasContext } from './context'
 import { canonicalPathForRoute, DEFAULT_CANVAS_SLUG } from './context'
+import { logRoomDebug } from './debug-room-ids'
 
 export type RegistryAdjust = {
   readonly route: AppRoute
@@ -101,6 +102,17 @@ export function computeRegistryAdjust(
   const idMismatch = ctx.worldId !== worldId || ctx.canvasId !== authorityCanvasId
 
   if (!pathMismatch && !idMismatch) return null
+
+  logRoomDebug('registry adjust (slug history / server registry)', {
+    pathMismatch,
+    idMismatch,
+    urlRoute: route,
+    ctxWorldId: ctx.worldId,
+    ctxCanvasId: ctx.canvasId,
+    authorityWorldId: worldId,
+    authorityCanvasId,
+    canonicalRoute,
+  })
 
   return {
     route: canonicalRoute,

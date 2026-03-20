@@ -29,6 +29,7 @@ import {
   type AppRoute,
 } from './spacetimedb/context'
 import type { RegistryAdjust } from './spacetimedb/registry-reconcile'
+import { readRoomIdDebugFromStorage } from './spacetimedb/debug-room-ids'
 import { createWorldHubAdapter } from './world-hub/world-hub-adapter'
 import type { WorldHubAdapter } from './world-hub/world-hub-adapter'
 import { attachTooltip } from './tooltip'
@@ -990,7 +991,12 @@ const applyAppRoute = (route: AppRoute, pushHistory: boolean): void => {
   appRoute = route
   const ids = getRoomIdsForRoute(route)
   worldCanvasContext = worldCanvasContextFromRoute(route, ids.worldId, ids.canvasId)
-  postToWorker({ type: 'SET_APP_ROUTE', appRoute: route, context: worldCanvasContext })
+  postToWorker({
+    type: 'SET_APP_ROUTE',
+    appRoute: route,
+    context: worldCanvasContext,
+    debugRoomIds: readRoomIdDebugFromStorage(),
+  })
   syncHubCanvasShell()
 }
 
@@ -1001,7 +1007,12 @@ const applyRegistryAdjust = (adjust: RegistryAdjust): void => {
   appRoute = adjust.route
   worldCanvasContext = worldCanvasContextFromRoute(adjust.route, adjust.worldId, adjust.canvasId)
   if (adjust.replaceUrl) history.replaceState(null, '', canonicalPathForRoute(adjust.route))
-  postToWorker({ type: 'SET_APP_ROUTE', appRoute: adjust.route, context: worldCanvasContext })
+  postToWorker({
+    type: 'SET_APP_ROUTE',
+    appRoute: adjust.route,
+    context: worldCanvasContext,
+    debugRoomIds: readRoomIdDebugFromStorage(),
+  })
   syncHubCanvasShell()
 }
 
@@ -1960,6 +1971,7 @@ postToWorker({
   token: savedSpacetimeToken,
   context: worldCanvasContext,
   appRoute,
+  debugRoomIds: readRoomIdDebugFromStorage(),
 })
 syncHubCanvasShell()
 

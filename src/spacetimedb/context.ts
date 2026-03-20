@@ -1,3 +1,5 @@
+import { logRoomDebug } from './debug-room-ids'
+
 /** Deterministic ids for the default dev room (stable across browsers for `default-world` / `main`). */
 export const STABLE_DEFAULT_WORLD_ID = '11111111-1111-4111-8111-111111111111'
 export const STABLE_DEFAULT_MAIN_CANVAS_ID = '22222222-2222-4222-8222-222222222222'
@@ -101,6 +103,13 @@ export function getRoomIdsForRoute(route: AppRoute): { worldId: string; canvasId
   const canvasSlug = route.mode === 'hub' ? DEFAULT_CANVAS_SLUG : route.canvasSlug
   const worldId = resolveWorldId(worldSlug)
   const canvasId = resolveCanvasId(worldSlug, canvasSlug)
+  logRoomDebug('slug→ids (localStorage / defaults)', {
+    routeMode: route.mode,
+    worldSlug,
+    canvasSlugUsedForLookup: canvasSlug,
+    worldId,
+    canvasId,
+  })
   return { worldId, canvasId }
 }
 
@@ -139,6 +148,12 @@ export function persistResolvedRoomIds(
   worldId: string,
   canvasId: string,
 ): void {
+  logRoomDebug('persistResolvedRoomIds (server registry → localStorage)', {
+    worldSlug,
+    canvasSlug,
+    worldId,
+    canvasId,
+  })
   try {
     if (worldSlug !== DEFAULT_WORLD_SLUG) localStorage.setItem(lsWorldIdKey(worldSlug), worldId)
     if (!(worldSlug === DEFAULT_WORLD_SLUG && canvasSlug === DEFAULT_CANVAS_SLUG))

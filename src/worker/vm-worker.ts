@@ -19,6 +19,7 @@ import {
   connect as stdbConnect,
   getConnection,
   isConnected,
+  isReducerTransportReady,
   updateMyCursor,
   updateMyCamera,
   setMyDisplayName,
@@ -30,6 +31,7 @@ import type { ConnectedUser, RemoteCursor } from '../spacetimedb/client'
 import { syncWorldState, syncLocalState } from '../spacetimedb/sync'
 import type { AppRoute, WorldCanvasContext } from '../spacetimedb/context'
 import { STABLE_DEFAULT_MAIN_CANVAS_ID, STABLE_DEFAULT_WORLD_ID } from '../spacetimedb/context'
+import { logRoomDebug, setRoomIdDebugFromWorker } from '../spacetimedb/debug-room-ids'
 import { buildWorldHubSnapshot } from '../spacetimedb/world-hub-snapshot'
 import {
   NODE_VM_TOP_BAND_H as TOP_BAND_H,
@@ -105,7 +107,7 @@ function stripEphemeralLocalState(state: WorkerLocalState): PersistedLocalState 
 
 function scheduleSave(): void {
   if (!INDEXEDDB_ENABLED) return
-  if (isConnected()) return
+  if (isReducerTransportReady()) return
   if (saveTimer != null) clearTimeout(saveTimer)
   saveTimer = setTimeout(() => {
     saveTimer = null
@@ -2481,14 +2483,26 @@ async function initFromPersistence(fallbackWorldState: CanonicalState, stonesPer
 self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
   const message = event.data
   if (message.type === 'INIT') {
+    setRoomIdDebugFromWorker(message.debugRoomIds ?? false)
     appRoute = message.appRoute
     currentContext = message.context
+    logRoomDebug('worker INIT (context before SpacetimeDB)', {
+      worldId: message.context.worldId,
+      canvasId: message.context.canvasId,
+      routeMode: message.appRoute.mode,
+    })
     void initFromPersistence(message.worldState, message.stonesPerRow, message.token)
     return
   }
   if (message.type === 'SET_APP_ROUTE') {
+    if (message.debugRoomIds != null) setRoomIdDebugFromWorker(message.debugRoomIds)
     appRoute = message.appRoute
     currentContext = message.context
+    logRoomDebug('worker SET_APP_ROUTE', {
+      worldId: message.context.worldId,
+      canvasId: message.context.canvasId,
+      routeMode: message.appRoute.mode,
+    })
     setAppSubscriptionRoute(currentContext, message.appRoute.mode === 'hub' ? 'hub' : 'canvas', message.appRoute)
     refreshPresence()
     maybePushWorldHub()
@@ -2510,12 +2524,14 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
     if (!conn || !isConnected()) return
     const name = message.displayName.trim()
     if (!name) return
-    conn.reducers.renameWorld({
-      worldId: currentContext.worldId,
-      newSlug: currentContext.worldSlug,
-      displayName: name,
-      description: undefined,
-    })
+    void Promise.resolve(
+      conn.reducers.renameWorld({
+        worldId: currentContext.worldId,
+        newSlug: currentContext.worldSlug,
+        displayName: name,
+        description: undefined,
+      }),
+    ).catch((err) => console.warn('[vm-worker] renameWorld failed (publish a module that includes rename_world):', err))
     return
   }
   if (message.type === 'RESET') {
@@ -2599,7 +2615,7 @@ function syncToSpacetimeDB(
   oldWorld: CanonicalState | null,
   oldLocal: WorkerLocalState,
 ): void {
-  if (!isConnected()) return
+  if (!isReducerTransportReady()) return
   if (dragActive) {
     if (!pendingSyncSnapshot) {
       pendingSyncSnapshot = { oldWorld, oldLocal }

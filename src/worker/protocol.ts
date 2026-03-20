@@ -283,9 +283,16 @@ export type MainToWorkerMessage =
       readonly token?: string
       readonly context: WorldCanvasContext
       readonly appRoute: AppRoute
+      /** When true, worker logs `[vtt:room]` traces (mirrors localStorage vtt:debugRoomIds). */
+      readonly debugRoomIds?: boolean
     }
   | { readonly type: 'RESET'; readonly worldState: CanonicalState; readonly stonesPerRow?: number }
-  | { readonly type: 'SET_APP_ROUTE'; readonly appRoute: AppRoute; readonly context: WorldCanvasContext }
+  | {
+      readonly type: 'SET_APP_ROUTE'
+      readonly appRoute: AppRoute
+      readonly context: WorldCanvasContext
+      readonly debugRoomIds?: boolean
+    }
   | { readonly type: 'SET_STONES_PER_ROW'; readonly stonesPerRow: number }
   | { readonly type: 'INTENT'; readonly intent: WorkerIntent }
   | { readonly type: 'SET_SPACETIMEDB_TOKEN'; readonly token: string }
