@@ -48,6 +48,8 @@ export type SceneSegmentVM = {
   readonly locked?: boolean
   /** Visual-only non-encumbering worn clothing rendered as pill strip under node. */
   readonly isWornPill?: boolean
+  /** Serpentine packing: `{ row, col }` per full stone (see domain packing). */
+  readonly meterCells?: readonly { readonly row: number; readonly col: number }[]
 }
 
 export type SceneNodeVM = {
@@ -285,13 +287,20 @@ export type MainToWorkerMessage =
       readonly type: 'INIT'
       readonly worldState: CanonicalState
       readonly stonesPerRow?: number
+      /** `'row-major'` | `'serpentine'` */
+      readonly meterSlotLayout?: 'row-major' | 'serpentine'
       readonly token?: string
       readonly context: WorldCanvasContext
       readonly appRoute: AppRoute
       /** When true, worker logs `[vtt:room]` traces (mirrors localStorage vtt:debugRoomIds). */
       readonly debugRoomIds?: boolean
     }
-  | { readonly type: 'RESET'; readonly worldState: CanonicalState; readonly stonesPerRow?: number }
+  | {
+      readonly type: 'RESET'
+      readonly worldState: CanonicalState
+      readonly stonesPerRow?: number
+      readonly meterSlotLayout?: 'row-major' | 'serpentine'
+    }
   | {
       readonly type: 'SET_APP_ROUTE'
       readonly appRoute: AppRoute
@@ -299,6 +308,7 @@ export type MainToWorkerMessage =
       readonly debugRoomIds?: boolean
     }
   | { readonly type: 'SET_STONES_PER_ROW'; readonly stonesPerRow: number }
+  | { readonly type: 'SET_METER_SLOT_LAYOUT'; readonly meterSlotLayout: 'row-major' | 'serpentine' }
   | { readonly type: 'INTENT'; readonly intent: WorkerIntent }
   | { readonly type: 'SET_SPACETIMEDB_TOKEN'; readonly token: string }
   | { readonly type: 'UPDATE_CURSOR'; readonly x: number; readonly y: number }

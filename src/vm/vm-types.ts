@@ -2,6 +2,7 @@ import type { ActorKind, CarryZone, EquipmentState } from '../domain/types'
 import type { ItemCategory } from '../domain/item-category'
 import type { LabelLadder } from '../domain/labels'
 import type { SpeedBand, SpeedProfile } from '../domain/rules'
+import type { MeterCell } from '../shared/meter-grid'
 
 export type TooltipVM = {
   readonly title: string
@@ -28,6 +29,8 @@ export type SegmentVM = {
   readonly isFungibleVisual?: boolean
   /** Visual-only non-encumbering worn clothing rendered as pill strip under node. */
   readonly isWornPill?: boolean
+  /** Serpentine layout: grid cell per full stone (see domain packing). */
+  readonly meterCells?: readonly MeterCell[]
 }
 
 export type StoneSlotVM = {

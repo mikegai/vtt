@@ -2,6 +2,12 @@ import type { CarryZone, EquipmentState, InventoryEntry, ItemDefinition } from '
 import { getItemCategory } from './item-category'
 import { ACCESSIBLE_MISC_LIMIT_SIXTHS, encumbranceCostSixths } from './rules'
 import { SIXTHS_PER_STONE } from './types'
+import {
+  type MeterCell,
+  type MeterSlotLayout,
+  cellsMatchRowMajorWalk,
+  meterCellsForSerpentineFullStones,
+} from '../shared/meter-grid'
 
 export type PackInput = {
   readonly entry: InventoryEntry
@@ -19,6 +25,11 @@ export type PackedSegment = {
   readonly sizeSixths: number
   readonly isOverflow: boolean
   readonly isWornPill?: boolean
+  /**
+   * When set (serpentine multi-stone placement), one cell per full stone in sixth order;
+   * pixel layout uses row/col instead of linear stone index.
+   */
+  readonly meterCells?: readonly MeterCell[]
 }
 
 const isOneOrMoreStone = (sixths: number): boolean => sixths >= SIXTHS_PER_STONE
@@ -55,9 +66,21 @@ const sortPackInputs = (items: readonly PackInput[]): PackInput[] =>
     return a.entry.id.localeCompare(b.entry.id)
   })
 
-export const packDeterministic = (items: readonly PackInput[], capacitySixths: number): PackedSegment[] => {
+export type PackOptions = {
+  readonly meterSlotLayout: MeterSlotLayout
+  /** Stone columns for this row’s meter (same as expanded slot cols). */
+  readonly slotCols: number
+}
+
+export const packDeterministic = (
+  items: readonly PackInput[],
+  capacitySixths: number,
+  packOptions?: PackOptions,
+): PackedSegment[] => {
   const sorted = sortPackInputs(items)
   const result: PackedSegment[] = []
+  const layout = packOptions?.meterSlotLayout ?? 'row-major'
+  const slotCols = Math.max(1, packOptions?.slotCols ?? 1)
 
   let cursor = 0
   let accessibleMiscUsed = 0
@@ -103,6 +126,19 @@ export const packDeterministic = (items: readonly PackInput[], capacitySixths: n
         }
       }
       const end = start + placeableCost
+      let meterCells: readonly MeterCell[] | undefined
+      if (
+        layout === 'serpentine' &&
+        placeableCost >= SIXTHS_PER_STONE &&
+        placeableCost % SIXTHS_PER_STONE === 0
+      ) {
+        const startStone = start / SIXTHS_PER_STONE
+        const kInt = placeableCost / SIXTHS_PER_STONE
+        const cells = meterCellsForSerpentineFullStones(startStone, kInt, slotCols)
+        if (!cellsMatchRowMajorWalk(cells, startStone, kInt, slotCols)) {
+          meterCells = cells
+        }
+      }
       result.push({
         inventoryEntryId: input.entry.id,
         itemDefId: input.definition.id,
@@ -113,6 +149,7 @@ export const packDeterministic = (items: readonly PackInput[], capacitySixths: n
         endSixth: end,
         sizeSixths: placeableCost,
         isOverflow: false,
+        ...(meterCells ? { meterCells } : {}),
       })
       cursor = end
     }

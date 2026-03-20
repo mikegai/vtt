@@ -11,11 +11,12 @@ import {
   nodeWidthForCols,
 } from '../shared/node-layout'
 import { applyDropIntentToState } from '../vm/drop-intent'
-import { buildBoardVM } from '../vm/vm'
+import { buildBoardVM, type BoardPackOptions } from '../vm/vm'
 import type { ActorRowVM } from '../vm/vm-types'
 import type { CanonicalState } from '../domain/types'
 import type { DropIntent } from './protocol'
 import type { SceneFreeSegmentVM, SceneGroupVM, SceneNodeVM, SceneVM } from './protocol'
+import type { MeterSlotLayout } from '../shared/meter-grid'
 
 export type WorkerLocalState = {
   readonly hoveredSegmentId: string | null
@@ -36,6 +37,8 @@ export type WorkerLocalState = {
   readonly nodeTitleOverrides: Record<string, string>
   readonly dropIntent: DropIntent | null
   readonly stonesPerRow: number
+  /** Row-major (default) or serpentine multi-stone wrap placement. */
+  readonly meterSlotLayout: MeterSlotLayout
   readonly filterCategory: ItemCategory | null
   readonly selectedSegmentIds: readonly string[]
   readonly selectedNodeIds: readonly string[]
@@ -121,9 +124,26 @@ const splitStonesAtWrap = (
 }
 
 const segmentBoundsInNodeLocal = (
-  segment: { startSixth: number; sizeSixths: number },
+  segment: { startSixth: number; sizeSixths: number; meterCells?: readonly { row: number; col: number }[] },
   stonesPerRow: number,
 ): { x: number; y: number; w: number; h: number } => {
+  const cells = segment.meterCells
+  if (
+    cells &&
+    cells.length > 0 &&
+    segment.sizeSixths === cells.length * SIXTHS_PER_STONE
+  ) {
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+    for (const cell of cells) {
+      const cx = SLOT_START_X + cell.col * (STONE_W + STONE_GAP)
+      const cy = TOP_BAND_H + cell.row * (STONE_H + STONE_ROW_GAP)
+      minX = Math.min(minX, cx)
+      minY = Math.min(minY, cy)
+      maxX = Math.max(maxX, cx + STONE_W)
+      maxY = Math.max(maxY, cy + STONE_H)
+    }
+    return { x: minX, y: minY, w: maxX - minX, h: maxY - minY }
+  }
   const { startStone, endStone } = segmentStoneSpan(segment.startSixth, segment.sizeSixths)
   if (isMultiStone(segment.sizeSixths)) {
     const chunks = splitStonesAtWrap(startStone, endStone, stonesPerRow)
@@ -225,7 +245,12 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
   const effectiveState = localState.dropIntent
     ? applyDropIntentToState(worldState, localState.dropIntent)
     : worldState
-  const board = buildBoardVM(effectiveState)
+  const pack: BoardPackOptions = {
+    meterSlotLayout: localState.meterSlotLayout ?? 'row-major',
+    stonesPerRow: localState.stonesPerRow,
+    nodeSizeOverrides: localState.nodeSizeOverrides,
+  }
+  const board = buildBoardVM(effectiveState, pack)
   const movedSegmentIds = localState.dropIntent ? new Set(localState.dropIntent.segmentIds) : new Set<string>()
   const dropIntent = localState.dropIntent
   const rows = flattenRows(board.rows)
@@ -385,6 +410,7 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
         tooltip: segment.tooltip,
         ...(segment.isFungibleVisual != null && { isFungibleVisual: segment.isFungibleVisual }),
         ...(segment.isWornPill ? { isWornPill: true } : {}),
+        ...(segment.meterCells && segment.meterCells.length > 0 ? { meterCells: segment.meterCells } : {}),
       }
     })
     const hasWornPills = mappedSegments.some((segment) => segment.isWornPill)

@@ -4,6 +4,12 @@ import type { CanonicalState } from '../domain/types'
 import { sampleState } from '../sample-data'
 import { buildBoardVM } from '../vm/vm'
 
+const serpentinePack = {
+  meterSlotLayout: 'serpentine' as const,
+  stonesPerRow: 25,
+  nodeSizeOverrides: {},
+}
+
 const stateWithCutthroatRations = (count: number) => {
   const entries = Object.fromEntries(
     Object.entries(sampleState.inventoryEntries).filter(([id]) => !id.startsWith('cutthroatRations')),
@@ -61,6 +67,42 @@ describe('board view model', () => {
     const pair = ironRationSegments.find((s) => s.tooltip.title === '2 daily iron rations')
     expect(pair?.quantity).toBe(2)
     expect(ironRationSegments.filter((s) => s.quantity === 1).length).toBe(5)
+  })
+
+  it('serpentine merges iron ration entries into one packed line per zone (not 5 + paired + remainder splits)', () => {
+    const state = stateWithCutthroatRations(10)
+    const rowMajor = buildBoardVM(state)
+    const serp = buildBoardVM(state, serpentinePack)
+    const rm = rowMajor.rows.find((r) => r.actorId === 'cutthroat')
+    const se = serp.rows.find((r) => r.actorId === 'cutthroat')
+    const ironRm = rm!.segments.filter((s) => s.itemDefId === 'ironRationsDay' && !s.isOverflow)
+    const ironSe = se!.segments.filter((s) => s.itemDefId === 'ironRationsDay' && !s.isOverflow)
+    expect(ironRm.length).toBeGreaterThan(1)
+    expect(ironSe.length).toBe(1)
+    expect(ironSe[0]!.quantity).toBe(10)
+    expect(ironSe[0]!.id.startsWith('vf-coalesce+')).toBe(true)
+  })
+
+  it('serpentine layout coalesces fungible lines with the same item+zone before pack (one segment, qty summed)', () => {
+    const actorId = 'cutthroat'
+    const entries = Object.fromEntries(
+      Object.entries(sampleState.inventoryEntries).filter(([, e]) => e.actorId !== actorId),
+    )
+    entries.packTorchA = { id: 'packTorchA', actorId, itemDefId: 'torch', quantity: 1, zone: 'stowed' }
+    entries.packTorchB = { id: 'packTorchB', actorId, itemDefId: 'torch', quantity: 1, zone: 'stowed' }
+    entries.packOilA = { id: 'packOilA', actorId, itemDefId: 'militaryOil', quantity: 1, zone: 'stowed' }
+    const state: CanonicalState = { ...sampleState, inventoryEntries: entries }
+
+    const rowMajor = buildBoardVM(state)
+    const serp = buildBoardVM(state, serpentinePack)
+    const rm = rowMajor.rows.find((r) => r.actorId === actorId)
+    const se = serp.rows.find((r) => r.actorId === actorId)
+    const torchRm = rm!.segments.filter((s) => s.itemDefId === 'torch' && !s.isWornPill)
+    const torchSe = se!.segments.filter((s) => s.itemDefId === 'torch' && !s.isWornPill)
+    expect(torchRm.length).toBe(2)
+    expect(torchSe.length).toBe(1)
+    expect(torchSe[0]!.quantity).toBe(2)
+    expect(torchSe[0]!.id.startsWith('vf-coalesce+')).toBe(true)
   })
 
   it('iron rations normalization is deterministic for 8 and 14 entries', () => {

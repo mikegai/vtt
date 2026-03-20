@@ -68,6 +68,7 @@ let localState: WorkerLocalState = {
   nodeTitleOverrides: {},
   dropIntent: null,
   stonesPerRow: 25,
+  meterSlotLayout: 'row-major',
   filterCategory: null,
   selectedSegmentIds: [],
   selectedNodeIds: [],
@@ -193,6 +194,7 @@ function applyServerState(
     nodeContainment: newLayoutState.nodeContainment ?? {},
     labels: newLayoutState.labels ?? {},
     stonesPerRow: newLayoutState.stonesPerRow ?? localState.stonesPerRow,
+    meterSlotLayout: newLayoutState.meterSlotLayout ?? localState.meterSlotLayout,
   }
   recompute()
   scheduleSave()
@@ -497,9 +499,22 @@ const splitStonesAtWrap = (
 }
 
 const segmentBoundsInNodeLocal = (
-  segment: { startSixth: number; sizeSixths: number },
+  segment: { startSixth: number; sizeSixths: number; meterCells?: readonly { row: number; col: number }[] },
   stonesPerRow: number,
 ): { x: number; y: number; w: number; h: number } => {
+  const cells = segment.meterCells
+  if (cells && cells.length > 0 && segment.sizeSixths === cells.length * 6) {
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+    for (const cell of cells) {
+      const cx = SLOT_START_X + cell.col * (STONE_W + STONE_GAP)
+      const cy = TOP_BAND_H + cell.row * (STONE_H + STONE_ROW_GAP)
+      minX = Math.min(minX, cx)
+      minY = Math.min(minY, cy)
+      maxX = Math.max(maxX, cx + STONE_W)
+      maxY = Math.max(maxY, cy + STONE_H)
+    }
+    return { x: minX, y: minY, w: maxX - minX, h: maxY - minY }
+  }
   const { startStone, endStone } = segmentStoneSpan(segment.startSixth, segment.sizeSixths)
   if (isMultiStone(segment.sizeSixths)) {
     const chunks = splitStonesAtWrap(startStone, endStone, stonesPerRow)
@@ -2463,7 +2478,12 @@ const applyIntent = (intent: WorkerIntent): void => {
   }
 }
 
-async function initFromPersistence(fallbackWorldState: CanonicalState, stonesPerRow?: number, token?: string): Promise<void> {
+async function initFromPersistence(
+  fallbackWorldState: CanonicalState,
+  stonesPerRow?: number,
+  token?: string,
+  meterSlotLayout?: 'row-major' | 'serpentine',
+): Promise<void> {
   initialWorldTemplate = fallbackWorldState
   hasBootstrappedCurrentContext = false
   if (INDEXEDDB_ENABLED) {
@@ -2487,11 +2507,17 @@ async function initFromPersistence(fallbackWorldState: CanonicalState, stonesPer
     if (stonesPerRow != null) {
       localState = { ...localState, stonesPerRow }
     }
+    if (meterSlotLayout != null) {
+      localState = { ...localState, meterSlotLayout }
+    }
     recompute(true)
   } else {
     worldState = migrateWieldToActor(fallbackWorldState)
     if (stonesPerRow != null) {
       localState = { ...localState, stonesPerRow }
+    }
+    if (meterSlotLayout != null) {
+      localState = { ...localState, meterSlotLayout }
     }
   }
 
@@ -2509,7 +2535,7 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       canvasId: message.context.canvasId,
       routeMode: message.appRoute.mode,
     })
-    void initFromPersistence(message.worldState, message.stonesPerRow, message.token)
+    void initFromPersistence(message.worldState, message.stonesPerRow, message.token, message.meterSlotLayout)
     return
   }
   if (message.type === 'SET_APP_ROUTE') {
@@ -2575,6 +2601,7 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       nodeTitleOverrides: {},
       dropIntent: null,
       stonesPerRow: message.stonesPerRow ?? 25,
+      meterSlotLayout: message.meterSlotLayout ?? 'row-major',
       filterCategory: null,
       selectedSegmentIds: [],
       selectedNodeIds: [],
@@ -2592,6 +2619,24 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
   if (message.type === 'SET_STONES_PER_ROW') {
     localState = { ...localState, stonesPerRow: message.stonesPerRow }
     recompute(true)
+    return
+  }
+  if (message.type === 'SET_METER_SLOT_LAYOUT') {
+    localState = { ...localState, meterSlotLayout: message.meterSlotLayout }
+    recompute(true)
+    return
+  }
+  if (message.type === 'DEBUG_PACKING' as any) {
+    (globalThis as any).__VTT_DEBUG_PACKING = true
+    ;(globalThis as any).__VTT_DEBUG_ROWS = []
+    recompute(true)
+    ;(globalThis as any).__VTT_DEBUG_PACKING = false
+    const rows = (globalThis as any).__VTT_DEBUG_ROWS ?? []
+    const payload = JSON.stringify({
+      meterSlotLayout: localState.meterSlotLayout,
+      rows,
+    }, null, 2)
+    post({ type: 'LOG', message: `__DEBUG_PACKING__${payload}` })
     return
   }
   if (message.type === 'SET_SPACETIMEDB_TOKEN') {

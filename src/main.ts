@@ -483,6 +483,65 @@ Object.assign(accountDropdown.style, {
 } as Partial<CSSStyleDeclaration>)
 document.body.appendChild(accountDropdown)
 
+const METER_LAYOUT_LS_KEY = 'vtt:meterSlotLayout'
+const readMeterSlotLayout = (): 'row-major' | 'serpentine' => {
+  try {
+    return localStorage.getItem(METER_LAYOUT_LS_KEY) === 'serpentine' ? 'serpentine' : 'row-major'
+  } catch {
+    return 'row-major'
+  }
+}
+const persistMeterSlotLayout = (layout: 'row-major' | 'serpentine'): void => {
+  try {
+    localStorage.setItem(METER_LAYOUT_LS_KEY, layout)
+  } catch { /* noop */ }
+}
+
+const preferencesDialog = document.createElement('dialog')
+Object.assign(preferencesDialog.style, {
+  border: '1px solid #334455',
+  borderRadius: '10px',
+  background: '#151e2b',
+  color: '#d0dae8',
+  padding: '0',
+  maxWidth: '400px',
+  width: '100%',
+  fontFamily: 'system-ui, -apple-system, sans-serif',
+  boxShadow: '0 20px 60px rgba(0,0,0,0.6)',
+} as Partial<CSSStyleDeclaration>)
+document.body.appendChild(preferencesDialog)
+
+function openPreferencesDialog(): void {
+  closeAccountMenu()
+  const cur = readMeterSlotLayout()
+  preferencesDialog.innerHTML = `
+    <form method="dialog" style="padding:16px;">
+      <div style="font-size:16px;font-weight:600;margin-bottom:12px;">Preferences</div>
+      <label style="display:block;font-size:13px;margin-bottom:8px;">Meter slot layout</label>
+      <select id="pref-meter-layout" style="width:100%;padding:8px;background:#0c1118;border:1px solid #334455;border-radius:6px;color:#d0dae8;">
+        <option value="row-major" ${cur === 'row-major' ? 'selected' : ''}>Row-major (default)</option>
+        <option value="serpentine" ${cur === 'serpentine' ? 'selected' : ''}>Serpentine wraps</option>
+      </select>
+      <p style="font-size:11px;color:#8ea0b6;margin:10px 0 0;line-height:1.4;">Serpentine places multi-stone items around row wraps for a single connected blob when it improves horizontal continuity.</p>
+      <div style="margin-top:14px;display:flex;gap:10px;justify-content:flex-end;">
+        <button type="button" id="pref-cancel" style="padding:8px 14px;border-radius:6px;border:1px solid #334455;background:transparent;color:#a8b8cc;cursor:pointer;">Cancel</button>
+        <button type="submit" id="pref-save" style="padding:8px 14px;border-radius:6px;border:none;background:#3d9ac9;color:#fff;cursor:pointer;font-weight:600;">Save</button>
+      </div>
+    </form>`
+  const form = preferencesDialog.querySelector('form')!
+  const sel = preferencesDialog.querySelector<HTMLSelectElement>('#pref-meter-layout')!
+  preferencesDialog.querySelector('#pref-cancel')?.addEventListener('click', () => preferencesDialog.close())
+  form.addEventListener('submit', (e) => {
+    e.preventDefault()
+    const v = sel.value === 'serpentine' ? 'serpentine' : 'row-major'
+    persistMeterSlotLayout(v)
+    pixiAdapter.setMeterSlotLayout(v)
+    postToWorker({ type: 'SET_METER_SLOT_LAYOUT', meterSlotLayout: v })
+    preferencesDialog.close()
+  })
+  preferencesDialog.showModal()
+}
+
 let accountMenuOpen = false
 
 function closeAccountMenu(): void {
@@ -572,6 +631,31 @@ function openAccountMenu(user: ConnectedUser): void {
     showIdentityDialog(user.displayName, false)
   })
   accountDropdown.appendChild(menuButton)
+
+  const prefButton = document.createElement('button')
+  prefButton.type = 'button'
+  prefButton.textContent = 'Preferences'
+  Object.assign(prefButton.style, {
+    width: '100%',
+    textAlign: 'left',
+    border: 'none',
+    borderRadius: '0',
+    background: 'transparent',
+    color: '#d0dae8',
+    padding: '10px 12px',
+    fontSize: '13px',
+    cursor: 'pointer',
+  } as Partial<CSSStyleDeclaration>)
+  prefButton.addEventListener('mouseenter', () => {
+    prefButton.style.background = '#1a2535'
+  })
+  prefButton.addEventListener('mouseleave', () => {
+    prefButton.style.background = 'transparent'
+  })
+  prefButton.addEventListener('click', () => {
+    openPreferencesDialog()
+  })
+  accountDropdown.appendChild(prefButton)
 }
 
 document.addEventListener('pointerdown', (event) => {
@@ -1933,7 +2017,17 @@ vmWorker.onmessage = (event: MessageEvent<WorkerToMainMessage>) => {
     return
   }
   if (msg.type === 'LOG') {
-    console.info('[worker]', msg.message)
+    if (msg.message.startsWith('__DEBUG_PACKING__')) {
+      const json = msg.message.slice('__DEBUG_PACKING__'.length)
+      navigator.clipboard.writeText(json).then(() => {
+        showDebugToast('Packing debug copied to clipboard')
+      }).catch(() => {
+        console.log(json)
+        showDebugToast('Packing debug logged to console (clipboard blocked)')
+      })
+    } else {
+      console.info('[worker]', msg.message)
+    }
     return
   }
   if (msg.type === 'CONNECTION_STATUS') {
@@ -1986,7 +2080,9 @@ let activeCanvasTool: 'select' | 'text' = 'select'
 let focusLabelEditorOnSelect = false
 
 const initialStonesPerRow = Number(stonesPerRowEl.value ?? 25)
+const initialMeterSlotLayout = readMeterSlotLayout()
 pixiAdapter.setStonesPerRow(initialStonesPerRow)
+pixiAdapter.setMeterSlotLayout(initialMeterSlotLayout)
 let savedSpacetimeToken: string | undefined
 try {
   savedSpacetimeToken = localStorage.getItem('spacetimedb_vtt_token') ?? undefined
@@ -1995,12 +2091,46 @@ postToWorker({
   type: 'INIT',
   worldState: emptyBoardState,
   stonesPerRow: initialStonesPerRow,
+  meterSlotLayout: initialMeterSlotLayout,
   token: savedSpacetimeToken,
   context: worldCanvasContext,
   appRoute,
   debugRoomIds: readRoomIdDebugFromStorage(),
 })
 syncHubCanvasShell()
+
+const showDebugToast = (text: string): void => {
+  const el = document.createElement('div')
+  Object.assign(el.style, {
+    position: 'fixed', bottom: '80px', right: '20px', zIndex: '99999',
+    background: '#1a3a2a', color: '#6fdf8f', padding: '10px 16px',
+    borderRadius: '8px', fontSize: '13px', fontFamily: 'monospace',
+    border: '1px solid #2a5a3a', boxShadow: '0 4px 16px rgba(0,0,0,0.5)',
+    transition: 'opacity 0.4s',
+  } as Partial<CSSStyleDeclaration>)
+  el.textContent = text
+  document.body.appendChild(el)
+  setTimeout(() => { el.style.opacity = '0' }, 2000)
+  setTimeout(() => el.remove(), 2500)
+}
+
+;(window as any).debugPacking = () => {
+  postToWorker({ type: 'DEBUG_PACKING' } as any)
+}
+
+const debugBtn = document.createElement('button')
+debugBtn.textContent = 'Debug Packing'
+Object.assign(debugBtn.style, {
+  position: 'fixed', bottom: '20px', right: '20px', zIndex: '99998',
+  background: '#1c2e44', color: '#7cb8e8', padding: '8px 14px',
+  borderRadius: '8px', fontSize: '12px', fontFamily: 'monospace',
+  border: '1px solid #3a5a7a', cursor: 'pointer',
+  boxShadow: '0 2px 8px rgba(0,0,0,0.4)',
+} as Partial<CSSStyleDeclaration>)
+debugBtn.addEventListener('click', () => {
+  postToWorker({ type: 'DEBUG_PACKING' } as any)
+})
+document.body.appendChild(debugBtn)
 
 canvasHost.addEventListener('pointermove', (e) => {
   broadcastCursorPosition(e.clientX, e.clientY)
@@ -2721,7 +2851,12 @@ stonesPerRowEl.addEventListener('change', () => {
 document.querySelector<HTMLButtonElement>('#reset-data-btn')!.addEventListener('click', () => {
   if (!confirm('Reset all data to sample state? This cannot be undone.')) return
   const stonesPerRow = Number(stonesPerRowEl.value ?? 25)
-  postToWorker({ type: 'RESET', worldState: sampleState, stonesPerRow })
+  postToWorker({
+    type: 'RESET',
+    worldState: sampleState,
+    stonesPerRow,
+    meterSlotLayout: readMeterSlotLayout(),
+  })
 })
 
 const syncLabelEditor = (): void => {

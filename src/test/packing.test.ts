@@ -144,4 +144,20 @@ describe('deterministic packing', () => {
     expect(tunic?.isWornPill).toBe(true)
     expect(torch?.startSixth).toBe(0)
   })
+
+  it('serpentine omits meterCells when multi-stone path matches row-major cells', () => {
+    const items = [asInput(mkEntry('r', 'rope', 'stowed', 2))]
+    const p = packDeterministic(items, stoneToSixths(20), { meterSlotLayout: 'serpentine', slotCols: 20 })
+    const rope = p.find((s) => s.itemDefId === 'rope' && !s.isOverflow)
+    expect(rope?.meterCells).toBeUndefined()
+  })
+
+  it('serpentine packing runs with narrow slotCols', () => {
+    const items = [
+      asInput(mkEntry('a', 'rope', 'stowed', 3)),
+      asInput(mkEntry('b', 'torch', 'stowed', 1)),
+    ]
+    const p = packDeterministic(items, stoneToSixths(20), { meterSlotLayout: 'serpentine', slotCols: 4 })
+    expect(p.filter((s) => !s.isOverflow && !s.isWornPill).length).toBeGreaterThan(0)
+  })
 })
