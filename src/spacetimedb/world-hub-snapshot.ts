@@ -8,7 +8,6 @@ import type { ItemDefinition } from '../domain/types'
 import { sampleState } from '../sample-data'
 import { reconstructCanonicalState } from './reconstruct'
 import type { WorldCanvasContext } from './context'
-import { worldDisplayNameSettingKey } from './context'
 
 const PRESENCE_MAX_AVATARS = 5
 const STALE_PRESENCE_MS = 10 * 60 * 1000
@@ -37,7 +36,7 @@ export type WorldHubSnapshot = {
 
 export const hubUserInitials = (name: string): string => {
   const parts = name.trim().split(/\s+/)
-  if (parts.length >= 2) return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
+  if (parts.length >= 2) return (parts[0]![0]! + parts[parts.length - 1]![0]!).toUpperCase()
   return name.slice(0, 2).toUpperCase() || '?'
 }
 
@@ -55,48 +54,49 @@ const titleCaseFromSlug = (slug: string): string =>
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
     .join(' ') || slug
 
-/** Collect canvas slugs that have layout (or presence) data for this world. */
-const collectCanvasSlugs = (conn: DbConnection, worldSlug: string): Set<string> => {
-  const out = new Set<string>(['main'])
-  const add = (w: string, c: string): void => {
-    if (w === worldSlug && c) out.add(c)
+function canvasSlugByIdMap(conn: DbConnection, worldId: string): Map<string, string> {
+  const m = new Map<string, string>()
+  for (const c of conn.db.canvases.iter()) {
+    if (c.worldId === worldId) m.set(c.id, c.slug)
   }
-  for (const row of conn.db.node_positions.iter()) add(row.worldSlug, row.canvasSlug)
-  for (const row of conn.db.group_positions.iter()) add(row.worldSlug, row.canvasSlug)
-  for (const row of conn.db.group_size_overrides.iter()) add(row.worldSlug, row.canvasSlug)
-  for (const row of conn.db.node_size_overrides.iter()) add(row.worldSlug, row.canvasSlug)
-  for (const row of conn.db.group_list_view.iter()) add(row.worldSlug, row.canvasSlug)
-  for (const row of conn.db.node_group_overrides.iter()) add(row.worldSlug, row.canvasSlug)
-  for (const row of conn.db.group_node_positions.iter()) add(row.worldSlug, row.canvasSlug)
-  for (const row of conn.db.free_segment_positions.iter()) add(row.worldSlug, row.canvasSlug)
-  for (const row of conn.db.group_free_segment_positions.iter()) add(row.worldSlug, row.canvasSlug)
-  for (const row of conn.db.group_node_orders.iter()) add(row.worldSlug, row.canvasSlug)
-  for (const row of conn.db.custom_groups.iter()) add(row.worldSlug, row.canvasSlug)
-  for (const row of conn.db.group_title_overrides.iter()) add(row.worldSlug, row.canvasSlug)
-  for (const row of conn.db.node_title_overrides.iter()) add(row.worldSlug, row.canvasSlug)
-  for (const row of conn.db.node_containment.iter()) add(row.worldSlug, row.canvasSlug)
-  for (const row of conn.db.labels.iter()) add(row.worldSlug, row.canvasSlug)
-  for (const row of conn.db.user_presences.iter()) add(row.worldSlug, row.canvasSlug)
+  return m
+}
+
+/** Collect canvas slugs for a world (registry rows + any canvas ids seen in layout/presence). */
+function collectCanvasSlugs(conn: DbConnection, worldId: string): Set<string> {
+  const idToSlug = canvasSlugByIdMap(conn, worldId)
+  const out = new Set<string>()
+  for (const s of idToSlug.values()) out.add(s)
+  const noteCanvas = (w: string, canvasId: string): void => {
+    if (w !== worldId) return
+    const slug = idToSlug.get(canvasId)
+    if (slug) out.add(slug)
+  }
+  for (const row of conn.db.node_positions.iter()) noteCanvas(row.worldId, row.canvasId)
+  for (const row of conn.db.group_positions.iter()) noteCanvas(row.worldId, row.canvasId)
+  for (const row of conn.db.group_size_overrides.iter()) noteCanvas(row.worldId, row.canvasId)
+  for (const row of conn.db.node_size_overrides.iter()) noteCanvas(row.worldId, row.canvasId)
+  for (const row of conn.db.group_list_view.iter()) noteCanvas(row.worldId, row.canvasId)
+  for (const row of conn.db.node_group_overrides.iter()) noteCanvas(row.worldId, row.canvasId)
+  for (const row of conn.db.group_node_positions.iter()) noteCanvas(row.worldId, row.canvasId)
+  for (const row of conn.db.free_segment_positions.iter()) noteCanvas(row.worldId, row.canvasId)
+  for (const row of conn.db.group_free_segment_positions.iter()) noteCanvas(row.worldId, row.canvasId)
+  for (const row of conn.db.group_node_orders.iter()) noteCanvas(row.worldId, row.canvasId)
+  for (const row of conn.db.custom_groups.iter()) noteCanvas(row.worldId, row.canvasId)
+  for (const row of conn.db.group_title_overrides.iter()) noteCanvas(row.worldId, row.canvasId)
+  for (const row of conn.db.node_title_overrides.iter()) noteCanvas(row.worldId, row.canvasId)
+  for (const row of conn.db.node_containment.iter()) noteCanvas(row.worldId, row.canvasId)
+  for (const row of conn.db.labels.iter()) noteCanvas(row.worldId, row.canvasId)
+  for (const row of conn.db.user_presences.iter()) noteCanvas(row.worldId, row.canvasId)
+  if (out.size === 0) out.add('main')
   return out
 }
 
-export function buildWorldHubSnapshot(
-  conn: DbConnection,
-  worldSlug: string,
-  myIdentityHex: string,
-): WorldHubSnapshot {
-  const ctx: WorldCanvasContext = { worldSlug, canvasSlug: 'main' }
+export function buildWorldHubSnapshot(conn: DbConnection, ctx: WorldCanvasContext, myIdentityHex: string): WorldHubSnapshot {
   const canonical = reconstructCanonicalState(conn, ctx)
 
-  const dnKey = worldDisplayNameSettingKey(worldSlug)
-  let displayName = titleCaseFromSlug(worldSlug)
-  for (const row of conn.db.settings.iter()) {
-    if (row.worldSlug !== worldSlug) continue
-    if (row.key === dnKey && row.valueText != null && row.valueText.trim().length > 0) {
-      displayName = row.valueText.trim()
-      break
-    }
-  }
+  const wrow = conn.db.worlds.id.find(ctx.worldId)
+  const displayName = wrow?.displayName?.trim() || titleCaseFromSlug(ctx.worldSlug)
 
   const sampleIds = new Set(Object.keys(sampleState.itemDefinitions))
   const catalog: HubCatalogRowVM[] = Object.values(canonical.itemDefinitions)
@@ -104,15 +104,16 @@ export function buildWorldHubSnapshot(
     .sort((a, b) => a.canonicalName.localeCompare(b.canonicalName))
     .map((d) => ({ ...d, isFromSample: sampleIds.has(d.id) }))
 
-  const canvasSlugs = collectCanvasSlugs(conn, worldSlug)
+  const idToSlug = canvasSlugByIdMap(conn, ctx.worldId)
+  const canvasSlugs = collectCanvasSlugs(conn, ctx.worldId)
   const now = Date.now()
 
   const myLastByCanvas = new Map<string, number>()
   const identitiesByCanvas = new Map<string, Map<string, number>>()
 
   for (const row of conn.db.user_presences.iter()) {
-    if (row.worldSlug !== worldSlug) continue
-    const { canvasSlug } = row
+    if (row.worldId !== ctx.worldId) continue
+    const canvasSlug = idToSlug.get(row.canvasId) ?? row.canvasId
     if (row.identityHex === myIdentityHex) {
       myLastByCanvas.set(canvasSlug, Math.max(myLastByCanvas.get(canvasSlug) ?? 0, row.lastSeenMs))
     }
@@ -136,12 +137,12 @@ export function buildWorldHubSnapshot(
     const presence: HubPresenceAvatarVM[] = []
     for (const [identityHex] of recent.slice(0, PRESENCE_MAX_AVATARS)) {
       const u = conn.db.users.identityHex.find(identityHex)
-      const displayName = u?.displayName ?? identityHex.slice(0, 8)
+      const dn = u?.displayName ?? identityHex.slice(0, 8)
       presence.push({
         identityHex,
-        displayName,
-        initials: hubUserInitials(displayName),
-        color: hubAvatarColor(displayName),
+        displayName: dn,
+        initials: hubUserInitials(dn),
+        color: hubAvatarColor(dn),
       })
     }
 
@@ -153,5 +154,5 @@ export function buildWorldHubSnapshot(
     return a.canvasSlug.localeCompare(b.canvasSlug)
   })
 
-  return { worldSlug, displayName, canvases, catalog }
+  return { worldSlug: ctx.worldSlug, displayName, canvases, catalog }
 }

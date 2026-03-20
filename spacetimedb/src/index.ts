@@ -6,33 +6,105 @@ function compoundKey(a: string, b: string): string {
   return `${a}::${b}`;
 }
 
-/** `w__{world}__local…` → world slug (local may include `__c__` for nested ids). */
-function worldSlugFromWorldScopedId(id: string): string | null {
-  if (!id.startsWith('w__')) return null;
-  const rest = id.slice(3);
-  const i = rest.indexOf('__');
-  if (i < 0) return null;
-  return rest.slice(0, i);
+const UUID_IN_PREFIX = '([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})';
+
+/** `w__{worldId}__…` → world UUID (canvas-scoped ids also start this way). */
+function worldIdFromWorldScopedId(id: string): string | null {
+  const m = id.match(new RegExp(`^w__${UUID_IN_PREFIX}__`, 'i'));
+  return m ? m[1] : null;
 }
 
-/** `w__{world}__c__{canvas}__…` */
-function scopeFromCanvasScopedId(id: string): { worldSlug: string; canvasSlug: string } | null {
-  const m = id.match(/^w__(.+?)__c__(.+?)__/);
+/** `w__{worldId}__c__{canvasId}__…` */
+function scopeFromCanvasScopedId(id: string): { worldId: string; canvasId: string } | null {
+  const m = id.match(new RegExp(`^w__${UUID_IN_PREFIX}__c__${UUID_IN_PREFIX}__`, 'i'));
   if (!m) return null;
-  return { worldSlug: m[1], canvasSlug: m[2] };
+  return { worldId: m[1], canvasId: m[2] };
 }
 
-function requireWorldSlug(id: string, label: string): string {
-  const w = worldSlugFromWorldScopedId(id);
+function requireWorldId(id: string, label: string): string {
+  const w = worldIdFromWorldScopedId(id);
   if (w == null) throw new Error(`${label}: expected world-scoped id, got ${id}`);
   return w;
 }
 
-function requireCanvasScope(id: string, label: string): { worldSlug: string; canvasSlug: string } {
+function requireCanvasScope(id: string, label: string): { worldId: string; canvasId: string } {
   const s = scopeFromCanvasScopedId(id);
   if (s == null) throw new Error(`${label}: expected canvas-scoped id, got ${id}`);
   return s;
 }
+
+// ─── World / canvas registry ─────────────────────────────────────────────────
+
+const worlds = table(
+  {
+    name: 'worlds',
+    public: true,
+    indexes: [{ accessor: 'slug', name: 'idx_worlds_slug', algorithm: 'btree' as const, columns: ['slug'] }],
+  },
+  {
+    id: t.string().primaryKey(),
+    slug: t.string(),
+    displayName: t.string(),
+    description: t.string().optional(),
+  }
+);
+
+const world_slug_history = table(
+  {
+    name: 'world_slug_history',
+    public: true,
+    indexes: [{ accessor: 'slug', name: 'idx_wsh_slug', algorithm: 'btree' as const, columns: ['slug'] }],
+  },
+  {
+    id: t.string().primaryKey(),
+    worldId: t.string(),
+    slug: t.string(),
+    retiredAtMs: t.f64(),
+  }
+);
+
+const canvases = table(
+  {
+    name: 'canvases',
+    public: true,
+    indexes: [
+      {
+        accessor: 'byWorldSlug',
+        name: 'idx_canvas_world_slug',
+        algorithm: 'btree' as const,
+        columns: ['worldId', 'slug'],
+      },
+    ],
+  },
+  {
+    id: t.string().primaryKey(),
+    worldId: t.string(),
+    slug: t.string(),
+    displayName: t.string().optional(),
+  }
+);
+
+const canvas_slug_history = table(
+  {
+    name: 'canvas_slug_history',
+    public: true,
+    indexes: [
+      {
+        accessor: 'byWorldSlug',
+        name: 'idx_csh_world_slug',
+        algorithm: 'btree' as const,
+        columns: ['worldId', 'slug'],
+      },
+    ],
+  },
+  {
+    id: t.string().primaryKey(),
+    canvasId: t.string(),
+    worldId: t.string(),
+    slug: t.string(),
+    retiredAtMs: t.f64(),
+  }
+);
 
 // ─── Domain Tables ────────────────────────────────────────────────────────────
 
@@ -40,11 +112,11 @@ const actors = table(
   {
     name: 'actors',
     public: true,
-    indexes: [{ accessor: 'worldSlug', name: 'idx_actors_world', algorithm: 'btree' as const, columns: ['worldSlug'] }],
+    indexes: [{ accessor: 'worldId', name: 'idx_actors_world', algorithm: 'btree' as const, columns: ['worldId'] }],
   },
   {
     id: t.string().primaryKey(),
-    worldSlug: t.string(),
+    worldId: t.string(),
     name: t.string(),
     kind: t.string(),
     strengthMod: t.i32(),
@@ -66,11 +138,11 @@ const item_definitions = table(
   {
     name: 'item_definitions',
     public: true,
-    indexes: [{ accessor: 'worldSlug', name: 'idx_itemdef_world', algorithm: 'btree' as const, columns: ['worldSlug'] }],
+    indexes: [{ accessor: 'worldId', name: 'idx_itemdef_world', algorithm: 'btree' as const, columns: ['worldId'] }],
   },
   {
     id: t.string().primaryKey(),
-    worldSlug: t.string(),
+    worldId: t.string(),
     canonicalName: t.string(),
     kind: t.string(),
     sixthsPerUnit: t.u32().optional(),
@@ -86,12 +158,12 @@ const inventory_entries = table(
     public: true,
     indexes: [
       { accessor: 'actorId', name: 'idx_entries_actor', algorithm: 'btree' as const, columns: ['actorId'] },
-      { accessor: 'worldSlug', name: 'idx_entries_world', algorithm: 'btree' as const, columns: ['worldSlug'] },
+      { accessor: 'worldId', name: 'idx_entries_world', algorithm: 'btree' as const, columns: ['worldId'] },
     ],
   },
   {
     id: t.string().primaryKey(),
-    worldSlug: t.string(),
+    worldId: t.string(),
     actorId: t.string(),
     itemDefId: t.string(),
     quantity: t.u32(),
@@ -111,12 +183,12 @@ const carry_groups = table(
     public: true,
     indexes: [
       { accessor: 'ownerActorId', name: 'idx_cg_owner', algorithm: 'btree' as const, columns: ['ownerActorId'] },
-      { accessor: 'worldSlug', name: 'idx_cg_world', algorithm: 'btree' as const, columns: ['worldSlug'] },
+      { accessor: 'worldId', name: 'idx_cg_world', algorithm: 'btree' as const, columns: ['worldId'] },
     ],
   },
   {
     id: t.string().primaryKey(),
-    worldSlug: t.string(),
+    worldId: t.string(),
     ownerActorId: t.string(),
     name: t.string(),
     dropped: t.bool(),
@@ -127,11 +199,11 @@ const movement_groups = table(
   {
     name: 'movement_groups',
     public: true,
-    indexes: [{ accessor: 'worldSlug', name: 'idx_mg_world', algorithm: 'btree' as const, columns: ['worldSlug'] }],
+    indexes: [{ accessor: 'worldId', name: 'idx_mg_world', algorithm: 'btree' as const, columns: ['worldId'] }],
   },
   {
     id: t.string().primaryKey(),
-    worldSlug: t.string(),
+    worldId: t.string(),
     name: t.string(),
     active: t.bool(),
   }
@@ -144,13 +216,13 @@ const node_positions = table(
     name: 'node_positions',
     public: true,
     indexes: [
-      { accessor: 'byWorldCanvas', name: 'idx_npos_room', algorithm: 'btree' as const, columns: ['worldSlug', 'canvasSlug'] },
+      { accessor: 'byWorldCanvas', name: 'idx_npos_room', algorithm: 'btree' as const, columns: ['worldId', 'canvasId'] },
     ],
   },
   {
     nodeId: t.string().primaryKey(),
-    worldSlug: t.string(),
-    canvasSlug: t.string(),
+    worldId: t.string(),
+    canvasId: t.string(),
     x: t.f64(),
     y: t.f64(),
   }
@@ -161,13 +233,13 @@ const group_positions = table(
     name: 'group_positions',
     public: true,
     indexes: [
-      { accessor: 'byWorldCanvas', name: 'idx_gpos_room', algorithm: 'btree' as const, columns: ['worldSlug', 'canvasSlug'] },
+      { accessor: 'byWorldCanvas', name: 'idx_gpos_room', algorithm: 'btree' as const, columns: ['worldId', 'canvasId'] },
     ],
   },
   {
     groupId: t.string().primaryKey(),
-    worldSlug: t.string(),
-    canvasSlug: t.string(),
+    worldId: t.string(),
+    canvasId: t.string(),
     x: t.f64(),
     y: t.f64(),
   }
@@ -178,13 +250,13 @@ const group_size_overrides = table(
     name: 'group_size_overrides',
     public: true,
     indexes: [
-      { accessor: 'byWorldCanvas', name: 'idx_gso_room', algorithm: 'btree' as const, columns: ['worldSlug', 'canvasSlug'] },
+      { accessor: 'byWorldCanvas', name: 'idx_gso_room', algorithm: 'btree' as const, columns: ['worldId', 'canvasId'] },
     ],
   },
   {
     groupId: t.string().primaryKey(),
-    worldSlug: t.string(),
-    canvasSlug: t.string(),
+    worldId: t.string(),
+    canvasId: t.string(),
     width: t.f64(),
     height: t.f64(),
   }
@@ -195,13 +267,13 @@ const node_size_overrides = table(
     name: 'node_size_overrides',
     public: true,
     indexes: [
-      { accessor: 'byWorldCanvas', name: 'idx_nso_room', algorithm: 'btree' as const, columns: ['worldSlug', 'canvasSlug'] },
+      { accessor: 'byWorldCanvas', name: 'idx_nso_room', algorithm: 'btree' as const, columns: ['worldId', 'canvasId'] },
     ],
   },
   {
     nodeId: t.string().primaryKey(),
-    worldSlug: t.string(),
-    canvasSlug: t.string(),
+    worldId: t.string(),
+    canvasId: t.string(),
     slotCols: t.u32(),
     slotRows: t.u32(),
   }
@@ -212,13 +284,13 @@ const group_list_view = table(
     name: 'group_list_view',
     public: true,
     indexes: [
-      { accessor: 'byWorldCanvas', name: 'idx_glv_room', algorithm: 'btree' as const, columns: ['worldSlug', 'canvasSlug'] },
+      { accessor: 'byWorldCanvas', name: 'idx_glv_room', algorithm: 'btree' as const, columns: ['worldId', 'canvasId'] },
     ],
   },
   {
     groupId: t.string().primaryKey(),
-    worldSlug: t.string(),
-    canvasSlug: t.string(),
+    worldId: t.string(),
+    canvasId: t.string(),
     enabled: t.bool(),
   }
 );
@@ -228,13 +300,13 @@ const node_group_overrides = table(
     name: 'node_group_overrides',
     public: true,
     indexes: [
-      { accessor: 'byWorldCanvas', name: 'idx_ngo_room', algorithm: 'btree' as const, columns: ['worldSlug', 'canvasSlug'] },
+      { accessor: 'byWorldCanvas', name: 'idx_ngo_room', algorithm: 'btree' as const, columns: ['worldId', 'canvasId'] },
     ],
   },
   {
     nodeId: t.string().primaryKey(),
-    worldSlug: t.string(),
-    canvasSlug: t.string(),
+    worldId: t.string(),
+    canvasId: t.string(),
     groupId: t.string().optional(),
   }
 );
@@ -250,7 +322,7 @@ const group_node_positions = table(
         accessor: 'byWorldCanvas',
         name: 'idx_gnp_room',
         algorithm: 'btree' as const,
-        columns: ['worldSlug', 'canvasSlug'],
+        columns: ['worldId', 'canvasId'],
       },
     ],
   },
@@ -258,8 +330,8 @@ const group_node_positions = table(
     id: t.string().primaryKey(),
     groupId: t.string(),
     nodeId: t.string(),
-    worldSlug: t.string(),
-    canvasSlug: t.string(),
+    worldId: t.string(),
+    canvasId: t.string(),
     x: t.f64(),
     y: t.f64(),
   }
@@ -270,13 +342,13 @@ const free_segment_positions = table(
     name: 'free_segment_positions',
     public: true,
     indexes: [
-      { accessor: 'byWorldCanvas', name: 'idx_fsp_room', algorithm: 'btree' as const, columns: ['worldSlug', 'canvasSlug'] },
+      { accessor: 'byWorldCanvas', name: 'idx_fsp_room', algorithm: 'btree' as const, columns: ['worldId', 'canvasId'] },
     ],
   },
   {
     segmentId: t.string().primaryKey(),
-    worldSlug: t.string(),
-    canvasSlug: t.string(),
+    worldId: t.string(),
+    canvasId: t.string(),
     x: t.f64(),
     y: t.f64(),
   }
@@ -293,7 +365,7 @@ const group_free_segment_positions = table(
         accessor: 'byWorldCanvas',
         name: 'idx_gfsp_room',
         algorithm: 'btree' as const,
-        columns: ['worldSlug', 'canvasSlug'],
+        columns: ['worldId', 'canvasId'],
       },
     ],
   },
@@ -301,8 +373,8 @@ const group_free_segment_positions = table(
     id: t.string().primaryKey(),
     groupId: t.string(),
     segmentId: t.string(),
-    worldSlug: t.string(),
-    canvasSlug: t.string(),
+    worldId: t.string(),
+    canvasId: t.string(),
     x: t.f64(),
     y: t.f64(),
   }
@@ -313,13 +385,13 @@ const group_node_orders = table(
     name: 'group_node_orders',
     public: true,
     indexes: [
-      { accessor: 'byWorldCanvas', name: 'idx_gno_room', algorithm: 'btree' as const, columns: ['worldSlug', 'canvasSlug'] },
+      { accessor: 'byWorldCanvas', name: 'idx_gno_room', algorithm: 'btree' as const, columns: ['worldId', 'canvasId'] },
     ],
   },
   {
     groupId: t.string().primaryKey(),
-    worldSlug: t.string(),
-    canvasSlug: t.string(),
+    worldId: t.string(),
+    canvasId: t.string(),
     nodeIdsJson: t.string(),
   }
 );
@@ -329,13 +401,13 @@ const custom_groups = table(
     name: 'custom_groups',
     public: true,
     indexes: [
-      { accessor: 'byWorldCanvas', name: 'idx_cg_custom_room', algorithm: 'btree' as const, columns: ['worldSlug', 'canvasSlug'] },
+      { accessor: 'byWorldCanvas', name: 'idx_cg_custom_room', algorithm: 'btree' as const, columns: ['worldId', 'canvasId'] },
     ],
   },
   {
     groupId: t.string().primaryKey(),
-    worldSlug: t.string(),
-    canvasSlug: t.string(),
+    worldId: t.string(),
+    canvasId: t.string(),
     title: t.string(),
   }
 );
@@ -345,13 +417,13 @@ const group_title_overrides = table(
     name: 'group_title_overrides',
     public: true,
     indexes: [
-      { accessor: 'byWorldCanvas', name: 'idx_gto_room', algorithm: 'btree' as const, columns: ['worldSlug', 'canvasSlug'] },
+      { accessor: 'byWorldCanvas', name: 'idx_gto_room', algorithm: 'btree' as const, columns: ['worldId', 'canvasId'] },
     ],
   },
   {
     groupId: t.string().primaryKey(),
-    worldSlug: t.string(),
-    canvasSlug: t.string(),
+    worldId: t.string(),
+    canvasId: t.string(),
     title: t.string(),
   }
 );
@@ -361,13 +433,13 @@ const node_title_overrides = table(
     name: 'node_title_overrides',
     public: true,
     indexes: [
-      { accessor: 'byWorldCanvas', name: 'idx_nto_room', algorithm: 'btree' as const, columns: ['worldSlug', 'canvasSlug'] },
+      { accessor: 'byWorldCanvas', name: 'idx_nto_room', algorithm: 'btree' as const, columns: ['worldId', 'canvasId'] },
     ],
   },
   {
     nodeId: t.string().primaryKey(),
-    worldSlug: t.string(),
-    canvasSlug: t.string(),
+    worldId: t.string(),
+    canvasId: t.string(),
     title: t.string(),
   }
 );
@@ -378,14 +450,14 @@ const node_containment = table(
     public: true,
     indexes: [
       { accessor: 'containerNodeId', name: 'idx_nc_container', algorithm: 'btree' as const, columns: ['containerNodeId'] },
-      { accessor: 'byWorldCanvas', name: 'idx_nc_room', algorithm: 'btree' as const, columns: ['worldSlug', 'canvasSlug'] },
+      { accessor: 'byWorldCanvas', name: 'idx_nc_room', algorithm: 'btree' as const, columns: ['worldId', 'canvasId'] },
     ],
   },
   {
     nodeId: t.string().primaryKey(),
     containerNodeId: t.string(),
-    worldSlug: t.string(),
-    canvasSlug: t.string(),
+    worldId: t.string(),
+    canvasId: t.string(),
   }
 );
 
@@ -394,13 +466,13 @@ const labels = table(
     name: 'labels',
     public: true,
     indexes: [
-      { accessor: 'byWorldCanvas', name: 'idx_lbl_room', algorithm: 'btree' as const, columns: ['worldSlug', 'canvasSlug'] },
+      { accessor: 'byWorldCanvas', name: 'idx_lbl_room', algorithm: 'btree' as const, columns: ['worldId', 'canvasId'] },
     ],
   },
   {
     labelId: t.string().primaryKey(),
-    worldSlug: t.string(),
-    canvasSlug: t.string(),
+    worldId: t.string(),
+    canvasId: t.string(),
     text: t.string(),
     x: t.f64(),
     y: t.f64(),
@@ -412,13 +484,13 @@ const settings = table(
     name: 'settings',
     public: true,
     indexes: [
-      { accessor: 'byWorldCanvas', name: 'idx_settings_room', algorithm: 'btree' as const, columns: ['worldSlug', 'canvasSlug'] },
+      { accessor: 'byWorldCanvas', name: 'idx_settings_room', algorithm: 'btree' as const, columns: ['worldId', 'canvasId'] },
     ],
   },
   {
     key: t.string().primaryKey(),
-    worldSlug: t.string(),
-    canvasSlug: t.string(),
+    worldId: t.string(),
+    canvasId: t.string(),
     valueNum: t.u32().optional(),
     valueText: t.string().optional(),
   }
@@ -447,15 +519,15 @@ const user_presences = table(
         accessor: 'byWorldCanvas',
         name: 'idx_presence_room',
         algorithm: 'btree' as const,
-        columns: ['worldSlug', 'canvasSlug'],
+        columns: ['worldId', 'canvasId'],
       },
     ],
   },
   {
     id: t.string().primaryKey(),
     identityHex: t.string(),
-    worldSlug: t.string(),
-    canvasSlug: t.string(),
+    worldId: t.string(),
+    canvasId: t.string(),
     lastSeenMs: t.f64(),
   }
 );
@@ -470,15 +542,15 @@ const user_cursors = table(
         accessor: 'byWorldCanvas',
         name: 'idx_cursor_room',
         algorithm: 'btree' as const,
-        columns: ['worldSlug', 'canvasSlug'],
+        columns: ['worldId', 'canvasId'],
       },
     ],
   },
   {
     id: t.string().primaryKey(),
     identityHex: t.string(),
-    worldSlug: t.string(),
-    canvasSlug: t.string(),
+    worldId: t.string(),
+    canvasId: t.string(),
     x: t.f64(),
     y: t.f64(),
     viewportScale: t.f64().optional(),
@@ -495,15 +567,15 @@ const user_cameras = table(
         accessor: 'byWorldCanvas',
         name: 'idx_camera_room',
         algorithm: 'btree' as const,
-        columns: ['worldSlug', 'canvasSlug'],
+        columns: ['worldId', 'canvasId'],
       },
     ],
   },
   {
     id: t.string().primaryKey(),
     identityHex: t.string(),
-    worldSlug: t.string(),
-    canvasSlug: t.string(),
+    worldId: t.string(),
+    canvasId: t.string(),
     panX: t.f64(),
     panY: t.f64(),
     zoom: t.f64(),
@@ -513,6 +585,10 @@ const user_cameras = table(
 // ─── Schema ───────────────────────────────────────────────────────────────────
 
 const spacetimedb = schema({
+  worlds,
+  world_slug_history,
+  canvases,
+  canvas_slug_history,
   actors,
   item_definitions,
   inventory_entries,
@@ -615,59 +691,145 @@ export const set_user_role = spacetimedb.reducer(
 );
 
 export const set_presence = spacetimedb.reducer(
-  { worldSlug: t.string(), canvasSlug: t.string() },
-  (ctx, { worldSlug, canvasSlug }) => {
+  { worldId: t.string(), canvasId: t.string() },
+  (ctx, { worldId, canvasId }) => {
     const hex = ctx.sender.toHexString();
-    const id = compoundKey(compoundKey(worldSlug, canvasSlug), hex);
+    const id = compoundKey(compoundKey(worldId, canvasId), hex);
     const nowMs = Number(ctx.timestamp.toMillis());
     const existing = ctx.db.user_presences.id.find(id);
     if (existing) {
       ctx.db.user_presences.id.update({ ...existing, lastSeenMs: nowMs });
     } else {
-      ctx.db.user_presences.insert({ id, identityHex: hex, worldSlug, canvasSlug, lastSeenMs: nowMs });
+      ctx.db.user_presences.insert({ id, identityHex: hex, worldId, canvasId, lastSeenMs: nowMs });
     }
   }
 );
 
 export const update_cursor = spacetimedb.reducer(
-  { worldSlug: t.string(), canvasSlug: t.string(), x: t.f64(), y: t.f64(), viewportScale: t.f64().optional() },
-  (ctx, { worldSlug, canvasSlug, x, y, viewportScale }) => {
+  { worldId: t.string(), canvasId: t.string(), x: t.f64(), y: t.f64(), viewportScale: t.f64().optional() },
+  (ctx, { worldId, canvasId, x, y, viewportScale }) => {
     const hex = ctx.sender.toHexString();
-    const id = compoundKey(compoundKey(worldSlug, canvasSlug), hex);
+    const id = compoundKey(compoundKey(worldId, canvasId), hex);
     const existing = ctx.db.user_cursors.id.find(id);
     if (existing) {
-      ctx.db.user_cursors.id.update({ id, identityHex: hex, worldSlug, canvasSlug, x, y, viewportScale });
+      ctx.db.user_cursors.id.update({ id, identityHex: hex, worldId, canvasId, x, y, viewportScale });
     } else {
-      ctx.db.user_cursors.insert({ id, identityHex: hex, worldSlug, canvasSlug, x, y, viewportScale });
+      ctx.db.user_cursors.insert({ id, identityHex: hex, worldId, canvasId, x, y, viewportScale });
     }
     const presenceExisting = ctx.db.user_presences.id.find(id);
     const nowMs = Number(ctx.timestamp.toMillis());
     if (presenceExisting) {
       ctx.db.user_presences.id.update({ ...presenceExisting, lastSeenMs: nowMs });
     } else {
-      ctx.db.user_presences.insert({ id, identityHex: hex, worldSlug, canvasSlug, lastSeenMs: nowMs });
+      ctx.db.user_presences.insert({ id, identityHex: hex, worldId, canvasId, lastSeenMs: nowMs });
     }
   }
 );
 
 export const update_camera = spacetimedb.reducer(
-  { worldSlug: t.string(), canvasSlug: t.string(), panX: t.f64(), panY: t.f64(), zoom: t.f64() },
-  (ctx, { worldSlug, canvasSlug, panX, panY, zoom }) => {
+  { worldId: t.string(), canvasId: t.string(), panX: t.f64(), panY: t.f64(), zoom: t.f64() },
+  (ctx, { worldId, canvasId, panX, panY, zoom }) => {
     const hex = ctx.sender.toHexString();
-    const id = compoundKey(compoundKey(worldSlug, canvasSlug), hex);
+    const id = compoundKey(compoundKey(worldId, canvasId), hex);
     const existing = ctx.db.user_cameras.id.find(id);
     if (existing) {
-      ctx.db.user_cameras.id.update({ id, identityHex: hex, worldSlug, canvasSlug, panX, panY, zoom });
+      ctx.db.user_cameras.id.update({ id, identityHex: hex, worldId, canvasId, panX, panY, zoom });
     } else {
-      ctx.db.user_cameras.insert({ id, identityHex: hex, worldSlug, canvasSlug, panX, panY, zoom });
+      ctx.db.user_cameras.insert({ id, identityHex: hex, worldId, canvasId, panX, panY, zoom });
     }
     const presenceExisting = ctx.db.user_presences.id.find(id);
     const nowMs = Number(ctx.timestamp.toMillis());
     if (presenceExisting) {
       ctx.db.user_presences.id.update({ ...presenceExisting, lastSeenMs: nowMs });
     } else {
-      ctx.db.user_presences.insert({ id, identityHex: hex, worldSlug, canvasSlug, lastSeenMs: nowMs });
+      ctx.db.user_presences.insert({ id, identityHex: hex, worldId, canvasId, lastSeenMs: nowMs });
     }
+  }
+);
+
+export const ensure_world = spacetimedb.reducer(
+  { id: t.string(), slug: t.string(), displayName: t.string(), description: t.string().optional() },
+  (ctx, row) => {
+    const existingId = ctx.db.worlds.id.find(row.id);
+    if (existingId) return;
+    for (const w of ctx.db.worlds.iter()) {
+      // Slug owned by another row: another client created this world first — do not insert; client adopts id from subscription.
+      if (w.slug === row.slug) return;
+    }
+    ctx.db.worlds.insert({ id: row.id, slug: row.slug, displayName: row.displayName, description: row.description });
+  }
+);
+
+export const ensure_canvas = spacetimedb.reducer(
+  { id: t.string(), worldId: t.string(), slug: t.string(), displayName: t.string().optional() },
+  (ctx, row) => {
+    if (!ctx.db.worlds.id.find(row.worldId)) throw new Error('ensure_canvas: world not found');
+    if (ctx.db.canvases.id.find(row.id)) return;
+    for (const c of ctx.db.canvases.iter()) {
+      if (c.worldId === row.worldId && c.slug === row.slug) {
+        return;
+      }
+    }
+    ctx.db.canvases.insert({ id: row.id, worldId: row.worldId, slug: row.slug, displayName: row.displayName });
+  }
+);
+
+export const rename_world = spacetimedb.reducer(
+  {
+    worldId: t.string(),
+    newSlug: t.string(),
+    displayName: t.string().optional(),
+    description: t.string().optional(),
+  },
+  (ctx, { worldId, newSlug, displayName, description }) => {
+    const w = ctx.db.worlds.id.find(worldId);
+    if (!w) throw new Error('rename_world: world not found');
+    for (const o of ctx.db.worlds.iter()) {
+      if (o.id !== worldId && o.slug === newSlug) throw new Error('rename_world: slug taken');
+    }
+    const nowMs = Number(ctx.timestamp.toMillis());
+    if (newSlug !== w.slug) {
+      ctx.db.world_slug_history.insert({
+        id: compoundKey(compoundKey(worldId, w.slug), String(nowMs)),
+        worldId,
+        slug: w.slug,
+        retiredAtMs: nowMs,
+      });
+    }
+    ctx.db.worlds.id.update({
+      ...w,
+      slug: newSlug,
+      displayName: displayName ?? w.displayName,
+      description: description !== undefined ? description : w.description,
+    });
+  }
+);
+
+export const rename_canvas = spacetimedb.reducer(
+  { canvasId: t.string(), newSlug: t.string(), displayName: t.string().optional() },
+  (ctx, { canvasId, newSlug, displayName }) => {
+    const c = ctx.db.canvases.id.find(canvasId);
+    if (!c) throw new Error('rename_canvas: canvas not found');
+    for (const o of ctx.db.canvases.iter()) {
+      if (o.id !== canvasId && o.worldId === c.worldId && o.slug === newSlug) {
+        throw new Error('rename_canvas: slug taken in this world');
+      }
+    }
+    const nowMs = Number(ctx.timestamp.toMillis());
+    if (newSlug !== c.slug) {
+      ctx.db.canvas_slug_history.insert({
+        id: compoundKey(compoundKey(canvasId, c.slug), String(nowMs)),
+        canvasId,
+        worldId: c.worldId,
+        slug: c.slug,
+        retiredAtMs: nowMs,
+      });
+    }
+    ctx.db.canvases.id.update({
+      ...c,
+      slug: newSlug,
+      displayName: displayName !== undefined ? displayName : c.displayName,
+    });
   }
 );
 
@@ -692,8 +854,8 @@ export const upsert_actor = spacetimedb.reducer(
     rightWieldingEntryId: t.string().optional(),
   },
   (ctx, args) => {
-    const worldSlug = requireWorldSlug(args.id, 'actors');
-    const row = { ...args, worldSlug };
+    const worldId = requireWorldId(args.id, 'actors');
+    const row = { ...args, worldId };
     const existing = ctx.db.actors.id.find(args.id);
     if (existing) {
       ctx.db.actors.id.update(row);
@@ -750,8 +912,8 @@ export const upsert_item_definition = spacetimedb.reducer(
     isFungibleVisual: t.bool().optional(),
   },
   (ctx, args) => {
-    const worldSlug = requireWorldSlug(args.id, 'item_definitions');
-    const row = { ...args, worldSlug };
+    const worldId = requireWorldId(args.id, 'item_definitions');
+    const row = { ...args, worldId };
     const existing = ctx.db.item_definitions.id.find(args.id);
     if (existing) {
       ctx.db.item_definitions.id.update(row);
@@ -785,8 +947,8 @@ export const upsert_inventory_entry = spacetimedb.reducer(
     carryGroupId: t.string().optional(),
   },
   (ctx, args) => {
-    const worldSlug = requireWorldSlug(args.id, 'inventory_entries');
-    const row = { ...args, worldSlug };
+    const worldId = requireWorldId(args.id, 'inventory_entries');
+    const row = { ...args, worldId };
     const existing = ctx.db.inventory_entries.id.find(args.id);
     if (existing) {
       ctx.db.inventory_entries.id.update(row);
@@ -829,8 +991,8 @@ export const upsert_carry_group = spacetimedb.reducer(
     dropped: t.bool(),
   },
   (ctx, args) => {
-    const worldSlug = requireWorldSlug(args.id, 'carry_groups');
-    const row = { ...args, worldSlug };
+    const worldId = requireWorldId(args.id, 'carry_groups');
+    const row = { ...args, worldId };
     const existing = ctx.db.carry_groups.id.find(args.id);
     if (existing) {
       ctx.db.carry_groups.id.update(row);
@@ -856,8 +1018,8 @@ export const upsert_movement_group = spacetimedb.reducer(
     active: t.bool(),
   },
   (ctx, args) => {
-    const worldSlug = requireWorldSlug(args.id, 'movement_groups');
-    const row = { ...args, worldSlug };
+    const worldId = requireWorldId(args.id, 'movement_groups');
+    const row = { ...args, worldId };
     const existing = ctx.db.movement_groups.id.find(args.id);
     if (existing) {
       ctx.db.movement_groups.id.update(row);
@@ -879,8 +1041,8 @@ export const delete_movement_group = spacetimedb.reducer(
 export const upsert_node_position = spacetimedb.reducer(
   { nodeId: t.string(), x: t.f64(), y: t.f64() },
   (ctx, args) => {
-    const { worldSlug, canvasSlug } = requireCanvasScope(args.nodeId, 'node_positions');
-    const row = { ...args, worldSlug, canvasSlug };
+    const { worldId, canvasId } = requireCanvasScope(args.nodeId, 'node_positions');
+    const row = { ...args, worldId, canvasId };
     const existing = ctx.db.node_positions.nodeId.find(args.nodeId);
     if (existing) {
       ctx.db.node_positions.nodeId.update(row);
@@ -902,8 +1064,8 @@ export const delete_node_position = spacetimedb.reducer(
 export const upsert_group_position = spacetimedb.reducer(
   { groupId: t.string(), x: t.f64(), y: t.f64() },
   (ctx, args) => {
-    const { worldSlug, canvasSlug } = requireCanvasScope(args.groupId, 'group_positions');
-    const row = { ...args, worldSlug, canvasSlug };
+    const { worldId, canvasId } = requireCanvasScope(args.groupId, 'group_positions');
+    const row = { ...args, worldId, canvasId };
     const existing = ctx.db.group_positions.groupId.find(args.groupId);
     if (existing) {
       ctx.db.group_positions.groupId.update(row);
@@ -925,8 +1087,8 @@ export const delete_group_position = spacetimedb.reducer(
 export const upsert_group_size_override = spacetimedb.reducer(
   { groupId: t.string(), width: t.f64(), height: t.f64() },
   (ctx, args) => {
-    const { worldSlug, canvasSlug } = requireCanvasScope(args.groupId, 'group_size_overrides');
-    const row = { ...args, worldSlug, canvasSlug };
+    const { worldId, canvasId } = requireCanvasScope(args.groupId, 'group_size_overrides');
+    const row = { ...args, worldId, canvasId };
     const existing = ctx.db.group_size_overrides.groupId.find(args.groupId);
     if (existing) {
       ctx.db.group_size_overrides.groupId.update(row);
@@ -948,8 +1110,8 @@ export const delete_group_size_override = spacetimedb.reducer(
 export const upsert_node_size_override = spacetimedb.reducer(
   { nodeId: t.string(), slotCols: t.u32(), slotRows: t.u32() },
   (ctx, args) => {
-    const { worldSlug, canvasSlug } = requireCanvasScope(args.nodeId, 'node_size_overrides');
-    const row = { ...args, worldSlug, canvasSlug };
+    const { worldId, canvasId } = requireCanvasScope(args.nodeId, 'node_size_overrides');
+    const row = { ...args, worldId, canvasId };
     const existing = ctx.db.node_size_overrides.nodeId.find(args.nodeId);
     if (existing) {
       ctx.db.node_size_overrides.nodeId.update(row);
@@ -971,8 +1133,8 @@ export const delete_node_size_override = spacetimedb.reducer(
 export const upsert_group_list_view = spacetimedb.reducer(
   { groupId: t.string(), enabled: t.bool() },
   (ctx, args) => {
-    const { worldSlug, canvasSlug } = requireCanvasScope(args.groupId, 'group_list_view');
-    const row = { ...args, worldSlug, canvasSlug };
+    const { worldId, canvasId } = requireCanvasScope(args.groupId, 'group_list_view');
+    const row = { ...args, worldId, canvasId };
     const existing = ctx.db.group_list_view.groupId.find(args.groupId);
     if (existing) {
       ctx.db.group_list_view.groupId.update(row);
@@ -994,8 +1156,8 @@ export const delete_group_list_view = spacetimedb.reducer(
 export const upsert_node_group_override = spacetimedb.reducer(
   { nodeId: t.string(), groupId: t.string().optional() },
   (ctx, args) => {
-    const { worldSlug, canvasSlug } = requireCanvasScope(args.nodeId, 'node_group_overrides');
-    const row = { ...args, worldSlug, canvasSlug };
+    const { worldId, canvasId } = requireCanvasScope(args.nodeId, 'node_group_overrides');
+    const row = { ...args, worldId, canvasId };
     const existing = ctx.db.node_group_overrides.nodeId.find(args.nodeId);
     if (existing) {
       ctx.db.node_group_overrides.nodeId.update(row);
@@ -1017,9 +1179,9 @@ export const delete_node_group_override = spacetimedb.reducer(
 export const upsert_group_node_position = spacetimedb.reducer(
   { groupId: t.string(), nodeId: t.string(), x: t.f64(), y: t.f64() },
   (ctx, { groupId, nodeId, x, y }) => {
-    const { worldSlug, canvasSlug } = requireCanvasScope(groupId, 'group_node_positions');
+    const { worldId, canvasId } = requireCanvasScope(groupId, 'group_node_positions');
     const id = compoundKey(groupId, nodeId);
-    const row = { id, groupId, nodeId, x, y, worldSlug, canvasSlug };
+    const row = { id, groupId, nodeId, x, y, worldId, canvasId };
     const existing = ctx.db.group_node_positions.id.find(id);
     if (existing) {
       ctx.db.group_node_positions.id.update(row);
@@ -1050,8 +1212,8 @@ export const delete_group_node_positions_by_group = spacetimedb.reducer(
 export const upsert_free_segment_position = spacetimedb.reducer(
   { segmentId: t.string(), x: t.f64(), y: t.f64() },
   (ctx, args) => {
-    const { worldSlug, canvasSlug } = requireCanvasScope(args.segmentId, 'free_segment_positions');
-    const row = { ...args, worldSlug, canvasSlug };
+    const { worldId, canvasId } = requireCanvasScope(args.segmentId, 'free_segment_positions');
+    const row = { ...args, worldId, canvasId };
     const existing = ctx.db.free_segment_positions.segmentId.find(args.segmentId);
     if (existing) {
       ctx.db.free_segment_positions.segmentId.update(row);
@@ -1073,9 +1235,9 @@ export const delete_free_segment_position = spacetimedb.reducer(
 export const upsert_group_free_segment_position = spacetimedb.reducer(
   { groupId: t.string(), segmentId: t.string(), x: t.f64(), y: t.f64() },
   (ctx, { groupId, segmentId, x, y }) => {
-    const { worldSlug, canvasSlug } = requireCanvasScope(groupId, 'group_free_segment_positions');
+    const { worldId, canvasId } = requireCanvasScope(groupId, 'group_free_segment_positions');
     const id = compoundKey(groupId, segmentId);
-    const row = { id, groupId, segmentId, x, y, worldSlug, canvasSlug };
+    const row = { id, groupId, segmentId, x, y, worldId, canvasId };
     const existing = ctx.db.group_free_segment_positions.id.find(id);
     if (existing) {
       ctx.db.group_free_segment_positions.id.update(row);
@@ -1106,8 +1268,8 @@ export const delete_group_free_segment_positions_by_group = spacetimedb.reducer(
 export const upsert_group_node_order = spacetimedb.reducer(
   { groupId: t.string(), nodeIdsJson: t.string() },
   (ctx, args) => {
-    const { worldSlug, canvasSlug } = requireCanvasScope(args.groupId, 'group_node_orders');
-    const row = { ...args, worldSlug, canvasSlug };
+    const { worldId, canvasId } = requireCanvasScope(args.groupId, 'group_node_orders');
+    const row = { ...args, worldId, canvasId };
     const existing = ctx.db.group_node_orders.groupId.find(args.groupId);
     if (existing) {
       ctx.db.group_node_orders.groupId.update(row);
@@ -1129,8 +1291,8 @@ export const delete_group_node_order = spacetimedb.reducer(
 export const upsert_custom_group = spacetimedb.reducer(
   { groupId: t.string(), title: t.string() },
   (ctx, args) => {
-    const { worldSlug, canvasSlug } = requireCanvasScope(args.groupId, 'custom_groups');
-    const row = { ...args, worldSlug, canvasSlug };
+    const { worldId, canvasId } = requireCanvasScope(args.groupId, 'custom_groups');
+    const row = { ...args, worldId, canvasId };
     const existing = ctx.db.custom_groups.groupId.find(args.groupId);
     if (existing) {
       ctx.db.custom_groups.groupId.update(row);
@@ -1163,8 +1325,8 @@ export const delete_custom_group = spacetimedb.reducer(
 export const upsert_group_title_override = spacetimedb.reducer(
   { groupId: t.string(), title: t.string() },
   (ctx, args) => {
-    const { worldSlug, canvasSlug } = requireCanvasScope(args.groupId, 'group_title_overrides');
-    const row = { ...args, worldSlug, canvasSlug };
+    const { worldId, canvasId } = requireCanvasScope(args.groupId, 'group_title_overrides');
+    const row = { ...args, worldId, canvasId };
     const existing = ctx.db.group_title_overrides.groupId.find(args.groupId);
     if (existing) {
       ctx.db.group_title_overrides.groupId.update(row);
@@ -1186,8 +1348,8 @@ export const delete_group_title_override = spacetimedb.reducer(
 export const upsert_node_title_override = spacetimedb.reducer(
   { nodeId: t.string(), title: t.string() },
   (ctx, args) => {
-    const { worldSlug, canvasSlug } = requireCanvasScope(args.nodeId, 'node_title_overrides');
-    const row = { ...args, worldSlug, canvasSlug };
+    const { worldId, canvasId } = requireCanvasScope(args.nodeId, 'node_title_overrides');
+    const row = { ...args, worldId, canvasId };
     const existing = ctx.db.node_title_overrides.nodeId.find(args.nodeId);
     if (existing) {
       ctx.db.node_title_overrides.nodeId.update(row);
@@ -1209,8 +1371,8 @@ export const delete_node_title_override = spacetimedb.reducer(
 export const upsert_node_containment = spacetimedb.reducer(
   { nodeId: t.string(), containerNodeId: t.string() },
   (ctx, args) => {
-    const { worldSlug, canvasSlug } = requireCanvasScope(args.nodeId, 'node_containment');
-    const row = { ...args, worldSlug, canvasSlug };
+    const { worldId, canvasId } = requireCanvasScope(args.nodeId, 'node_containment');
+    const row = { ...args, worldId, canvasId };
     const existing = ctx.db.node_containment.nodeId.find(args.nodeId);
     if (existing) {
       ctx.db.node_containment.nodeId.update(row);
@@ -1232,8 +1394,8 @@ export const delete_node_containment = spacetimedb.reducer(
 export const upsert_label = spacetimedb.reducer(
   { labelId: t.string(), text: t.string(), x: t.f64(), y: t.f64() },
   (ctx, args) => {
-    const { worldSlug, canvasSlug } = requireCanvasScope(args.labelId, 'labels');
-    const row = { ...args, worldSlug, canvasSlug };
+    const { worldId, canvasId } = requireCanvasScope(args.labelId, 'labels');
+    const row = { ...args, worldId, canvasId };
     const existing = ctx.db.labels.labelId.find(args.labelId);
     if (existing) {
       ctx.db.labels.labelId.update(row);
@@ -1255,8 +1417,8 @@ export const delete_label = spacetimedb.reducer(
 export const upsert_setting = spacetimedb.reducer(
   { key: t.string(), valueNum: t.u32().optional(), valueText: t.string().optional() },
   (ctx, args) => {
-    const { worldSlug, canvasSlug } = requireCanvasScope(args.key, 'settings');
-    const row = { ...args, worldSlug, canvasSlug };
+    const { worldId, canvasId } = requireCanvasScope(args.key, 'settings');
+    const row = { ...args, worldId, canvasId };
     const existing = ctx.db.settings.key.find(args.key);
     if (existing) {
       ctx.db.settings.key.update(row);
@@ -1278,6 +1440,13 @@ export const delete_setting = spacetimedb.reducer(
 export const clear_all_tables = spacetimedb.reducer(
   {},
   (ctx) => {
+    for (const r of ctx.db.user_presences.iter()) ctx.db.user_presences.id.delete(r.id);
+    for (const r of ctx.db.user_cursors.iter()) ctx.db.user_cursors.id.delete(r.id);
+    for (const r of ctx.db.user_cameras.iter()) ctx.db.user_cameras.id.delete(r.id);
+    for (const r of ctx.db.canvas_slug_history.iter()) ctx.db.canvas_slug_history.id.delete(r.id);
+    for (const r of ctx.db.canvases.iter()) ctx.db.canvases.id.delete(r.id);
+    for (const r of ctx.db.world_slug_history.iter()) ctx.db.world_slug_history.id.delete(r.id);
+    for (const r of ctx.db.worlds.iter()) ctx.db.worlds.id.delete(r.id);
     for (const r of ctx.db.actors.iter()) ctx.db.actors.id.delete(r.id);
     for (const r of ctx.db.item_definitions.iter()) ctx.db.item_definitions.id.delete(r.id);
     for (const r of ctx.db.inventory_entries.iter()) ctx.db.inventory_entries.id.delete(r.id);
@@ -1323,12 +1492,12 @@ export const set_world_state = spacetimedb.reducer(
     if (data.actors) {
       for (const a of data.actors) {
         const aid = a.id as string;
-        const worldSlug = requireWorldSlug(aid, 'set_world_state actors');
+        const worldId = requireWorldId(aid, 'set_world_state actors');
         const speed = a.baseSpeedProfile as { explorationFeet?: number; combatFeet?: number; runningFeet?: number; milesPerDay?: number } | undefined;
         const stats = a.stats as { strengthMod?: number; hasLoadBearing?: boolean } | undefined;
         ctx.db.actors.insert({
           id: aid,
-          worldSlug,
+          worldId,
           name: a.name as string,
           kind: a.kind as string,
           strengthMod: (stats?.strengthMod ?? 0) as number,
@@ -1350,10 +1519,10 @@ export const set_world_state = spacetimedb.reducer(
     if (data.itemDefinitions) {
       for (const d of data.itemDefinitions) {
         const did = d.id as string;
-        const worldSlug = requireWorldSlug(did, 'set_world_state item_definitions');
+        const worldId = requireWorldId(did, 'set_world_state item_definitions');
         ctx.db.item_definitions.insert({
           id: did,
-          worldSlug,
+          worldId,
           canonicalName: d.canonicalName as string,
           kind: d.kind as string,
           sixthsPerUnit: d.sixthsPerUnit as number | undefined,
@@ -1367,11 +1536,11 @@ export const set_world_state = spacetimedb.reducer(
     if (data.inventoryEntries) {
       for (const e of data.inventoryEntries) {
         const eid = e.id as string;
-        const worldSlug = requireWorldSlug(eid, 'set_world_state inventory_entries');
+        const worldId = requireWorldId(eid, 'set_world_state inventory_entries');
         const st = e.state as { worn?: boolean; attached?: boolean; heldHands?: number; dropped?: boolean; inaccessible?: boolean } | undefined;
         ctx.db.inventory_entries.insert({
           id: eid,
-          worldSlug,
+          worldId,
           actorId: e.actorId as string,
           itemDefId: e.itemDefId as string,
           quantity: (e.quantity ?? 1) as number,
@@ -1389,10 +1558,10 @@ export const set_world_state = spacetimedb.reducer(
     if (data.carryGroups) {
       for (const cg of data.carryGroups) {
         const cid = cg.id as string;
-        const worldSlug = requireWorldSlug(cid, 'set_world_state carry_groups');
+        const worldId = requireWorldId(cid, 'set_world_state carry_groups');
         ctx.db.carry_groups.insert({
           id: cid,
-          worldSlug,
+          worldId,
           ownerActorId: cg.ownerActorId as string,
           name: cg.name as string,
           dropped: (cg.dropped ?? false) as boolean,
@@ -1403,10 +1572,10 @@ export const set_world_state = spacetimedb.reducer(
     if (data.movementGroups) {
       for (const mg of data.movementGroups) {
         const mid = mg.id as string;
-        const worldSlug = requireWorldSlug(mid, 'set_world_state movement_groups');
+        const worldId = requireWorldId(mid, 'set_world_state movement_groups');
         ctx.db.movement_groups.insert({
           id: mid,
-          worldSlug,
+          worldId,
           name: mg.name as string,
           active: (mg.active ?? true) as boolean,
         });
@@ -1441,55 +1610,55 @@ export const set_layout_state = spacetimedb.reducer(
     const positions = data.nodePositions as Record<string, { x: number; y: number }> | undefined;
     if (positions) {
       for (const [nodeId, pos] of Object.entries(positions)) {
-        const { worldSlug, canvasSlug } = requireCanvasScope(nodeId, 'set_layout_state node_positions');
-        ctx.db.node_positions.insert({ nodeId, x: pos.x, y: pos.y, worldSlug, canvasSlug });
+        const { worldId, canvasId } = requireCanvasScope(nodeId, 'set_layout_state node_positions');
+        ctx.db.node_positions.insert({ nodeId, x: pos.x, y: pos.y, worldId, canvasId });
       }
     }
 
     const gPos = data.groupPositions as Record<string, { x: number; y: number }> | undefined;
     if (gPos) {
       for (const [groupId, pos] of Object.entries(gPos)) {
-        const { worldSlug, canvasSlug } = requireCanvasScope(groupId, 'set_layout_state group_positions');
-        ctx.db.group_positions.insert({ groupId, x: pos.x, y: pos.y, worldSlug, canvasSlug });
+        const { worldId, canvasId } = requireCanvasScope(groupId, 'set_layout_state group_positions');
+        ctx.db.group_positions.insert({ groupId, x: pos.x, y: pos.y, worldId, canvasId });
       }
     }
 
     const gSize = data.groupSizeOverrides as Record<string, { width: number; height: number }> | undefined;
     if (gSize) {
       for (const [groupId, size] of Object.entries(gSize)) {
-        const { worldSlug, canvasSlug } = requireCanvasScope(groupId, 'set_layout_state group_size_overrides');
-        ctx.db.group_size_overrides.insert({ groupId, width: size.width, height: size.height, worldSlug, canvasSlug });
+        const { worldId, canvasId } = requireCanvasScope(groupId, 'set_layout_state group_size_overrides');
+        ctx.db.group_size_overrides.insert({ groupId, width: size.width, height: size.height, worldId, canvasId });
       }
     }
 
     const nSize = data.nodeSizeOverrides as Record<string, { slotCols: number; slotRows: number }> | undefined;
     if (nSize) {
       for (const [nodeId, size] of Object.entries(nSize)) {
-        const { worldSlug, canvasSlug } = requireCanvasScope(nodeId, 'set_layout_state node_size_overrides');
-        ctx.db.node_size_overrides.insert({ nodeId, slotCols: size.slotCols, slotRows: size.slotRows, worldSlug, canvasSlug });
+        const { worldId, canvasId } = requireCanvasScope(nodeId, 'set_layout_state node_size_overrides');
+        ctx.db.node_size_overrides.insert({ nodeId, slotCols: size.slotCols, slotRows: size.slotRows, worldId, canvasId });
       }
     }
 
     const glv = data.groupListViewEnabled as Record<string, boolean> | undefined;
     if (glv) {
       for (const [groupId, enabled] of Object.entries(glv)) {
-        const { worldSlug, canvasSlug } = requireCanvasScope(groupId, 'set_layout_state group_list_view');
-        ctx.db.group_list_view.insert({ groupId, enabled, worldSlug, canvasSlug });
+        const { worldId, canvasId } = requireCanvasScope(groupId, 'set_layout_state group_list_view');
+        ctx.db.group_list_view.insert({ groupId, enabled, worldId, canvasId });
       }
     }
 
     const ngo = data.nodeGroupOverrides as Record<string, string | null> | undefined;
     if (ngo) {
       for (const [nodeId, groupId] of Object.entries(ngo)) {
-        const { worldSlug, canvasSlug } = requireCanvasScope(nodeId, 'set_layout_state node_group_overrides');
-        ctx.db.node_group_overrides.insert({ nodeId, groupId: groupId ?? undefined, worldSlug, canvasSlug });
+        const { worldId, canvasId } = requireCanvasScope(nodeId, 'set_layout_state node_group_overrides');
+        ctx.db.node_group_overrides.insert({ nodeId, groupId: groupId ?? undefined, worldId, canvasId });
       }
     }
 
     const gnp = data.groupNodePositions as Record<string, Record<string, { x: number; y: number }>> | undefined;
     if (gnp) {
       for (const [groupId, nodes] of Object.entries(gnp)) {
-        const { worldSlug, canvasSlug } = requireCanvasScope(groupId, 'set_layout_state group_node_positions');
+        const { worldId, canvasId } = requireCanvasScope(groupId, 'set_layout_state group_node_positions');
         for (const [nodeId, pos] of Object.entries(nodes)) {
           ctx.db.group_node_positions.insert({
             id: compoundKey(groupId, nodeId),
@@ -1497,8 +1666,8 @@ export const set_layout_state = spacetimedb.reducer(
             nodeId,
             x: pos.x,
             y: pos.y,
-            worldSlug,
-            canvasSlug,
+            worldId,
+            canvasId,
           });
         }
       }
@@ -1507,15 +1676,15 @@ export const set_layout_state = spacetimedb.reducer(
     const fsp = data.freeSegmentPositions as Record<string, { x: number; y: number }> | undefined;
     if (fsp) {
       for (const [segmentId, pos] of Object.entries(fsp)) {
-        const { worldSlug, canvasSlug } = requireCanvasScope(segmentId, 'set_layout_state free_segment_positions');
-        ctx.db.free_segment_positions.insert({ segmentId, x: pos.x, y: pos.y, worldSlug, canvasSlug });
+        const { worldId, canvasId } = requireCanvasScope(segmentId, 'set_layout_state free_segment_positions');
+        ctx.db.free_segment_positions.insert({ segmentId, x: pos.x, y: pos.y, worldId, canvasId });
       }
     }
 
     const gfsp = data.groupFreeSegmentPositions as Record<string, Record<string, { x: number; y: number }>> | undefined;
     if (gfsp) {
       for (const [groupId, segs] of Object.entries(gfsp)) {
-        const { worldSlug, canvasSlug } = requireCanvasScope(groupId, 'set_layout_state group_free_segment_positions');
+        const { worldId, canvasId } = requireCanvasScope(groupId, 'set_layout_state group_free_segment_positions');
         for (const [segmentId, pos] of Object.entries(segs)) {
           ctx.db.group_free_segment_positions.insert({
             id: compoundKey(groupId, segmentId),
@@ -1523,8 +1692,8 @@ export const set_layout_state = spacetimedb.reducer(
             segmentId,
             x: pos.x,
             y: pos.y,
-            worldSlug,
-            canvasSlug,
+            worldId,
+            canvasId,
           });
         }
       }
@@ -1533,48 +1702,48 @@ export const set_layout_state = spacetimedb.reducer(
     const gno = data.groupNodeOrders as Record<string, readonly string[]> | undefined;
     if (gno) {
       for (const [groupId, nodeIds] of Object.entries(gno)) {
-        const { worldSlug, canvasSlug } = requireCanvasScope(groupId, 'set_layout_state group_node_orders');
-        ctx.db.group_node_orders.insert({ groupId, nodeIdsJson: JSON.stringify(nodeIds), worldSlug, canvasSlug });
+        const { worldId, canvasId } = requireCanvasScope(groupId, 'set_layout_state group_node_orders');
+        ctx.db.group_node_orders.insert({ groupId, nodeIdsJson: JSON.stringify(nodeIds), worldId, canvasId });
       }
     }
 
     const cg = data.customGroups as Record<string, { title: string }> | undefined;
     if (cg) {
       for (const [groupId, group] of Object.entries(cg)) {
-        const { worldSlug, canvasSlug } = requireCanvasScope(groupId, 'set_layout_state custom_groups');
-        ctx.db.custom_groups.insert({ groupId, title: group.title, worldSlug, canvasSlug });
+        const { worldId, canvasId } = requireCanvasScope(groupId, 'set_layout_state custom_groups');
+        ctx.db.custom_groups.insert({ groupId, title: group.title, worldId, canvasId });
       }
     }
 
     const gto = data.groupTitleOverrides as Record<string, string> | undefined;
     if (gto) {
       for (const [groupId, title] of Object.entries(gto)) {
-        const { worldSlug, canvasSlug } = requireCanvasScope(groupId, 'set_layout_state group_title_overrides');
-        ctx.db.group_title_overrides.insert({ groupId, title, worldSlug, canvasSlug });
+        const { worldId, canvasId } = requireCanvasScope(groupId, 'set_layout_state group_title_overrides');
+        ctx.db.group_title_overrides.insert({ groupId, title, worldId, canvasId });
       }
     }
 
     const nto = data.nodeTitleOverrides as Record<string, string> | undefined;
     if (nto) {
       for (const [nodeId, title] of Object.entries(nto)) {
-        const { worldSlug, canvasSlug } = requireCanvasScope(nodeId, 'set_layout_state node_title_overrides');
-        ctx.db.node_title_overrides.insert({ nodeId, title, worldSlug, canvasSlug });
+        const { worldId, canvasId } = requireCanvasScope(nodeId, 'set_layout_state node_title_overrides');
+        ctx.db.node_title_overrides.insert({ nodeId, title, worldId, canvasId });
       }
     }
 
     const nc = data.nodeContainment as Record<string, string> | undefined;
     if (nc) {
       for (const [nodeId, containerNodeId] of Object.entries(nc)) {
-        const { worldSlug, canvasSlug } = requireCanvasScope(nodeId, 'set_layout_state node_containment');
-        ctx.db.node_containment.insert({ nodeId, containerNodeId, worldSlug, canvasSlug });
+        const { worldId, canvasId } = requireCanvasScope(nodeId, 'set_layout_state node_containment');
+        ctx.db.node_containment.insert({ nodeId, containerNodeId, worldId, canvasId });
       }
     }
 
     const lbl = data.labels as Record<string, { text: string; x: number; y: number }> | undefined;
     if (lbl) {
       for (const [labelId, label] of Object.entries(lbl)) {
-        const { worldSlug, canvasSlug } = requireCanvasScope(labelId, 'set_layout_state labels');
-        ctx.db.labels.insert({ labelId, text: label.text, x: label.x, y: label.y, worldSlug, canvasSlug });
+        const { worldId, canvasId } = requireCanvasScope(labelId, 'set_layout_state labels');
+        ctx.db.labels.insert({ labelId, text: label.text, x: label.x, y: label.y, worldId, canvasId });
       }
     }
 
@@ -1587,9 +1756,9 @@ export const set_layout_state = spacetimedb.reducer(
         (nSize && Object.keys(nSize)[0]) ??
         null;
       if (anchor) {
-        const { worldSlug, canvasSlug } = requireCanvasScope(anchor, 'set_layout_state settings');
-        const key = `w__${worldSlug}__c__${canvasSlug}__settings:stonesPerRow`;
-        ctx.db.settings.insert({ key, valueNum: stonesPerRow, valueText: undefined, worldSlug, canvasSlug });
+        const { worldId, canvasId } = requireCanvasScope(anchor, 'set_layout_state settings');
+        const key = `w__${worldId}__c__${canvasId}__settings:stonesPerRow`;
+        ctx.db.settings.insert({ key, valueNum: stonesPerRow, valueText: undefined, worldId, canvasId });
       }
     }
   }

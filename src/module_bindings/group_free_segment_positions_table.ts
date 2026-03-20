@@ -14,8 +14,8 @@ export default __t.row({
   id: __t.string().primaryKey(),
   groupId: __t.string().name("group_id"),
   segmentId: __t.string().name("segment_id"),
-  worldSlug: __t.string().name("world_slug"),
-  canvasSlug: __t.string().name("canvas_slug"),
+  worldId: __t.string().name("world_id"),
+  canvasId: __t.string().name("canvas_id"),
   x: __t.f64(),
   y: __t.f64(),
 });

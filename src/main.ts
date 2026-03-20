@@ -15,16 +15,20 @@ import { formatSixthsAsStone, stoneToSixths } from './domain/rules'
 import { createSourceItemSearchIndex } from './domain/item-source-search'
 import { getWieldOptions } from './domain/weapon-metadata'
 import { PixiBoardAdapter } from './pixi/PixiBoardAdapter'
-import { sampleState } from './sample-data'
+import { emptyBoardState, sampleState } from './sample-data'
 import type { ActorKind, CarryZone } from './domain/types'
 import type { ConnectedUser, MainToWorkerMessage, RemoteCursor, SceneSegmentVM, SceneVM, WorkerToMainMessage } from './worker/protocol'
 import type { ItemCategory } from './domain/item-category'
 import {
   canonicalPathForRoute,
+  DEFAULT_CANVAS_SLUG,
+  getRoomIdsForRoute,
   parseAppRoute,
+  persistResolvedRoomIds,
   worldCanvasContextFromRoute,
   type AppRoute,
 } from './spacetimedb/context'
+import type { RegistryAdjust } from './spacetimedb/registry-reconcile'
 import { createWorldHubAdapter } from './world-hub/world-hub-adapter'
 import { attachTooltip } from './tooltip'
 
@@ -38,7 +42,8 @@ if (window.location.pathname !== canonicalPath) {
   appRoute = parseAppRoute(window.location.pathname)
   canonicalPath = canonicalPathForRoute(appRoute)
 }
-let worldCanvasContext = worldCanvasContextFromRoute(appRoute)
+const initialRoomIds = getRoomIdsForRoute(appRoute)
+let worldCanvasContext = worldCanvasContextFromRoute(appRoute, initialRoomIds.worldId, initialRoomIds.canvasId)
 
 // Temporary visual marker to confirm this exact VTT bundle is loaded.
 const debugBuildMarker = 'VTT DEBUG BUILD LOADED (marker: 2026-03-16-01)'
@@ -977,8 +982,20 @@ const applyAppRoute = (route: AppRoute, pushHistory: boolean): void => {
   const path = canonicalPathForRoute(route)
   if (pushHistory) history.pushState(null, '', path)
   appRoute = route
-  worldCanvasContext = worldCanvasContextFromRoute(route)
-  postToWorker({ type: 'SET_APP_ROUTE', appRoute: route })
+  const ids = getRoomIdsForRoute(route)
+  worldCanvasContext = worldCanvasContextFromRoute(route, ids.worldId, ids.canvasId)
+  postToWorker({ type: 'SET_APP_ROUTE', appRoute: route, context: worldCanvasContext })
+  syncHubCanvasShell()
+}
+
+/** Server registry (worlds / slug history) disagreed with URL or localStorage ids — align and re-subscribe. */
+const applyRegistryAdjust = (adjust: RegistryAdjust): void => {
+  const canvasSlug = adjust.route.mode === 'hub' ? DEFAULT_CANVAS_SLUG : adjust.route.canvasSlug
+  persistResolvedRoomIds(adjust.route.worldSlug, canvasSlug, adjust.worldId, adjust.canvasId)
+  appRoute = adjust.route
+  worldCanvasContext = worldCanvasContextFromRoute(adjust.route, adjust.worldId, adjust.canvasId)
+  if (adjust.replaceUrl) history.replaceState(null, '', canonicalPathForRoute(adjust.route))
+  postToWorker({ type: 'SET_APP_ROUTE', appRoute: adjust.route, context: worldCanvasContext })
   syncHubCanvasShell()
 }
 
@@ -1836,6 +1853,10 @@ let pendingCameraRestore: { panX: number; panY: number; zoom: number } | null = 
 
 vmWorker.onmessage = (event: MessageEvent<WorkerToMainMessage>) => {
   const msg = event.data
+  if (msg.type === 'REGISTRY_RECONCILE') {
+    applyRegistryAdjust(msg.adjust)
+    return
+  }
   if (msg.type === 'ITEM_CATALOG') {
     cachedItemCatalogRows = [...msg.definitions]
     const resolve = pendingCatalogResolvers.get(msg.requestId)
@@ -1928,7 +1949,7 @@ try {
 } catch { /* noop */ }
 postToWorker({
   type: 'INIT',
-  worldState: sampleState,
+  worldState: emptyBoardState,
   stonesPerRow: initialStonesPerRow,
   token: savedSpacetimeToken,
   context: worldCanvasContext,

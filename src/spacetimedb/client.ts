@@ -14,7 +14,8 @@ import type { Identity } from 'spacetimedb'
 import type { CanonicalState } from '../domain/types'
 import type { PersistedLocalState } from '../persistence/backend'
 import { reconstructCanonicalState, reconstructLayoutState } from './reconstruct'
-import type { WorldCanvasContext } from './context'
+import type { AppRoute, WorldCanvasContext } from './context'
+import { computeRegistryAdjust, type RegistryAdjust } from './registry-reconcile'
 
 export interface ConnectedUser {
   identityHex: string
@@ -56,34 +57,76 @@ let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 let reconnectAttempt = 0
 let shouldReconnect = true
 let myIdentityHex = ''
-let currentContext: WorldCanvasContext = { worldSlug: 'default-world', canvasSlug: 'main' }
+let currentContext: WorldCanvasContext = {
+  worldId: '11111111-1111-4111-8111-111111111111',
+  canvasId: '22222222-2222-4222-8222-222222222222',
+  worldSlug: 'default-world',
+  canvasSlug: 'main',
+}
 
 export type AppSubscriptionMode = 'hub' | 'canvas'
 let appSubscriptionMode: AppSubscriptionMode = 'canvas'
 let onWorldHubRefresh: (() => void) | null = null
+let currentAppRoute: AppRoute = { mode: 'canvas', worldSlug: 'default-world', canvasSlug: 'main' }
+let onRegistryAdjust: ((a: RegistryAdjust) => void) | null = null
 
 /** Escape a string for use as a single-quoted SQL literal. */
 function sqlStringLiteral(value: string): string {
   return `'${value.replace(/'/g, "''")}'`
 }
 
+function displayNameFromSlug(slug: string): string {
+  return (
+    slug
+      .split(/[-_]+/)
+      .filter(Boolean)
+      .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+      .join(' ') || slug
+  )
+}
+
+function bootstrapRegistry(conn: DbConnection, ctx: WorldCanvasContext): void {
+  try {
+    conn.reducers.ensureWorld({
+      id: ctx.worldId,
+      slug: ctx.worldSlug,
+      displayName: displayNameFromSlug(ctx.worldSlug),
+      description: undefined,
+    })
+    conn.reducers.ensureCanvas({
+      id: ctx.canvasId,
+      worldId: ctx.worldId,
+      slug: ctx.canvasSlug,
+      displayName: undefined,
+    })
+  } catch (e) {
+    console.warn('[spacetimedb] ensure world/canvas', e)
+  }
+}
+
+const registrySubs = (): string[] => [
+  'SELECT * FROM worlds',
+  'SELECT * FROM world_slug_history',
+  'SELECT * FROM canvases',
+  'SELECT * FROM canvas_slug_history',
+]
+
 /**
  * Subscription queries scoped to the active world/canvas (and global `users`).
  *
- * Column identifiers MUST match the module schema’s product field names (camelCase),
- * e.g. "worldSlug", not the generated client binding rename (world_slug). Spacetime
- * SQL is case-sensitive; wrong names yield empty subscriptions after refresh.
+ * Column identifiers MUST match the module schema’s product field names (camelCase).
  */
 function subscriptionQueriesForContext(ctx: WorldCanvasContext): string[] {
-  const w = sqlStringLiteral(ctx.worldSlug)
-  const c = sqlStringLiteral(ctx.canvasSlug)
-  const room = `"worldSlug" = ${w} AND "canvasSlug" = ${c}`
+  const w = sqlStringLiteral(ctx.worldId)
+  const c = sqlStringLiteral(ctx.canvasId)
+  const room = `"worldId" = ${w} AND "canvasId" = ${c}`
   return [
-    `SELECT * FROM actors WHERE "worldSlug" = ${w}`,
-    `SELECT * FROM item_definitions WHERE "worldSlug" = ${w}`,
-    `SELECT * FROM inventory_entries WHERE "worldSlug" = ${w}`,
-    `SELECT * FROM carry_groups WHERE "worldSlug" = ${w}`,
-    `SELECT * FROM movement_groups WHERE "worldSlug" = ${w}`,
+    ...registrySubs(),
+    `SELECT * FROM actors WHERE "worldId" = ${w}`,
+    `SELECT * FROM item_definitions WHERE "worldId" = ${w}`,
+    `SELECT * FROM inventory_entries WHERE "worldId" = ${w}`,
+    `SELECT * FROM carry_groups WHERE "worldId" = ${w}`,
+    `SELECT * FROM movement_groups WHERE "worldId" = ${w}`,
     `SELECT * FROM node_positions WHERE ${room}`,
     `SELECT * FROM group_positions WHERE ${room}`,
     `SELECT * FROM group_size_overrides WHERE ${room}`,
@@ -108,10 +151,11 @@ function subscriptionQueriesForContext(ctx: WorldCanvasContext): string[] {
 }
 
 /** World hub: all layout + presence rows for the world (any canvas). Domain still world-scoped. */
-export function subscriptionQueriesForHubWorld(worldSlug: string): string[] {
-  const w = sqlStringLiteral(worldSlug)
-  const worldOnly = `"worldSlug" = ${w}`
+export function subscriptionQueriesForHubWorld(worldId: string): string[] {
+  const w = sqlStringLiteral(worldId)
+  const worldOnly = `"worldId" = ${w}`
   return [
+    ...registrySubs(),
     `SELECT * FROM actors WHERE ${worldOnly}`,
     `SELECT * FROM item_definitions WHERE ${worldOnly}`,
     `SELECT * FROM inventory_entries WHERE ${worldOnly}`,
@@ -142,19 +186,19 @@ export function subscriptionQueriesForHubWorld(worldSlug: string): string[] {
 
 function activeSubscriptionQueries(): string[] {
   return appSubscriptionMode === 'hub'
-    ? subscriptionQueriesForHubWorld(currentContext.worldSlug)
+    ? subscriptionQueriesForHubWorld(currentContext.worldId)
     : subscriptionQueriesForContext(currentContext)
 }
 
 function canvasPresenceKey(identityHex: string): string {
-  return `${currentContext.worldSlug}::${currentContext.canvasSlug}::${identityHex}`
+  return `${currentContext.worldId}::${currentContext.canvasId}::${identityHex}`
 }
 
 function markPresence(): void {
   if (!conn) return
   conn.reducers.setPresence({
-    worldSlug: currentContext.worldSlug,
-    canvasSlug: currentContext.canvasSlug,
+    worldId: currentContext.worldId,
+    canvasId: currentContext.canvasId,
   })
 }
 
@@ -180,6 +224,11 @@ function storeToken(token: string): void {
 
 function handleSubscriptionApplied(): void {
   if (!conn || !onServerState) return
+  const adjust = computeRegistryAdjust(conn, currentAppRoute, currentContext)
+  if (adjust && onRegistryAdjust) {
+    onRegistryAdjust(adjust)
+    return
+  }
   const worldState = reconstructCanonicalState(conn, currentContext)
   const layoutState = reconstructLayoutState(conn, currentContext)
   initialApplied = true
@@ -196,7 +245,7 @@ function rebuildPresence(): void {
   if (!conn || !onPresence) return
   const presentIdentityHexes = new Set<string>()
   for (const row of conn.db.user_presences.iter()) {
-    if (row.worldSlug === currentContext.worldSlug && row.canvasSlug === currentContext.canvasSlug) {
+    if (row.worldId === currentContext.worldId && row.canvasId === currentContext.canvasId) {
       presentIdentityHexes.add(row.identityHex)
     }
   }
@@ -213,7 +262,7 @@ function rebuildPresence(): void {
   }
   const cursors: RemoteCursor[] = []
   for (const row of conn.db.user_cursors.iter()) {
-    if (row.worldSlug !== currentContext.worldSlug || row.canvasSlug !== currentContext.canvasSlug) continue
+    if (row.worldId !== currentContext.worldId || row.canvasId !== currentContext.canvasId) continue
     if (row.identityHex === myIdentityHex) continue
     cursors.push({ identityHex: row.identityHex, x: row.x, y: row.y })
   }
@@ -239,10 +288,15 @@ function subscribeToAllTables(): void {
 /**
  * Switch hub vs canvas cache scope and re-subscribe (connected state only).
  */
-export function setAppSubscriptionRoute(context: WorldCanvasContext, mode: AppSubscriptionMode): void {
+export function setAppSubscriptionRoute(
+  context: WorldCanvasContext,
+  mode: AppSubscriptionMode,
+  appRoute: AppRoute,
+): void {
   currentContext = context
+  currentAppRoute = appRoute
   appSubscriptionMode = mode
-  if (conn && initialApplied) subscribeToAllTables()
+  if (conn) subscribeToAllTables()
 }
 
 export function getAppSubscriptionMode(): AppSubscriptionMode {
@@ -261,6 +315,10 @@ function registerTableCallbacks(): void {
   }
 
   const domainTables = [
+    conn.db.worlds,
+    conn.db.world_slug_history,
+    conn.db.canvases,
+    conn.db.canvas_slug_history,
     conn.db.actors,
     conn.db.item_definitions,
     conn.db.inventory_entries,
@@ -327,6 +385,7 @@ function buildConnection(): void {
       myIdentityHex = identity.toHexString()
       reconnectAttempt = 0
       storeToken(authToken)
+      bootstrapRegistry(_connection, currentContext)
       markPresence()
       onConnectionStatus!('connected')
       subscribeToAllTables()
@@ -361,6 +420,8 @@ export function connect(
   presenceCb: PresenceCallback,
   cameraRestoreCb: CameraRestoreCallback,
   context: WorldCanvasContext,
+  appRoute: AppRoute,
+  registryAdjustCb: ((a: RegistryAdjust) => void) | undefined,
   token?: string,
   subscriptionMode: AppSubscriptionMode = 'canvas',
   worldHubRefreshCb?: () => void,
@@ -372,6 +433,8 @@ export function connect(
   onCameraRestore = cameraRestoreCb
   onWorldHubRefresh = worldHubRefreshCb ?? null
   currentContext = context
+  currentAppRoute = appRoute
+  onRegistryAdjust = registryAdjustCb ?? null
   appSubscriptionMode = subscriptionMode
   shouldReconnect = true
   reconnectAttempt = 0
@@ -385,8 +448,8 @@ export function updateMyCursor(x: number, y: number): void {
   if (!conn || !initialApplied) return
   markPresence()
   conn.reducers.updateCursor({
-    worldSlug: currentContext.worldSlug,
-    canvasSlug: currentContext.canvasSlug,
+    worldId: currentContext.worldId,
+    canvasId: currentContext.canvasId,
     x,
     y,
     viewportScale: undefined,
@@ -397,8 +460,8 @@ export function updateMyCamera(panX: number, panY: number, zoom: number): void {
   if (!conn || !initialApplied) return
   markPresence()
   conn.reducers.updateCamera({
-    worldSlug: currentContext.worldSlug,
-    canvasSlug: currentContext.canvasSlug,
+    worldId: currentContext.worldId,
+    canvasId: currentContext.canvasId,
     panX,
     panY,
     zoom,

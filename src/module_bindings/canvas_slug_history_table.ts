@@ -11,8 +11,9 @@ import {
 } from "spacetimedb";
 
 export default __t.row({
-  nodeId: __t.string().primaryKey().name("node_id"),
-  containerNodeId: __t.string().name("container_node_id"),
-  worldId: __t.string().name("world_id"),
+  id: __t.string().primaryKey(),
   canvasId: __t.string().name("canvas_id"),
+  worldId: __t.string().name("world_id"),
+  slug: __t.string(),
+  retiredAtMs: __t.f64().name("retired_at_ms"),
 });

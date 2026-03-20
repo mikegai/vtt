@@ -12,8 +12,8 @@ import {
 
 export default __t.row({
   labelId: __t.string().primaryKey().name("label_id"),
-  worldSlug: __t.string().name("world_slug"),
-  canvasSlug: __t.string().name("canvas_slug"),
+  worldId: __t.string().name("world_id"),
+  canvasId: __t.string().name("canvas_id"),
   text: __t.string(),
   x: __t.f64(),
   y: __t.f64(),

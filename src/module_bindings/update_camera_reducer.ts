@@ -11,8 +11,8 @@ import {
 } from "spacetimedb";
 
 export default {
-  worldSlug: __t.string(),
-  canvasSlug: __t.string(),
+  worldId: __t.string(),
+  canvasId: __t.string(),
   panX: __t.f64(),
   panY: __t.f64(),
   zoom: __t.f64(),

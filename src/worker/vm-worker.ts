@@ -29,7 +29,7 @@ import {
 import type { ConnectedUser, RemoteCursor } from '../spacetimedb/client'
 import { syncWorldState, syncLocalState } from '../spacetimedb/sync'
 import type { AppRoute, WorldCanvasContext } from '../spacetimedb/context'
-import { worldCanvasContextFromRoute, worldDisplayNameSettingKey } from '../spacetimedb/context'
+import { STABLE_DEFAULT_MAIN_CANVAS_ID, STABLE_DEFAULT_WORLD_ID } from '../spacetimedb/context'
 import { buildWorldHubSnapshot } from '../spacetimedb/world-hub-snapshot'
 import {
   NODE_VM_TOP_BAND_H as TOP_BAND_H,
@@ -41,7 +41,12 @@ import {
 } from '../shared/node-layout'
 
 let worldState: CanonicalState | null = null
-let currentContext: WorldCanvasContext = { worldSlug: 'default-world', canvasSlug: 'main' }
+let currentContext: WorldCanvasContext = {
+  worldId: STABLE_DEFAULT_WORLD_ID,
+  canvasId: STABLE_DEFAULT_MAIN_CANVAS_ID,
+  worldSlug: 'default-world',
+  canvasSlug: 'main',
+}
 let appRoute: AppRoute = { mode: 'canvas', worldSlug: 'default-world', canvasSlug: 'main' }
 let localState: WorkerLocalState = {
   hoveredSegmentId: null,
@@ -193,7 +198,7 @@ function maybePushWorldHub(): void {
   const conn = getConnection()
   if (!conn || !isConnected()) return
   try {
-    const snapshot = buildWorldHubSnapshot(conn, currentContext.worldSlug, getMyIdentityHex())
+    const snapshot = buildWorldHubSnapshot(conn, currentContext, getMyIdentityHex())
     post({ type: 'WORLD_HUB', requestId: null, snapshot })
   } catch (err) {
     console.warn('[world-hub] snapshot failed', err)
@@ -240,6 +245,8 @@ function initSpacetimeDB(token?: string): void {
       post({ type: 'CAMERA_RESTORE', panX, panY, zoom })
     },
     currentContext,
+    appRoute,
+    (adjust) => post({ type: 'REGISTRY_RECONCILE', adjust }),
     token,
     appRoute.mode === 'hub' ? 'hub' : 'canvas',
     maybePushWorldHub,
@@ -2466,16 +2473,17 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
   }
   if (message.type === 'SET_APP_ROUTE') {
     appRoute = message.appRoute
-    currentContext = worldCanvasContextFromRoute(message.appRoute)
-    setAppSubscriptionRoute(currentContext, message.appRoute.mode === 'hub' ? 'hub' : 'canvas')
+    currentContext = message.context
+    setAppSubscriptionRoute(currentContext, message.appRoute.mode === 'hub' ? 'hub' : 'canvas', message.appRoute)
     refreshPresence()
+    maybePushWorldHub()
     return
   }
   if (message.type === 'GET_WORLD_HUB') {
     const conn = getConnection()
     if (!conn || !isConnected()) return
     try {
-      const snapshot = buildWorldHubSnapshot(conn, currentContext.worldSlug, getMyIdentityHex())
+      const snapshot = buildWorldHubSnapshot(conn, currentContext, getMyIdentityHex())
       post({ type: 'WORLD_HUB', requestId: message.requestId, snapshot })
     } catch (err) {
       console.warn('[world-hub] GET_WORLD_HUB failed', err)
@@ -2487,10 +2495,11 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
     if (!conn || !isConnected()) return
     const name = message.displayName.trim()
     if (!name) return
-    conn.reducers.upsertSetting({
-      key: worldDisplayNameSettingKey(currentContext.worldSlug),
-      valueNum: undefined,
-      valueText: name,
+    conn.reducers.renameWorld({
+      worldId: currentContext.worldId,
+      newSlug: currentContext.worldSlug,
+      displayName: name,
+      description: undefined,
     })
     return
   }

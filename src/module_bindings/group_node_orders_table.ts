@@ -12,7 +12,7 @@ import {
 
 export default __t.row({
   groupId: __t.string().primaryKey().name("group_id"),
-  worldSlug: __t.string().name("world_slug"),
-  canvasSlug: __t.string().name("canvas_slug"),
+  worldId: __t.string().name("world_id"),
+  canvasId: __t.string().name("canvas_id"),
   nodeIdsJson: __t.string().name("node_ids_json"),
 });

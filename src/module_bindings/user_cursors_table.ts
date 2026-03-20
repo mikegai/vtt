@@ -13,8 +13,8 @@ import {
 export default __t.row({
   id: __t.string().primaryKey(),
   identityHex: __t.string().name("identity_hex"),
-  worldSlug: __t.string().name("world_slug"),
-  canvasSlug: __t.string().name("canvas_slug"),
+  worldId: __t.string().name("world_id"),
+  canvasId: __t.string().name("canvas_id"),
   x: __t.f64(),
   y: __t.f64(),
   viewportScale: __t.option(__t.f64()).name("viewport_scale"),

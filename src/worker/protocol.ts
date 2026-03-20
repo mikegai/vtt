@@ -1,6 +1,7 @@
 import type { ActorKind, CanonicalState, CarryZone, EquipmentState, ItemCatalogRow, ItemDefinition, ItemKind, WieldGrip } from '../domain/types'
 import type { ItemCategory } from '../domain/item-category'
 import type { AppRoute, WorldCanvasContext } from '../spacetimedb/context'
+import type { RegistryAdjust } from '../spacetimedb/registry-reconcile'
 import type { WorldHubSnapshot } from '../spacetimedb/world-hub-snapshot'
 
 export type { ItemCatalogRow }
@@ -284,7 +285,7 @@ export type MainToWorkerMessage =
       readonly appRoute: AppRoute
     }
   | { readonly type: 'RESET'; readonly worldState: CanonicalState; readonly stonesPerRow?: number }
-  | { readonly type: 'SET_APP_ROUTE'; readonly appRoute: AppRoute }
+  | { readonly type: 'SET_APP_ROUTE'; readonly appRoute: AppRoute; readonly context: WorldCanvasContext }
   | { readonly type: 'SET_STONES_PER_ROW'; readonly stonesPerRow: number }
   | { readonly type: 'INTENT'; readonly intent: WorkerIntent }
   | { readonly type: 'SET_SPACETIMEDB_TOKEN'; readonly token: string }
@@ -296,6 +297,7 @@ export type MainToWorkerMessage =
   | { readonly type: 'GET_WORLD_HUB'; readonly requestId: string }
 
 export type WorkerToMainMessage =
+  | { readonly type: 'REGISTRY_RECONCILE'; readonly adjust: RegistryAdjust }
   | { readonly type: 'SCENE_INIT'; readonly scene: SceneVM }
   | { readonly type: 'SCENE_PATCHES'; readonly patches: readonly ScenePatch[]; readonly scene: SceneVM }
   | { readonly type: 'LOG'; readonly message: string }

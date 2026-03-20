@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { canonicalPathForRoute, parseAppRoute, worldCanvasContextFromRoute } from '../spacetimedb/context'
+import {
+  canonicalPathForRoute,
+  deterministicUuidFromString,
+  parseAppRoute,
+  worldCanvasContextFromRoute,
+} from '../spacetimedb/context'
 
 describe('parseAppRoute', () => {
   it('treats one segment as hub', () => {
@@ -38,8 +43,12 @@ describe('canonicalPathForRoute', () => {
 })
 
 describe('worldCanvasContextFromRoute', () => {
-  it('uses main canvas for hub', () => {
-    expect(worldCanvasContextFromRoute({ mode: 'hub', worldSlug: 'x' })).toEqual({
+  it('uses main canvas slug for hub and preserves ids', () => {
+    const worldId = deterministicUuidFromString('world:x')
+    const canvasId = deterministicUuidFromString('canvas:x:main')
+    expect(worldCanvasContextFromRoute({ mode: 'hub', worldSlug: 'x' }, worldId, canvasId)).toEqual({
+      worldId,
+      canvasId,
       worldSlug: 'x',
       canvasSlug: 'main',
     })

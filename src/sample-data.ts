@@ -462,3 +462,12 @@ export const sampleState: CanonicalState = {
     cataphractRations7: { id: 'cataphractRations7', actorId: 'cataphractHorse', itemDefId: 'ironRationsDay', quantity: 1, zone: 'stowed' },
   },
 }
+
+/** Default startup board: same item catalog as `sampleState`, but no sample party, movement group, or inventory. */
+export const emptyBoardState: CanonicalState = {
+  actors: {},
+  movementGroups: {},
+  carryGroups: {},
+  inventoryEntries: {},
+  itemDefinitions: { ...sampleState.itemDefinitions },
+}
