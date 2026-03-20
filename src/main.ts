@@ -30,6 +30,7 @@ import {
 } from './spacetimedb/context'
 import type { RegistryAdjust } from './spacetimedb/registry-reconcile'
 import { createWorldHubAdapter } from './world-hub/world-hub-adapter'
+import type { WorldHubAdapter } from './world-hub/world-hub-adapter'
 import { attachTooltip } from './tooltip'
 
 const app = document.querySelector<HTMLDivElement>('#app')
@@ -941,7 +942,7 @@ const postToWorker = (message: MainToWorkerMessage): void => {
 /** Set after `pixiAdapter` init; pauses the board on hub route. */
 let applyRouteBoardRender: (() => void) | null = null
 
-let worldHubAdapter: ReturnType<typeof createWorldHubAdapter> | null = null
+let worldHubAdapter: WorldHubAdapter | null = null
 let hubListRequestSeq = 0
 
 const refreshWorldHubData = (): void => {
@@ -960,6 +961,10 @@ const syncHubCanvasShell = (): void => {
     if (!worldHubAdapter && hubRoot) {
       worldHubAdapter = createWorldHubAdapter({
         onNavigateCanvas: (w, c) => applyAppRoute({ mode: 'canvas', worldSlug: w, canvasSlug: c }, true),
+        onHubViewChange: (hubView) => {
+          if (appRoute.mode !== 'hub') return
+          applyAppRoute({ mode: 'hub', worldSlug: appRoute.worldSlug, hubView }, true)
+        },
         onSaveDisplayName: (displayName) => postToWorker({ type: 'SET_WORLD_DISPLAY_NAME', displayName }),
         onCatalogUpsert: (definition) => postToWorker({ type: 'INTENT', intent: { type: 'CATALOG_UPSERT_DEFINITION', definition } }),
         onCatalogRemove: (id) => postToWorker({ type: 'INTENT', intent: { type: 'CATALOG_REMOVE_DEFINITION', id } }),
@@ -976,6 +981,7 @@ const syncHubCanvasShell = (): void => {
     shell?.removeAttribute('hidden')
   }
   applyRouteBoardRender?.()
+  if (route.mode === 'hub') worldHubAdapter?.setHubView(route.hubView)
 }
 
 const applyAppRoute = (route: AppRoute, pushHistory: boolean): void => {
@@ -1867,7 +1873,7 @@ vmWorker.onmessage = (event: MessageEvent<WorkerToMainMessage>) => {
     return
   }
   if (msg.type === 'WORLD_HUB') {
-    if (appRoute.mode === 'hub') worldHubAdapter?.render(msg.snapshot)
+    if (appRoute.mode === 'hub') worldHubAdapter?.render(msg.snapshot, appRoute.hubView)
     return
   }
   if (msg.type === 'SCENE_INIT') {

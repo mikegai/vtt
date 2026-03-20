@@ -7,15 +7,19 @@ import {
 } from '../spacetimedb/context'
 
 describe('parseAppRoute', () => {
-  it('treats one segment as hub', () => {
-    expect(parseAppRoute('/my-world')).toEqual({ mode: 'hub', worldSlug: 'my-world' })
+  it('treats one segment as hub (canvases)', () => {
+    expect(parseAppRoute('/my-world')).toEqual({ mode: 'hub', worldSlug: 'my-world', hubView: 'canvases' })
   })
 
   it('normalizes world slug (lowercase, trim, collapse separators)', () => {
-    expect(parseAppRoute('/  FOO  Bar  /')).toEqual({ mode: 'hub', worldSlug: 'foo-bar' })
+    expect(parseAppRoute('/  FOO  Bar  /')).toEqual({ mode: 'hub', worldSlug: 'foo-bar', hubView: 'canvases' })
   })
 
-  it('treats two segments as canvas', () => {
+  it('treats /world/catalog as hub catalog, not a canvas', () => {
+    expect(parseAppRoute('/my-world/catalog')).toEqual({ mode: 'hub', worldSlug: 'my-world', hubView: 'catalog' })
+  })
+
+  it('treats other two-segment paths as canvas', () => {
     expect(parseAppRoute('/my-world/arena')).toEqual({
       mode: 'canvas',
       worldSlug: 'my-world',
@@ -24,7 +28,7 @@ describe('parseAppRoute', () => {
   })
 
   it('defaults empty path to default world hub', () => {
-    expect(parseAppRoute('/')).toEqual({ mode: 'hub', worldSlug: 'default-world' })
+    expect(parseAppRoute('/')).toEqual({ mode: 'hub', worldSlug: 'default-world', hubView: 'canvases' })
   })
 
   it('ignores extra path segments for routing mode', () => {
@@ -33,8 +37,12 @@ describe('parseAppRoute', () => {
 })
 
 describe('canonicalPathForRoute', () => {
-  it('omits canvas slug for hub', () => {
-    expect(canonicalPathForRoute({ mode: 'hub', worldSlug: 'foo' })).toBe('/foo')
+  it('omits canvas slug for hub canvases view', () => {
+    expect(canonicalPathForRoute({ mode: 'hub', worldSlug: 'foo', hubView: 'canvases' })).toBe('/foo')
+  })
+
+  it('uses /catalog segment for hub catalog view', () => {
+    expect(canonicalPathForRoute({ mode: 'hub', worldSlug: 'foo', hubView: 'catalog' })).toBe('/foo/catalog')
   })
 
   it('includes canvas for canvas route', () => {
@@ -46,7 +54,7 @@ describe('worldCanvasContextFromRoute', () => {
   it('uses main canvas slug for hub and preserves ids', () => {
     const worldId = deterministicUuidFromString('world:x')
     const canvasId = deterministicUuidFromString('canvas:x:main')
-    expect(worldCanvasContextFromRoute({ mode: 'hub', worldSlug: 'x' }, worldId, canvasId)).toEqual({
+    expect(worldCanvasContextFromRoute({ mode: 'hub', worldSlug: 'x', hubView: 'canvases' }, worldId, canvasId)).toEqual({
       worldId,
       canvasId,
       worldSlug: 'x',

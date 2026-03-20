@@ -82,7 +82,7 @@ export function computeRegistryAdjust(
   let authorityCanvasId: string
 
   if (route.mode === 'hub') {
-    canonicalRoute = { mode: 'hub', worldSlug: canonicalWorldSlug }
+    canonicalRoute = { mode: 'hub', worldSlug: canonicalWorldSlug, hubView: route.hubView }
     const main = findCanvasByWorldAndSlug(conn, worldId, DEFAULT_CANVAS_SLUG)
     authorityCanvasId = main?.id ?? ctx.canvasId
   } else {

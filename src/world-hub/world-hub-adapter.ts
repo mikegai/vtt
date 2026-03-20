@@ -1,10 +1,11 @@
 import type { WorldHubSnapshot } from '../spacetimedb/world-hub-snapshot'
 import { formatLastVisited } from './world-hub-vm'
-import { canonicalCanvasPath, canonicalHubPath } from '../spacetimedb/context'
+import { canonicalCanvasPath, type HubView } from '../spacetimedb/context'
 import type { ItemKind } from '../domain/types'
 
 export type WorldHubAdapterHandlers = {
   readonly onNavigateCanvas: (worldSlug: string, canvasSlug: string) => void
+  readonly onHubViewChange: (view: HubView) => void
   readonly onSaveDisplayName: (name: string) => void
   readonly onCatalogUpsert: (row: {
     id: string
@@ -24,7 +25,8 @@ const esc = (s: string): string =>
 
 export type WorldHubAdapter = {
   readonly root: HTMLElement
-  readonly render: (snapshot: WorldHubSnapshot) => void
+  readonly render: (snapshot: WorldHubSnapshot, hubView: HubView) => void
+  readonly setHubView: (hubView: HubView) => void
   readonly destroy: () => void
 }
 
@@ -43,26 +45,36 @@ export function createWorldHubAdapter(handlers: WorldHubAdapterHandlers): WorldH
         <button type="button" class="world-hub-btn primary" id="wh-open-main">Open main canvas</button>
       </div>
     </header>
-    <section class="world-hub-section">
-      <h2 class="world-hub-h2">Canvases</h2>
-      <div class="world-hub-new-canvas">
-        <input type="text" class="world-hub-input" id="wh-new-canvas" placeholder="new-canvas-slug" />
-        <button type="button" class="world-hub-btn" id="wh-create-canvas">Create / open</button>
-      </div>
-      <div class="world-hub-canvas-grid" id="wh-canvases"></div>
-    </section>
-    <section class="world-hub-section world-hub-catalog-section">
-      <h2 class="world-hub-h2">Item catalog</h2>
-      <p class="world-hub-hint">Edits sync to SpacetimeDB and apply across all canvases in this world.</p>
-      <div class="world-hub-table-wrap">
-        <table class="world-hub-table" id="wh-catalog">
-          <thead><tr>
-            <th>Id</th><th>Name</th><th>Kind</th><th>Sixths</th><th>AC</th><th>gp</th><th>Fungible</th><th></th>
-          </tr></thead>
-          <tbody id="wh-catalog-body"></tbody>
-        </table>
-      </div>
-    </section>
+    <nav class="world-hub-tabs" role="tablist" aria-label="World sections">
+      <button type="button" class="world-hub-tab" role="tab" id="wh-tab-canvases" aria-controls="wh-panel-canvases" aria-selected="true">Canvases</button>
+      <button type="button" class="world-hub-tab" role="tab" id="wh-tab-catalog" aria-controls="wh-panel-catalog" aria-selected="false">Item catalog</button>
+    </nav>
+    <div class="world-hub-panels">
+      <section id="wh-panel-canvases" class="world-hub-panel" role="tabpanel" aria-labelledby="wh-tab-canvases">
+        <div class="world-hub-section">
+          <h2 class="world-hub-h2">Your boards</h2>
+          <div class="world-hub-new-canvas">
+            <input type="text" class="world-hub-input" id="wh-new-canvas" placeholder="new-canvas-slug" />
+            <button type="button" class="world-hub-btn" id="wh-create-canvas">Create / open</button>
+          </div>
+          <div class="world-hub-canvas-grid" id="wh-canvases"></div>
+        </div>
+      </section>
+      <section id="wh-panel-catalog" class="world-hub-panel" role="tabpanel" aria-labelledby="wh-tab-catalog" hidden>
+        <div class="world-hub-section world-hub-catalog-section">
+          <h2 class="world-hub-h2">Item catalog</h2>
+          <p class="world-hub-hint">World-wide item definitions. Edits sync to SpacetimeDB and apply on every canvas in this world.</p>
+          <div class="world-hub-table-wrap">
+            <table class="world-hub-table" id="wh-catalog">
+              <thead><tr>
+                <th>Id</th><th>Name</th><th>Kind</th><th>Sixths</th><th>AC</th><th>gp</th><th>Fungible</th><th></th>
+              </tr></thead>
+              <tbody id="wh-catalog-body"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </div>
   `
 
   const titleInput = root.querySelector<HTMLInputElement>('#wh-title')!
@@ -97,7 +109,25 @@ export function createWorldHubAdapter(handlers: WorldHubAdapterHandlers): WorldH
     newCanvasInput.value = ''
   })
 
-  const render = (snapshot: WorldHubSnapshot): void => {
+  const tabCanvases = root.querySelector<HTMLButtonElement>('#wh-tab-canvases')!
+  const tabCatalog = root.querySelector<HTMLButtonElement>('#wh-tab-catalog')!
+  const panelCanvases = root.querySelector<HTMLElement>('#wh-panel-canvases')!
+  const panelCatalog = root.querySelector<HTMLElement>('#wh-panel-catalog')!
+
+  const setHubView = (hubView: HubView): void => {
+    const onCanvases = hubView === 'canvases'
+    tabCanvases.classList.toggle('active', onCanvases)
+    tabCatalog.classList.toggle('active', !onCanvases)
+    tabCanvases.setAttribute('aria-selected', onCanvases ? 'true' : 'false')
+    tabCatalog.setAttribute('aria-selected', onCanvases ? 'false' : 'true')
+    panelCanvases.hidden = !onCanvases
+    panelCatalog.hidden = onCanvases
+  }
+
+  tabCanvases.addEventListener('click', () => handlers.onHubViewChange('canvases'))
+  tabCatalog.addEventListener('click', () => handlers.onHubViewChange('catalog'))
+
+  const render = (snapshot: WorldHubSnapshot, hubView: HubView): void => {
     snapshotWorld = snapshot.worldSlug
     titleInput.value = snapshot.displayName
     slugEl.textContent = `/${snapshot.worldSlug}`
@@ -194,13 +224,15 @@ export function createWorldHubAdapter(handlers: WorldHubAdapterHandlers): WorldH
         if (id && !delBtn.disabled) handlers.onCatalogRemove(id)
       })
     })
+
+    setHubView(hubView)
   }
 
   const destroy = (): void => {
     root.remove()
   }
 
-  return { root, render, destroy }
+  return { root, render, setHubView, destroy }
 }
 
-export { canonicalCanvasPath, canonicalHubPath }
+export { canonicalCanvasPath }

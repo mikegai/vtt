@@ -9,8 +9,13 @@ export type WorldCanvasContext = {
   readonly canvasSlug: string
 }
 
+/** Reserved second path segment: `/world/catalog` is the hub item catalog, not a canvas named "catalog". */
+export const HUB_CATALOG_SEGMENT = 'catalog'
+
+export type HubView = 'canvases' | 'catalog'
+
 export type AppRoute =
-  | { readonly mode: 'hub'; readonly worldSlug: string }
+  | { readonly mode: 'hub'; readonly worldSlug: string; readonly hubView: HubView }
   | { readonly mode: 'canvas'; readonly worldSlug: string; readonly canvasSlug: string }
 
 export const DEFAULT_WORLD_SLUG = 'default-world'
@@ -62,18 +67,24 @@ export const contextFromPathname = (pathname: string): WorldCanvasContext => {
   return { worldId, canvasId, worldSlug, canvasSlug }
 }
 
-/** Single segment or empty → world hub; two+ → canvas view. */
+/** Single segment or empty → world hub (canvases); `/world/catalog` → hub catalog; else two segments → canvas. */
 export const parseAppRoute = (pathname: string): AppRoute => {
   const segments = pathSegments(pathname)
   const worldSlug = slugify(segments[0] ?? '') || DEFAULT_WORLD_SLUG
   if (segments.length >= 2) {
-    const canvasSlug = slugify(segments[1] ?? '') || DEFAULT_CANVAS_SLUG
-    return { mode: 'canvas', worldSlug, canvasSlug }
+    const second = slugify(segments[1] ?? '') || ''
+    if (second === HUB_CATALOG_SEGMENT) {
+      return { mode: 'hub', worldSlug, hubView: 'catalog' }
+    }
+    return { mode: 'canvas', worldSlug, canvasSlug: second || DEFAULT_CANVAS_SLUG }
   }
-  return { mode: 'hub', worldSlug }
+  return { mode: 'hub', worldSlug, hubView: 'canvases' }
 }
 
-export const canonicalHubPath = (worldSlug: string): string => `/${slugify(worldSlug) || DEFAULT_WORLD_SLUG}`
+export const canonicalHubPath = (worldSlug: string, hubView: HubView = 'canvases'): string => {
+  const base = `/${slugify(worldSlug) || DEFAULT_WORLD_SLUG}`
+  return hubView === 'catalog' ? `${base}/${HUB_CATALOG_SEGMENT}` : base
+}
 
 export const canonicalCanvasPath = (worldSlug: string, canvasSlug: string): string =>
   `/${slugify(worldSlug) || DEFAULT_WORLD_SLUG}/${slugify(canvasSlug) || DEFAULT_CANVAS_SLUG}`
@@ -146,7 +157,7 @@ export function worldCanvasContextFromRoute(route: AppRoute, worldId: string, ca
 }
 
 export const canonicalPathForRoute = (route: AppRoute): string =>
-  route.mode === 'hub' ? canonicalHubPath(route.worldSlug) : canonicalCanvasPath(route.worldSlug, route.canvasSlug)
+  route.mode === 'hub' ? canonicalHubPath(route.worldSlug, route.hubView) : canonicalCanvasPath(route.worldSlug, route.canvasSlug)
 
 export const canonicalPathForContext = (ctx: WorldCanvasContext): string =>
   canonicalCanvasPath(ctx.worldSlug, ctx.canvasSlug)
