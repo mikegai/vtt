@@ -333,7 +333,15 @@ export type MainToWorkerMessage =
 export type WorkerToMainMessage =
   | { readonly type: 'REGISTRY_RECONCILE'; readonly adjust: RegistryAdjust }
   | { readonly type: 'SCENE_INIT'; readonly scene: SceneVM }
-  | { readonly type: 'SCENE_PATCHES'; readonly patches: readonly ScenePatch[]; readonly scene: SceneVM }
+  | {
+      readonly type: 'SCENE_PATCHES'
+      readonly patches: readonly ScenePatch[]
+      readonly scene: SceneVM
+      /** Segment ids that should appear without spring-in (e.g. paste / add-items batch). */
+      readonly snapSegmentIds?: readonly string[]
+      /** Inventory node ids that should appear without position spring-in (e.g. node clipboard paste). */
+      readonly snapNodeIds?: readonly string[]
+    }
   | { readonly type: 'LOG'; readonly message: string }
   | { readonly type: 'CONNECTION_STATUS'; readonly status: 'connected' | 'disconnected' | 'error' }
   | { readonly type: 'STORE_TOKEN'; readonly token: string }

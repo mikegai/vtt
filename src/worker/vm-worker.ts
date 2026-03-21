@@ -82,6 +82,28 @@ let localState: WorkerLocalState = {
 let previousScene: SceneVM | null = null
 let batchDepth = 0
 let pendingRecomputeAfterBatch = false
+/** When set, next `recompute` that posts patches will attach snap ids for newly added inventory entries (APPLY_ADD_ITEMS_OP). */
+let pendingSnapFromInventoryBeforeIntent: Set<string> | null = null
+/** When set, next `recompute` that posts patches will attach snap ids for nodes pasted from node clipboard. */
+let pendingSnapNodeIdsAfterPaste: string[] | null = null
+
+const collectSnapSegmentIdsForNewEntries = (scene: SceneVM, newEntryIds: Set<string>): string[] => {
+  const snap: string[] = []
+  for (const node of Object.values(scene.nodes)) {
+    for (const seg of node.segments) {
+      if (newEntryIds.has(segmentIdToEntryId(seg.id)) || newEntryIds.has(seg.id)) {
+        snap.push(seg.id)
+      }
+    }
+  }
+  for (const free of Object.values(scene.freeSegments)) {
+    const id = free.id
+    if (newEntryIds.has(segmentIdToEntryId(id)) || newEntryIds.has(id)) {
+      snap.push(id)
+    }
+  }
+  return snap
+}
 
 // ─── IndexedDB persistence is DISABLED ─────────────────────────────────────
 // SpacetimeDB is the sole source of truth. Loading from IndexedDB on startup
@@ -674,6 +696,8 @@ const recompute = (sendInitIfFirst = false): void => {
 
   if (sendInitIfFirst || !previousScene) {
     previousScene = nextScene
+    pendingSnapFromInventoryBeforeIntent = null
+    pendingSnapNodeIdsAfterPaste = null
     post({ type: 'SCENE_INIT', scene: nextScene })
     scheduleSave()
     return
@@ -681,8 +705,28 @@ const recompute = (sendInitIfFirst = false): void => {
 
   const patches = diffSceneVM(previousScene, nextScene)
   previousScene = nextScene
+  let snapSegmentIds: string[] | undefined
+  if (pendingSnapFromInventoryBeforeIntent) {
+    const beforeIds = pendingSnapFromInventoryBeforeIntent
+    pendingSnapFromInventoryBeforeIntent = null
+    const newEntryIds = new Set(Object.keys(worldState.inventoryEntries).filter((id) => !beforeIds.has(id)))
+    snapSegmentIds = collectSnapSegmentIdsForNewEntries(nextScene, newEntryIds)
+    if (snapSegmentIds.length === 0) snapSegmentIds = undefined
+  }
+  let snapNodeIds: string[] | undefined
+  if (pendingSnapNodeIdsAfterPaste) {
+    snapNodeIds = pendingSnapNodeIdsAfterPaste
+    pendingSnapNodeIdsAfterPaste = null
+    if (snapNodeIds.length === 0) snapNodeIds = undefined
+  }
   if (patches.length > 0) {
-    post({ type: 'SCENE_PATCHES', patches, scene: nextScene })
+    post({
+      type: 'SCENE_PATCHES',
+      patches,
+      scene: nextScene,
+      ...(snapSegmentIds?.length ? { snapSegmentIds } : {}),
+      ...(snapNodeIds?.length ? { snapNodeIds } : {}),
+    })
   }
   scheduleSave()
 }
@@ -1777,6 +1821,9 @@ const applyIntent = (intent: WorkerIntent): void => {
   }
 
   if (intent.type === 'APPLY_ADD_ITEMS_OP') {
+    if (worldState) {
+      pendingSnapFromInventoryBeforeIntent = new Set(Object.keys(worldState.inventoryEntries))
+    }
     runIntentBatch(intent.items.map((item) => ({
       type: 'SPAWN_ITEM_INSTANCE' as const,
       itemDefId: item.itemDefId,
@@ -2596,14 +2643,29 @@ const applyIntent = (intent: WorkerIntent): void => {
     const newRoots = doc.rootNodeIds.map((r) => actorIdMap.get(r)).filter((x): x is string => !!x)
     const targetNode = intent.targetNodeId ? sceneBefore.nodes[intent.targetNodeId] : null
     const groupId = targetNode?.groupId ?? null
+    const pasteWorldX = typeof intent.worldX === 'number' ? intent.worldX : 120
+    const pasteWorldY = typeof intent.worldY === 'number' ? intent.worldY : 120
+    const hasPastePoint = typeof intent.worldX === 'number' && typeof intent.worldY === 'number'
     if (groupId && targetNode && newRoots.length > 0) {
+      const groupScene = sceneBefore.groups[groupId]
+      const listViewEnabled = groupScene?.listViewEnabled === true
       const tActor = targetNode.actorId
       const sourceGroupPositions = nextLocal.groupNodePositions[groupId] ?? {}
       const sourceRelativePos = sourceGroupPositions[tActor] ?? { x: 40, y: 60 }
       const gPos = { ...sourceGroupPositions }
-      newRoots.forEach((rid, i) => {
-        gPos[rid] = { x: sourceRelativePos.x + 40 + i * 28, y: sourceRelativePos.y + 50 + i * 16 }
-      })
+      const useMouseInGroup = hasPastePoint && groupScene && !listViewEnabled
+      if (useMouseInGroup) {
+        newRoots.forEach((rid, i) => {
+          gPos[rid] = {
+            x: pasteWorldX - groupScene!.x + i * 28,
+            y: pasteWorldY - groupScene!.y + i * 16,
+          }
+        })
+      } else {
+        newRoots.forEach((rid, i) => {
+          gPos[rid] = { x: sourceRelativePos.x + 40 + i * 28, y: sourceRelativePos.y + 50 + i * 16 }
+        })
+      }
       const order = [...(nextLocal.groupNodeOrders[groupId] ?? [])]
       newRoots.forEach((rid) => {
         if (!order.includes(rid)) order.push(rid)
@@ -2618,7 +2680,7 @@ const applyIntent = (intent: WorkerIntent): void => {
     } else if (newRoots.length > 0) {
       const np = { ...nextLocal.nodePositions }
       newRoots.forEach((rid, i) => {
-        np[rid] = { x: (typeof intent.worldX === 'number' ? intent.worldX : 120) + i * 40, y: (typeof intent.worldY === 'number' ? intent.worldY : 120) + i * 24 }
+        np[rid] = { x: pasteWorldX + i * 40, y: pasteWorldY + i * 24 }
       })
       nextLocal = {
         ...nextLocal,
@@ -2628,6 +2690,7 @@ const applyIntent = (intent: WorkerIntent): void => {
     }
     worldState = ws
     localState = nextLocal
+    pendingSnapNodeIdsAfterPaste = newRoots.length > 0 ? [...newRoots] : null
     recompute()
     return
   }

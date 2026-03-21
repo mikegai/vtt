@@ -1954,7 +1954,10 @@ vmWorker.onmessage = (event: MessageEvent<WorkerToMainMessage>) => {
     closeInlineTitleEditor()
     currentScene = msg.scene
     selectedLabelId = msg.scene.selectedLabelId ?? null
-    pixiAdapter.applyPatches(msg.patches, msg.scene)
+    pixiAdapter.applyPatches(msg.patches, msg.scene, {
+      snapSegmentIds: msg.snapSegmentIds,
+      snapNodeIds: msg.snapNodeIds,
+    })
     syncLabelEditor()
     return
   }
@@ -2554,12 +2557,15 @@ const pasteFromSystemClipboard = async (): Promise<void> => {
   }
   if (isUnknownRecord(parsed) && parsed.schema === VTT_CLIPBOARD_NODES_V1) {
     const target = resolvePasteTargetNodeId(currentScene)
+    const pw = pixiAdapter.getLastPointerWorld()
     postToWorker({
       type: 'INTENT',
       intent: {
         type: 'PASTE_NODE_CLIPBOARD',
         payload: raw,
         targetNodeId: target,
+        worldX: pw.x,
+        worldY: pw.y,
       },
     })
     return
@@ -2985,23 +2991,62 @@ window.addEventListener('keydown', (event) => {
       renderCanvasToolUI()
     }
   }
-  if ((event.key === 'Delete' || event.key === 'Backspace') && currentScene?.selectedSegmentIds?.length) {
+  if (event.key === 'Delete' || event.key === 'Backspace') {
     const active = document.activeElement
-    if (active?.tagName === 'INPUT' || active?.tagName === 'TEXTAREA') return
-    event.preventDefault()
-    postToWorker({
-      type: 'INTENT',
-      intent: { type: 'DELETE_ENTRY', segmentIds: currentScene.selectedSegmentIds },
-    })
-    return
-  }
-  if ((event.key === 'Delete' || event.key === 'Backspace') && selectedLabelId) {
-    const active = document.activeElement
-    if (active?.tagName === 'INPUT' || active?.tagName === 'TEXTAREA') return
-    event.preventDefault()
-    postToWorker({ type: 'INTENT', intent: { type: 'DELETE_LABEL', labelId: selectedLabelId } })
-    selectedLabelId = null
-    syncLabelEditor()
+    if (active?.tagName === 'INPUT' || active?.tagName === 'TEXTAREA' || (active as HTMLElement).isContentEditable) return
+    if (appRoute.mode !== 'canvas') return
+    const scene = currentScene
+    if (!scene) return
+
+    const segmentIds = scene.selectedSegmentIds ?? []
+    if (segmentIds.length > 0) {
+      event.preventDefault()
+      postToWorker({ type: 'INTENT', intent: { type: 'DELETE_ENTRY', segmentIds } })
+      return
+    }
+
+    const nodeIds = scene.selectedNodeIds ?? []
+    if (nodeIds.length > 0) {
+      event.preventDefault()
+      const roots = nodeIds.filter((nid) => {
+        const n = scene.nodes[nid]
+        if (!n?.parentNodeId) return true
+        return !nodeIds.includes(n.parentNodeId)
+      })
+      for (const nid of roots) {
+        postToWorker({ type: 'INTENT', intent: { type: 'DELETE_NODE', nodeId: nid } })
+      }
+      return
+    }
+
+    const groupIds = scene.selectedGroupIds ?? []
+    if (groupIds.length > 0) {
+      event.preventDefault()
+      for (const gid of groupIds) {
+        postToWorker({ type: 'INTENT', intent: { type: 'DELETE_GROUP', groupId: gid } })
+      }
+      return
+    }
+
+    const labelIds = scene.selectedLabelIds ?? []
+    if (labelIds.length > 0) {
+      event.preventDefault()
+      for (const labelId of labelIds) {
+        postToWorker({ type: 'INTENT', intent: { type: 'DELETE_LABEL', labelId } })
+      }
+      if (selectedLabelId && labelIds.includes(selectedLabelId)) {
+        selectedLabelId = null
+        syncLabelEditor()
+      }
+      return
+    }
+
+    if (selectedLabelId) {
+      event.preventDefault()
+      postToWorker({ type: 'INTENT', intent: { type: 'DELETE_LABEL', labelId: selectedLabelId } })
+      selectedLabelId = null
+      syncLabelEditor()
+    }
   }
 })
 

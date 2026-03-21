@@ -53,6 +53,17 @@ type NodeResizeDragData = {
   readonly resizeY: boolean
 }
 
+type PendingNodeHeaderData = {
+  readonly nodeId: string
+  readonly primaryNodeId: string
+  readonly startClientX: number
+  readonly startClientY: number
+  readonly handleView: Container
+  readonly primaryRoot: Container
+  readonly operationNodeIds: string[]
+  readonly visualNodeIds: string[]
+}
+
 type NodeReorderDragData = {
   readonly nodeIds: string[]
   readonly operationNodeIds: string[]
@@ -103,6 +114,7 @@ type MarqueeOriginScope =
 
 type ActiveDrag =
   | { type: 'idle' }
+  | { type: 'pendingNodeHeader'; state: PendingNodeHeaderData }
   | { type: 'pendingSegment'; segment: SceneSegmentVM; nodeId: string; startClientX: number; startClientY: number; addToSelection: boolean }
   | { type: 'segment'; state: SegmentDragState }
   | { type: 'group'; state: GroupDragData }
@@ -185,6 +197,8 @@ type NodeView = {
   readonly positionSpring: ReturnType<typeof createSpring2D>
   readonly slotFillLayer: Graphics
   readonly nodeBg: Graphics
+  /** Full-width top band hit target for click-to-select (gaps not covered by title/drag strip). */
+  headerSelectHit?: Graphics
   readonly segmentContainer: Container
   readonly runVisualsContainer: Container
   readonly contentContainer: Container
@@ -1646,8 +1660,10 @@ export class PixiBoardAdapter {
   private set activeDrag(next: ActiveDrag) {
     const prev = this._activeDrag
     this._activeDrag = next
-    const prevReal = prev.type !== 'idle' && prev.type !== 'pendingSegment'
-    const nextReal = next.type !== 'idle' && next.type !== 'pendingSegment'
+    const prevReal =
+      prev.type !== 'idle' && prev.type !== 'pendingSegment' && prev.type !== 'pendingNodeHeader'
+    const nextReal =
+      next.type !== 'idle' && next.type !== 'pendingSegment' && next.type !== 'pendingNodeHeader'
     if (!prevReal && nextReal) {
       this.handlers.onDragStart?.()
     } else if (prevReal && !nextReal) {
@@ -1688,6 +1704,8 @@ export class PixiBoardAdapter {
     | { key: string; atMs: number }
     | null = null
   private lastPointerPosition: { clientX: number; clientY: number } | null = null
+  /** Updated when the pointer moves over the canvas (world space; used for paste placement). */
+  private lastPointerWorld: { x: number; y: number } | null = null
   private autoPanRafId: number | null = null
   private cameraSaveTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -1831,6 +1849,15 @@ export class PixiBoardAdapter {
     }
 
     const onDown = (event: PointerEvent): void => {
+      const rectDown = this.app.canvas.getBoundingClientRect()
+      if (
+        event.clientX >= rectDown.left &&
+        event.clientX <= rectDown.right &&
+        event.clientY >= rectDown.top &&
+        event.clientY <= rectDown.bottom
+      ) {
+        this.lastPointerWorld = this.screenToWorld(event.clientX, event.clientY)
+      }
       if (event.button === 0 && this.activeDrag.type === 'idle') {
         const hitInteractive = this.hitTestSkipMarquee(event.clientX, event.clientY)
         if (!hitInteractive) {
@@ -1899,6 +1926,17 @@ export class PixiBoardAdapter {
           case 'pendingSegment':
             this.activeDrag = { type: 'idle' }
             return
+          case 'pendingNodeHeader': {
+            const { state } = this.activeDrag
+            const dx = event.clientX - state.startClientX
+            const dy = event.clientY - state.startClientY
+            if (Math.sqrt(dx * dx + dy * dy) <= DRAG_THRESHOLD_PX) {
+              this.finishPendingNodeHeaderAsClick(event.shiftKey)
+            } else {
+              this.activeDrag = { type: 'idle' }
+            }
+            return
+          }
           case 'idle':
             break
         }
@@ -1908,7 +1946,20 @@ export class PixiBoardAdapter {
     }
 
     const onMove = (event: PointerEvent): void => {
-      if (this.activeDrag.type !== 'idle' && this.activeDrag.type !== 'pendingSegment') {
+      const rectMove = this.app.canvas.getBoundingClientRect()
+      if (
+        event.clientX >= rectMove.left &&
+        event.clientX <= rectMove.right &&
+        event.clientY >= rectMove.top &&
+        event.clientY <= rectMove.bottom
+      ) {
+        this.lastPointerWorld = this.screenToWorld(event.clientX, event.clientY)
+      }
+      if (
+        this.activeDrag.type !== 'idle' &&
+        this.activeDrag.type !== 'pendingSegment' &&
+        this.activeDrag.type !== 'pendingNodeHeader'
+      ) {
         this.lastPointerPosition = { clientX: event.clientX, clientY: event.clientY }
       }
       switch (this.activeDrag.type) {
@@ -1944,6 +1995,23 @@ export class PixiBoardAdapter {
           const dy = event.clientY - startClientY
           if (Math.sqrt(dx * dx + dy * dy) > DRAG_THRESHOLD_PX) {
             this.beginSegmentDrag(segment, nodeId, event.clientX, event.clientY)
+          }
+          return
+        }
+        case 'pendingNodeHeader': {
+          const { state } = this.activeDrag
+          const dx = event.clientX - state.startClientX
+          const dy = event.clientY - state.startClientY
+          if (Math.sqrt(dx * dx + dy * dy) > DRAG_THRESHOLD_PX) {
+            this.startNodeReorderDragForNodeIds(
+              state.visualNodeIds,
+              state.operationNodeIds,
+              state.primaryNodeId,
+              state.primaryRoot,
+              state.handleView,
+              event.clientX,
+              event.clientY,
+            )
           }
           return
         }
@@ -2593,12 +2661,22 @@ export class PixiBoardAdapter {
       const c = cur as Container & {
         __segmentContext?: SegmentContext
         __dragHandle?: boolean
+        __nodeHeaderSelectHit?: boolean
         __groupHandle?: boolean
         __groupResizeHandle?: boolean
         __labelHandleId?: string
         __labelId?: string
       }
-      if (c.__segmentContext || c.__dragHandle || c.__groupHandle || c.__groupResizeHandle || c.__labelHandleId || c.__labelId) return true
+      if (
+        c.__segmentContext ||
+        c.__dragHandle ||
+        c.__nodeHeaderSelectHit ||
+        c.__groupHandle ||
+        c.__groupResizeHandle ||
+        c.__labelHandleId ||
+        c.__labelId
+      )
+        return true
       cur = cur.parent
     }
     return false
@@ -2629,8 +2707,8 @@ export class PixiBoardAdapter {
     if (!hit) return false
     let cur: Container | null = hit
     while (cur) {
-      const c = cur as Container & { __segmentContext?: SegmentContext; __dragHandle?: boolean }
-      if (c.__segmentContext || c.__dragHandle) return true
+      const c = cur as Container & { __segmentContext?: SegmentContext; __dragHandle?: boolean; __nodeHeaderSelectHit?: boolean }
+      if (c.__segmentContext || c.__dragHandle || c.__nodeHeaderSelectHit) return true
       cur = cur.parent
     }
     return false
@@ -2899,6 +2977,12 @@ export class PixiBoardAdapter {
     const x = (rect.width / 2 - this.pan.x) / this.zoom
     const y = (rect.height / 2 - this.pan.y) / this.zoom
     return { x, y }
+  }
+
+  /** World point under the pointer the last time it was over the canvas (fallback: viewport center). */
+  getLastPointerWorld(): { x: number; y: number } {
+    if (this.lastPointerWorld) return this.lastPointerWorld
+    return this.getWorldCenter()
   }
 
   getWorldPointAtClient(clientX: number, clientY: number): { x: number; y: number } {
@@ -3285,7 +3369,7 @@ export class PixiBoardAdapter {
   }
 
   private onSegmentPointerDown(segment: SceneSegmentVM, nodeId: string, clientX: number, clientY: number, addToSelection: boolean): void {
-    if (this.activeDrag.type !== 'idle') return
+    if (this.activeDrag.type !== 'idle' && this.activeDrag.type !== 'pendingNodeHeader') return
     this.activeDrag = {
       type: 'pendingSegment',
       segment,
@@ -3379,7 +3463,12 @@ export class PixiBoardAdapter {
   }
 
   private beginSegmentDrag(segment: SceneSegmentVM, sourceNodeId: string, clientX: number, clientY: number): void {
-    if (this.activeDrag.type !== 'idle' && this.activeDrag.type !== 'pendingSegment') return
+    if (
+      this.activeDrag.type !== 'idle' &&
+      this.activeDrag.type !== 'pendingSegment' &&
+      this.activeDrag.type !== 'pendingNodeHeader'
+    )
+      return
     if (!this.currentScene) return
     const sourceNode = this.currentScene.nodes[sourceNodeId]
     const sourceGroupId = sourceNode?.groupId ?? null
@@ -3736,6 +3825,16 @@ export class PixiBoardAdapter {
         spring.targetY = pos.y
         segView = { container: segContainer, spring }
         segmentViews.set(segment.id, segView)
+        if (this.skipSegmentAnimationOnce.delete(segment.id)) {
+          segView.spring.x = pos.x
+          segView.spring.y = pos.y
+          segView.spring.targetX = pos.x
+          segView.spring.targetY = pos.y
+          segView.spring.vx = 0
+          segView.spring.vy = 0
+          segView.spring.active = false
+          segContainer.position.set(pos.x, pos.y)
+        }
         const hovered = segment.id === hoveredSegmentId
         if (segment.isWornPill) {
           this.drawWornPill(segContainer, segment, node.id, hovered, tier, textCompensationScale)
@@ -3762,7 +3861,10 @@ export class PixiBoardAdapter {
             this.handlers.onSegmentClick,
             this.handlers.onSegmentDoubleClick,
             () => this.lastDragEndTime,
-            () => this.activeDrag.type === 'idle' || this.activeDrag.type === 'pendingSegment',
+            () =>
+              this.activeDrag.type === 'idle' ||
+              this.activeDrag.type === 'pendingSegment' ||
+              this.activeDrag.type === 'pendingNodeHeader',
             mergedIds.has(segment.id),
             layoutCols,
           )
@@ -3807,7 +3909,10 @@ export class PixiBoardAdapter {
             this.handlers.onSegmentClick,
             this.handlers.onSegmentDoubleClick,
             () => this.lastDragEndTime,
-            () => this.activeDrag.type === 'idle' || this.activeDrag.type === 'pendingSegment',
+            () =>
+              this.activeDrag.type === 'idle' ||
+              this.activeDrag.type === 'pendingSegment' ||
+              this.activeDrag.type === 'pendingNodeHeader',
             mergedIds.has(segment.id),
             layoutCols,
           )
@@ -3891,6 +3996,22 @@ export class PixiBoardAdapter {
     speedBar.roundRect(0, 0, 6, totalHeight, 3)
     speedBar.fill({ color: speedColor, alpha: 0.92 })
     contentContainer.addChild(speedBar)
+
+    const headerSelectHit = new Graphics()
+    headerSelectHit.roundRect(0, 0, totalWidth, TOP_BAND_H, 0)
+    headerSelectHit.fill({ color: 0xffffff, alpha: 0.001 })
+    headerSelectHit.eventMode = 'static'
+    headerSelectHit.cursor = 'default'
+    ;(headerSelectHit as Container & { __nodeHeaderSelectHit?: boolean }).__nodeHeaderSelectHit = true
+    headerSelectHit.on('pointerdown', (event: any) => {
+      if (event.button !== 0 || this.activeDrag.type !== 'idle' || !this.currentScene) return
+      const canvasRect = this.app.canvas.getBoundingClientRect()
+      const clientX = typeof event.clientX === 'number' ? event.clientX : event.global.x + canvasRect.left
+      const clientY = typeof event.clientY === 'number' ? event.clientY : event.global.y + canvasRect.top
+      this.beginPendingNodeHeaderSelect(node.id, headerSelectHit, root, clientX, clientY)
+      event.stopPropagation()
+    })
+    contentContainer.addChild(headerSelectHit)
 
     const dragHandle = new Graphics()
     dragHandle.eventMode = 'static'
@@ -4153,6 +4274,7 @@ export class PixiBoardAdapter {
       positionSpring,
       slotFillLayer,
       nodeBg: bg,
+      headerSelectHit,
       segmentContainer,
       runVisualsContainer,
       contentContainer,
@@ -4267,6 +4389,11 @@ export class PixiBoardAdapter {
     this.drawNodePanelBackground(view.nodeBg, totalWidth, layoutTotalHeight, pasteHi)
     ;(view as NodeView).totalWidth = totalWidth
     ;(view as NodeView).totalHeight = layoutTotalHeight
+    if (view.headerSelectHit) {
+      view.headerSelectHit.clear()
+      view.headerSelectHit.roundRect(0, 0, totalWidth, TOP_BAND_H, 0)
+      view.headerSelectHit.fill({ color: 0xffffff, alpha: 0.001 })
+    }
     redrawNodeSlotFillLayer(
       view.slotFillLayer,
       node,
@@ -4322,14 +4449,72 @@ export class PixiBoardAdapter {
     )
   }
 
+  private beginPendingNodeHeaderSelect(
+    nodeId: string,
+    handleView: Container,
+    primaryRoot: Container,
+    clientX: number,
+    clientY: number,
+  ): void {
+    if (!this.currentScene) return
+    this.handlers.onHoverSegment(null)
+    this.hideTooltip()
+    const selectedNodeIds = this.currentScene.selectedNodeIds ?? []
+    const useMultiSelect = selectedNodeIds.includes(nodeId)
+    const operationNodeIds = useMultiSelect ? [...selectedNodeIds] : [nodeId]
+    const visualNodeIds: string[] = []
+    for (const nid of operationNodeIds) {
+      visualNodeIds.push(nid)
+      for (const n of Object.values(this.currentScene.nodes)) {
+        if (n.parentNodeId === nid && !visualNodeIds.includes(n.id)) visualNodeIds.push(n.id)
+      }
+    }
+    const primaryNodeId = operationNodeIds.includes(nodeId) ? nodeId : operationNodeIds[0]
+    this.activeDrag = {
+      type: 'pendingNodeHeader',
+      state: {
+        nodeId,
+        primaryNodeId,
+        startClientX: clientX,
+        startClientY: clientY,
+        handleView,
+        primaryRoot,
+        operationNodeIds,
+        visualNodeIds,
+      },
+    }
+  }
+
+  private finishPendingNodeHeaderAsClick(shiftKey: boolean): void {
+    if (this.activeDrag.type !== 'pendingNodeHeader') return
+    const { nodeId } = this.activeDrag.state
+    this.activeDrag = { type: 'idle' }
+    this.handlers.onMarqueeSelect?.(
+      { segmentIds: [], nodeIds: [nodeId], groupIds: [], labelIds: [] },
+      shiftKey,
+    )
+  }
+
   private enableDrag(handleView: Container, nodeContainer: Container, nodeId: string): void {
     handleView.on('pointerdown', (event) => {
       if (event.button !== 0 || this.activeDrag.type !== 'idle' || !this.currentScene) return
-      this.handlers.onHoverSegment(null)
-      this.hideTooltip()
       const selectedNodeIds = this.currentScene.selectedNodeIds ?? []
       const useMultiSelect = selectedNodeIds.includes(nodeId)
       const operationNodeIds = useMultiSelect ? [...selectedNodeIds] : [nodeId]
+      const primaryNodeId = operationNodeIds.includes(nodeId) ? nodeId : operationNodeIds[0]
+      const primaryView = this.nodeViews.get(primaryNodeId)
+      const container = primaryView?.root ?? nodeContainer
+      const canvasRect = this.app.canvas.getBoundingClientRect()
+      const clientX = typeof event.clientX === 'number' ? event.clientX : event.global.x + canvasRect.left
+      const clientY = typeof event.clientY === 'number' ? event.clientY : event.global.y + canvasRect.top
+      const localInHandle = event.getLocalPosition(handleView)
+      if (localInHandle.y < TOP_BAND_H) {
+        this.beginPendingNodeHeaderSelect(nodeId, handleView, container, clientX, clientY)
+        event.stopPropagation()
+        return
+      }
+      this.handlers.onHoverSegment(null)
+      this.hideTooltip()
       const nodeIds: string[] = []
       for (const nid of operationNodeIds) {
         nodeIds.push(nid)
@@ -4337,12 +4522,6 @@ export class PixiBoardAdapter {
           if (n.parentNodeId === nid && !nodeIds.includes(n.id)) nodeIds.push(n.id)
         }
       }
-      const primaryNodeId = operationNodeIds.includes(nodeId) ? nodeId : operationNodeIds[0]
-      const primaryView = this.nodeViews.get(primaryNodeId)
-      const container = primaryView?.root ?? nodeContainer
-      const canvasRect = this.app.canvas.getBoundingClientRect()
-      const clientX = typeof event.clientX === 'number' ? event.clientX : event.global.x + canvasRect.left
-      const clientY = typeof event.clientY === 'number' ? event.clientY : event.global.y + canvasRect.top
       this.startNodeReorderDragForNodeIds(nodeIds, operationNodeIds, primaryNodeId, container, handleView, clientX, clientY)
       event.stopPropagation()
     })
@@ -4550,7 +4729,10 @@ export class PixiBoardAdapter {
       this.handlers.onSegmentClick,
       this.handlers.onSegmentDoubleClick,
       () => this.lastDragEndTime,
-      () => this.activeDrag.type === 'idle' || this.activeDrag.type === 'pendingSegment',
+      () =>
+        this.activeDrag.type === 'idle' ||
+        this.activeDrag.type === 'pendingSegment' ||
+        this.activeDrag.type === 'pendingNodeHeader',
     )
     const parent = free.groupId
       ? this.groupViews.get(free.groupId)?.root ?? this.worldLayer
@@ -5631,7 +5813,21 @@ export class PixiBoardAdapter {
     return this.getGroupCollapsedDimensions(group)
   }
 
-  applyPatches(patches: readonly ScenePatch[], scene: SceneVM): void {
+  applyPatches(
+    patches: readonly ScenePatch[],
+    scene: SceneVM,
+    options?: { readonly snapSegmentIds?: readonly string[]; readonly snapNodeIds?: readonly string[] },
+  ): void {
+    if (options?.snapSegmentIds?.length) {
+      for (const id of options.snapSegmentIds) {
+        this.skipSegmentAnimationOnce.add(id)
+      }
+    }
+    if (options?.snapNodeIds?.length) {
+      for (const id of options.snapNodeIds) {
+        this.skipNodeAnimationOnce.add(id)
+      }
+    }
     const prevGroups = this.currentScene?.groups ?? {}
     const moved = new Set<string>()
     for (const [gid, g] of Object.entries(scene.groups ?? {})) {
