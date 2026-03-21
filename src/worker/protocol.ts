@@ -337,9 +337,9 @@ export type WorkerToMainMessage =
       readonly type: 'SCENE_PATCHES'
       readonly patches: readonly ScenePatch[]
       readonly scene: SceneVM
-      /** Segment ids that should appear without spring-in (e.g. paste / add-items batch). */
+      /** Segment ids the originating client treats as local "originator" (snap until stable); others may still spring. */
       readonly snapSegmentIds?: readonly string[]
-      /** Inventory node ids that should appear without position spring-in (e.g. node clipboard paste). */
+      /** Node ids same provenance as snapSegmentIds for pasted/moved inventory panels. */
       readonly snapNodeIds?: readonly string[]
     }
   | { readonly type: 'LOG'; readonly message: string }

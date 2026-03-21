@@ -95,11 +95,6 @@ type ConnectorDragData = {
   targetNodeId: string | null
 }
 
-type DragMotionTransaction = {
-  readonly transactionId: number
-  readonly remainingNodeIds: Set<string>
-}
-
 type MarqueeSelection = {
   readonly segmentIds: string[]
   readonly nodeIds: string[]
@@ -1694,10 +1689,22 @@ export class PixiBoardAdapter {
   private readonly layoutExpandedState = new Map<string, boolean>()
   private readonly nodeDisplayOffsetY = new Map<string, number>()
   private readonly groupDisplayHeights = new Map<string, number>()
-  private readonly skipNodeAnimationOnce = new Set<string>()
-  private readonly skipSegmentAnimationOnce = new Set<string>()
-  private nextDragMotionTransactionId = 1
-  private dragMotionTransaction: DragMotionTransaction | null = null
+  /**
+   * Local-only: segments the user directly moved or that are the primary subject of an operation
+   * (paste, drop). They snap to layout until two consecutive reconciles share the same position;
+   * collateral segments use springs.
+   */
+  private readonly originatorSegmentIds = new Set<string>()
+  private readonly originatorSegmentLayoutLastPos = new Map<string, { x: number; y: number }>()
+  /**
+   * Same provenance model as segments; node drag-drop and paste snap nodes use this set.
+   */
+  private readonly originatorNodeIds = new Set<string>()
+  private readonly originatorNodeLayoutLastPos = new Map<string, { x: number; y: number }>()
+  /** Worker will apply scene; defer rebuild so we do not snap to stale positions. */
+  private pendingDragNodeMoveCommit = false
+  /** Pasted/spawn segments: hidden until layout settles (avoids spring flash). */
+  private readonly pendingSnapSegmentRevealIds = new Set<string>()
   private readonly hiddenNodeContentIds = new Set<string>()
   private editingTitle: { type: 'node' | 'group'; id: string } | null = null
   private lastTitleTap:
@@ -3684,8 +3691,10 @@ export class PixiBoardAdapter {
 
     const anyDifferentSource = drag.segmentIds.some((id) => drag.sourceNodeIds[id] !== targetNodeId)
     const effectiveTarget = targetNodeId && anyDifferentSource ? targetNodeId : null
-    this.skipSegmentAnimationOnce.clear()
-    drag.segmentIds.forEach((segmentId) => this.skipSegmentAnimationOnce.add(segmentId))
+    drag.segmentIds.forEach((segmentId) => {
+      this.originatorSegmentIds.add(segmentId)
+      this.resetOriginatorSegmentTracking(segmentId)
+    })
     let dropX: number | undefined
     let dropY: number | undefined
     let freeSegmentPositions: Record<string, { x: number; y: number }> | undefined
@@ -3794,6 +3803,49 @@ export class PixiBoardAdapter {
     container.addChild(hit)
   }
 
+  private snapSegmentSpringToLayout(segView: SegmentView, pos: { x: number; y: number }): void {
+    segView.spring.x = pos.x
+    segView.spring.y = pos.y
+    segView.spring.targetX = pos.x
+    segView.spring.targetY = pos.y
+    segView.spring.vx = 0
+    segView.spring.vy = 0
+    segView.spring.active = false
+  }
+
+  /** After two consecutive reconciles with the same layout position, stop treating the segment as originator. */
+  private recordOriginatorSegmentLayoutStable(segmentId: string, pos: { x: number; y: number }): void {
+    if (!this.originatorSegmentIds.has(segmentId)) return
+    const last = this.originatorSegmentLayoutLastPos.get(segmentId)
+    const eps = 0.5
+    if (last && Math.abs(last.x - pos.x) < eps && Math.abs(last.y - pos.y) < eps) {
+      this.originatorSegmentIds.delete(segmentId)
+      this.originatorSegmentLayoutLastPos.delete(segmentId)
+      return
+    }
+    this.originatorSegmentLayoutLastPos.set(segmentId, { ...pos })
+  }
+
+  private resetOriginatorSegmentTracking(segmentId: string): void {
+    this.originatorSegmentLayoutLastPos.delete(segmentId)
+  }
+
+  private recordOriginatorNodeLayoutStable(nodeId: string, pos: { x: number; y: number }): void {
+    if (!this.originatorNodeIds.has(nodeId)) return
+    const last = this.originatorNodeLayoutLastPos.get(nodeId)
+    const eps = 0.5
+    if (last && Math.abs(last.x - pos.x) < eps && Math.abs(last.y - pos.y) < eps) {
+      this.originatorNodeIds.delete(nodeId)
+      this.originatorNodeLayoutLastPos.delete(nodeId)
+      return
+    }
+    this.originatorNodeLayoutLastPos.set(nodeId, { ...pos })
+  }
+
+  private resetOriginatorNodeTracking(nodeId: string): void {
+    this.originatorNodeLayoutLastPos.delete(nodeId)
+  }
+
   private reconcileSegmentViews(
     node: SceneNodeVM,
     segmentViews: Map<string, SegmentView>,
@@ -3816,6 +3868,7 @@ export class PixiBoardAdapter {
       const pos = segment.isWornPill
         ? (pillPositions.get(segment.id) ?? { x: SLOT_START_X, y: TOP_BAND_H + WORN_PILL_STRIP_PAD_TOP })
         : { x: unshiftedPos!.x, y: unshiftedPos!.y + pillStripHeight }
+      const originator = this.originatorSegmentIds.has(segment.id)
       let segView = segmentViews.get(segment.id)
       if (!segView) {
         const segContainer = new Container()
@@ -3825,14 +3878,8 @@ export class PixiBoardAdapter {
         spring.targetY = pos.y
         segView = { container: segContainer, spring }
         segmentViews.set(segment.id, segView)
-        if (this.skipSegmentAnimationOnce.delete(segment.id)) {
-          segView.spring.x = pos.x
-          segView.spring.y = pos.y
-          segView.spring.targetX = pos.x
-          segView.spring.targetY = pos.y
-          segView.spring.vx = 0
-          segView.spring.vy = 0
-          segView.spring.active = false
+        if (originator) {
+          this.snapSegmentSpringToLayout(segView, pos)
           segContainer.position.set(pos.x, pos.y)
         }
         const hovered = segment.id === hoveredSegmentId
@@ -3869,18 +3916,19 @@ export class PixiBoardAdapter {
             layoutCols,
           )
         }
+        if (this.pendingSnapSegmentRevealIds.has(segment.id)) {
+          segContainer.visible = false
+        }
         parentContainer.addChild(segContainer)
       } else {
-        setSpringTarget(segView.spring, pos.x, pos.y)
-        if (this.skipSegmentAnimationOnce.delete(segment.id)) {
-          segView.spring.x = pos.x
-          segView.spring.y = pos.y
-          segView.spring.targetX = pos.x
-          segView.spring.targetY = pos.y
-          segView.spring.vx = 0
-          segView.spring.vy = 0
-          segView.spring.active = false
+        if (this.pendingSnapSegmentRevealIds.has(segment.id)) {
+          segView.container.visible = false
+        }
+        if (originator) {
+          this.snapSegmentSpringToLayout(segView, pos)
           segView.container.position.set(pos.x, pos.y)
+        } else {
+          setSpringTarget(segView.spring, pos.x, pos.y)
         }
         const hovered = segment.id === hoveredSegmentId
         segView.container.removeChildren()
@@ -3917,6 +3965,9 @@ export class PixiBoardAdapter {
             layoutCols,
           )
         }
+      }
+      if (originator) {
+        this.recordOriginatorSegmentLayoutStable(segment.id, pos)
       }
     })
   }
@@ -4305,11 +4356,11 @@ export class PixiBoardAdapter {
     hoveredSegmentId: string | null,
     filterCategory: string | null,
     selectedSegmentIds: readonly string[],
-    consumeSkipNodeAnimation = true,
   ): void {
     const displayPos = this.getNodeDisplayPosition(node)
+    const wasOriginatorNode = this.originatorNodeIds.has(node.id)
     setSpringTarget(view.positionSpring, displayPos.x, displayPos.y)
-    const skipNodeAnimation = this.shouldSuppressNodeAnimation(node.id, consumeSkipNodeAnimation)
+    const skipNodeAnimation = wasOriginatorNode
     const currentPos = { x: view.root.position.x, y: view.root.position.y }
     const positionChanged = currentPos.x !== displayPos.x || currentPos.y !== displayPos.y
     const isInListViewGroup = !!(node.groupId && this.currentScene?.groups?.[node.groupId]?.listViewEnabled)
@@ -4447,6 +4498,9 @@ export class PixiBoardAdapter {
       hoveredSegmentId, filterCategory, selectedSegmentIds,
       tier, textCompensationScale, mergedIds,
     )
+    if (wasOriginatorNode) {
+      this.recordOriginatorNodeLayoutStable(node.id, displayPos)
+    }
   }
 
   private beginPendingNodeHeaderSelect(
@@ -4738,6 +4792,9 @@ export class PixiBoardAdapter {
       ? this.groupViews.get(free.groupId)?.root ?? this.worldLayer
       : this.worldLayer
     parent.addChild(root)
+    if (this.pendingSnapSegmentRevealIds.has(free.id)) {
+      root.visible = false
+    }
     return { root }
   }
 
@@ -4999,7 +5056,6 @@ export class PixiBoardAdapter {
     }
     drag.handleView.cursor = 'grab'
     this.groupDropIndicator.clear()
-    this.skipNodeAnimationOnce.clear()
     const operationNodeIds = drag.operationNodeIds.length > 0 ? drag.operationNodeIds : [drag.primaryNodeId]
     const isSingleOp = operationNodeIds.length === 1
     const isNoOp = !isSingleOp
@@ -5033,7 +5089,11 @@ export class PixiBoardAdapter {
         }
       }
     } else {
-      this.beginDragMotionTransaction(drag.nodeIds)
+      this.pendingDragNodeMoveCommit = true
+      for (const nodeId of drag.nodeIds) {
+        this.originatorNodeIds.add(nodeId)
+        this.resetOriginatorNodeTracking(nodeId)
+      }
       if (drag.targetContainNodeId) {
       const nodeIds = operationNodeIds.filter((nodeId) => nodeId !== drag.targetContainNodeId)
       if (this.handlers.onDropNodesIntoNode) {
@@ -5133,29 +5193,6 @@ export class PixiBoardAdapter {
     this.endDrag()
   }
 
-  private beginDragMotionTransaction(nodeIds: readonly string[]): void {
-    const uniqueIds = [...new Set(nodeIds)]
-    this.dragMotionTransaction = {
-      transactionId: this.nextDragMotionTransactionId++,
-      remainingNodeIds: new Set(uniqueIds),
-    }
-  }
-
-  private shouldSuppressNodeAnimation(nodeId: string, consume: boolean): boolean {
-    const txn = this.dragMotionTransaction
-    if (txn && txn.remainingNodeIds.has(nodeId)) {
-      if (consume) {
-        txn.remainingNodeIds.delete(nodeId)
-        if (txn.remainingNodeIds.size === 0) {
-          this.dragMotionTransaction = null
-        }
-      }
-      return true
-    }
-    if (consume) return this.skipNodeAnimationOnce.delete(nodeId)
-    return this.skipNodeAnimationOnce.has(nodeId)
-  }
-
   private setNodeContentVisibility(nodeIds: readonly string[], visible: boolean): void {
     nodeIds.forEach((nodeId) => {
       const view = this.nodeViews.get(nodeId)
@@ -5184,19 +5221,19 @@ export class PixiBoardAdapter {
     }
     this.activeDrag = { type: 'idle' }
     if (this.pendingRebuild && this.currentScene) {
-      if (this.dragMotionTransaction) {
-        // A move intent is in flight to the worker. Defer the rebuild so we don't
+      if (this.pendingDragNodeMoveCommit) {
+        // Move intent is in flight to the worker. Defer the rebuild so we don't
         // snap nodes back to stale scene positions; the next applyPatches will
         // flush it with the correct scene data.
         return
       }
-      this.rebuildAllNodes(this.currentScene, false)
+      this.rebuildAllNodes(this.currentScene)
       this.startSpringTicker()
       this.pendingRebuild = false
     }
   }
 
-  private rebuildAllNodes(scene: SceneVM, consumeSkipNodeAnimation = true): void {
+  private rebuildAllNodes(scene: SceneVM): void {
     if (!this.fontsLoaded) return
     this.recomputeDisplayFlow(scene)
     const previousNodePositions = new Map<string, { x: number; y: number }>()
@@ -5233,6 +5270,7 @@ export class PixiBoardAdapter {
     const filterCategory = scene.filterCategory ?? null
     const selectedSegmentIds = scene.selectedSegmentIds ?? []
     Object.values(scene.nodes).forEach((node) => {
+      const wasOriginatorNode = this.originatorNodeIds.has(node.id)
       const previousNodeSize = previousNodeSizes.get(node.id)
       const targetDims = this.getNodeDisplayDimensions(node)
       const previousSize =
@@ -5252,7 +5290,7 @@ export class PixiBoardAdapter {
       const positionChanged = previousPos
         ? (previousPos.x !== displayPos.x || previousPos.y !== displayPos.y)
         : false
-      const skipNodeAnimation = this.shouldSuppressNodeAnimation(node.id, consumeSkipNodeAnimation)
+      const skipNodeAnimation = this.originatorNodeIds.has(node.id)
       const isInListViewGroup = !!(node.groupId && scene.groups?.[node.groupId]?.listViewEnabled)
       const isGroupTranslation = !!(node.groupId && this.movedGroupIds.has(node.groupId))
       const motion = decideNodeMotion({
@@ -5284,6 +5322,9 @@ export class PixiBoardAdapter {
             view.root.position.set(previousPos.x, previousPos.y)
           }
         }
+      }
+      if (wasOriginatorNode) {
+        this.recordOriginatorNodeLayoutStable(node.id, displayPos)
       }
       this.nodeViews.set(node.id, view)
     })
@@ -5349,6 +5390,12 @@ export class PixiBoardAdapter {
     this.syncExpandStateFromScene(scene)
     this.recomputeDisplayFlow(scene)
     this.paceText.text = `Party ${scene.partyPaceText}`
+    this.pendingSnapSegmentRevealIds.clear()
+    this.originatorSegmentIds.clear()
+    this.originatorSegmentLayoutLastPos.clear()
+    this.originatorNodeIds.clear()
+    this.originatorNodeLayoutLastPos.clear()
+    this.pendingDragNodeMoveCommit = false
     this.rebuildAllNodes(scene)
   }
 
@@ -5818,14 +5865,19 @@ export class PixiBoardAdapter {
     scene: SceneVM,
     options?: { readonly snapSegmentIds?: readonly string[]; readonly snapNodeIds?: readonly string[] },
   ): void {
+    // Worker still sends snapSegmentIds / snapNodeIds; on this client they mean "you originated
+    // this placement." Remotes may animate everyone; local originators snap until layout stabilizes.
     if (options?.snapSegmentIds?.length) {
       for (const id of options.snapSegmentIds) {
-        this.skipSegmentAnimationOnce.add(id)
+        this.originatorSegmentIds.add(id)
+        this.resetOriginatorSegmentTracking(id)
+        this.pendingSnapSegmentRevealIds.add(id)
       }
     }
     if (options?.snapNodeIds?.length) {
       for (const id of options.snapNodeIds) {
-        this.skipNodeAnimationOnce.add(id)
+        this.originatorNodeIds.add(id)
+        this.resetOriginatorNodeTracking(id)
       }
     }
     const prevGroups = this.currentScene?.groups ?? {}
@@ -5839,7 +5891,8 @@ export class PixiBoardAdapter {
     this.currentScene = scene
     this.syncExpandStateFromScene(scene)
     this.recomputeDisplayFlow(scene)
-    let needsFullRebuild = false
+    let needsFullRebuild =
+      patches.length === 0 && (!!options?.snapSegmentIds?.length || !!options?.snapNodeIds?.length)
     let metaChanged = false
     patches.forEach((patch) => {
       if (patch.type === 'UPDATE_META') {
@@ -5861,6 +5914,7 @@ export class PixiBoardAdapter {
             scene.filterCategory ?? null,
             scene.selectedSegmentIds ?? [],
           )
+          this.pendingDragNodeMoveCommit = false
           this.updateSelectionOverlay()
           this.startSpringTicker()
         } else {
@@ -5890,6 +5944,7 @@ export class PixiBoardAdapter {
           scene.selectedSegmentIds ?? [],
         )
       }
+      this.pendingDragNodeMoveCommit = false
       this.updateSelectionOverlay()
       this.startSpringTicker()
     }
@@ -5899,8 +5954,39 @@ export class PixiBoardAdapter {
       } else {
         this.pendingRebuild = false
         this.rebuildAllNodes(scene)
+        this.pendingDragNodeMoveCommit = false
         this.startSpringTicker()
       }
+    }
+    if (this.pendingSnapSegmentRevealIds.size > 0) {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => this.flushPendingSnapSegmentReveal())
+      })
+    }
+  }
+
+  /** Show pasted/spawned segments after layout; retries if rebuild was deferred. */
+  private flushPendingSnapSegmentReveal(attempt = 0): void {
+    if (this.pendingSnapSegmentRevealIds.size === 0) return
+    const ids = [...this.pendingSnapSegmentRevealIds]
+    for (const id of ids) {
+      let found = false
+      for (const view of this.nodeViews.values()) {
+        const sv = view.segmentViews.get(id)
+        if (sv) {
+          sv.container.visible = true
+          found = true
+        }
+      }
+      const free = this.freeSegmentViews.get(id)
+      if (free) {
+        free.root.visible = true
+        found = true
+      }
+      if (found) this.pendingSnapSegmentRevealIds.delete(id)
+    }
+    if (this.pendingSnapSegmentRevealIds.size > 0 && attempt < 20) {
+      requestAnimationFrame(() => this.flushPendingSnapSegmentReveal(attempt + 1))
     }
   }
 

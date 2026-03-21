@@ -719,10 +719,11 @@ const recompute = (sendInitIfFirst = false): void => {
     pendingSnapNodeIdsAfterPaste = null
     if (snapNodeIds.length === 0) snapNodeIds = undefined
   }
-  if (patches.length > 0) {
+  const hasSnap = (snapSegmentIds?.length ?? 0) > 0 || (snapNodeIds?.length ?? 0) > 0
+  if (patches.length > 0 || hasSnap) {
     post({
       type: 'SCENE_PATCHES',
-      patches,
+      patches: patches.length > 0 ? patches : [],
       scene: nextScene,
       ...(snapSegmentIds?.length ? { snapSegmentIds } : {}),
       ...(snapNodeIds?.length ? { snapNodeIds } : {}),
