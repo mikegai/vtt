@@ -9,6 +9,12 @@ import {
 import { resolveAddItemsCatalogMatch } from './domain/add-items-catalog-match'
 import { buildInventoryLlmPrompt } from './domain/inventory-llm-prompt'
 import {
+  applyPasteTargetToInventoryOpsDoc,
+  buildInventoryOpsClipboardFromSegments,
+} from './domain/clipboard-inventory-ops'
+import { VTT_CLIPBOARD_NODES_V1 } from './domain/clipboard-nodes'
+import {
+  INVENTORY_OPS_SCHEMA_V1,
   parseInventoryOpsDocument,
   unwrapPastedInventoryJson,
   type InventoryItemInput,
@@ -1877,6 +1883,9 @@ const pixiAdapter = new PixiBoardAdapter(canvasHost, {
   onDragEnd() {
     postToWorker({ type: 'INTENT', intent: { type: 'DRAG_END' } })
   },
+  onSetPasteTargetNode(nodeId) {
+    postToWorker({ type: 'INTENT', intent: { type: 'SET_PASTE_TARGET_NODE', nodeId } })
+  },
 })
 
 applyRouteBoardRender = (): void => {
@@ -1884,6 +1893,15 @@ applyRouteBoardRender = (): void => {
 }
 
 let pendingCameraRestore: { panX: number; panY: number; zoom: number } | null = null
+
+const pendingClipboardResolvers = new Map<string, (payload: string) => void>()
+
+const requestNodeClipboardExport = (): Promise<string> =>
+  new Promise((resolve) => {
+    const requestId = `cb_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`
+    pendingClipboardResolvers.set(requestId, resolve)
+    postToWorker({ type: 'CLIPBOARD_EXPORT', requestId })
+  })
 
 vmWorker.onmessage = (event: MessageEvent<WorkerToMainMessage>) => {
   const msg = event.data
@@ -1897,6 +1915,14 @@ vmWorker.onmessage = (event: MessageEvent<WorkerToMainMessage>) => {
     if (resolve) {
       pendingCatalogResolvers.delete(msg.requestId)
       resolve(msg.definitions)
+    }
+    return
+  }
+  if (msg.type === 'CLIPBOARD_EXPORT_RESULT') {
+    const resolve = pendingClipboardResolvers.get(msg.requestId)
+    if (resolve) {
+      pendingClipboardResolvers.delete(msg.requestId)
+      resolve(msg.payload)
     }
     return
   }
@@ -2368,14 +2394,20 @@ const renderAddItemsRows = (): void => {
   applyBtn.disabled = !canApply
 }
 
-const applyAddItemsRowsToNode = (
+const buildApplyAddItemsPayload = (
   rows: readonly ParsedAddItemsRow[],
-  mode: 'auto' | 'manual',
-  options?: { readonly closeDialog?: boolean },
-): void => {
-  if (!addItemsTargetNodeId) return
+): readonly {
+  itemDefId: string
+  itemName: string
+  quantity: number
+  sixthsPerUnit?: number
+  itemKind?: string
+  armorClass?: number
+  wornClothing?: boolean
+  zoneHint?: CarryZone
+}[] => {
   const spawnRows = rows.filter((row) => row.itemDefId)
-  const items = spawnRows.map((row) => {
+  return spawnRows.map((row) => {
     const wornCustomId = `custom:worn-${slugify(row.itemName || row.raw || row.id)}`
     if (row.wornClothing) {
       return {
@@ -2407,17 +2439,149 @@ const applyAddItemsRowsToNode = (
       zoneHint: row.zoneHint,
     }
   })
+}
+
+const postApplyAddItemsOp = (targetNodeId: string, rows: readonly ParsedAddItemsRow[]): void => {
+  const items = buildApplyAddItemsPayload(rows)
   postToWorker({
     type: 'INTENT',
     intent: {
       type: 'APPLY_ADD_ITEMS_OP',
-      targetNodeId: addItemsTargetNodeId,
+      targetNodeId,
       items,
     },
   })
+}
+
+const applyAddItemsRowsToNode = (
+  rows: readonly ParsedAddItemsRow[],
+  mode: 'auto' | 'manual',
+  options?: { readonly closeDialog?: boolean },
+): void => {
+  if (!addItemsTargetNodeId) return
+  postApplyAddItemsOp(addItemsTargetNodeId, rows)
   if (options?.closeDialog !== false) {
     addItemsDialog.close(mode === 'auto' ? 'auto' : 'manual')
   }
+}
+
+const isUnknownRecord = (v: unknown): v is Record<string, unknown> =>
+  !!v && typeof v === 'object' && !Array.isArray(v)
+
+const resolvePasteTargetNodeId = (scene: SceneVM | null): string | null => {
+  if (!scene) return null
+  if (scene.pasteTargetNodeId && scene.nodes[scene.pasteTargetNodeId]) return scene.pasteTargetNodeId
+  if (scene.hoveredSegmentId) {
+    const sid = scene.hoveredSegmentId
+    const free = scene.freeSegments?.[sid]
+    if (free) return free.nodeId
+    for (const n of Object.values(scene.nodes)) {
+      if (n.segments.some((s) => s.id === sid)) return n.id
+    }
+  }
+  if (scene.selectedSegmentIds.length > 0) {
+    const sid = scene.selectedSegmentIds[0]
+    const free = scene.freeSegments?.[sid]
+    if (free) return free.nodeId
+    for (const n of Object.values(scene.nodes)) {
+      if (n.segments.some((s) => s.id === sid)) return n.id
+    }
+  }
+  if (scene.selectedNodeIds.length === 1) return scene.selectedNodeIds[0] ?? null
+  return null
+}
+
+const copySelectedSegmentsToClipboard = async (): Promise<void> => {
+  const scene = currentScene
+  if (!scene?.selectedSegmentIds?.length) return
+  const doc = buildInventoryOpsClipboardFromSegments(scene, scene.selectedSegmentIds)
+  if (!doc) return
+  try {
+    await navigator.clipboard.writeText(JSON.stringify(doc, null, 2))
+  } catch (e) {
+    console.warn('[clipboard] copy failed', e)
+  }
+}
+
+const cutSelectedSegments = async (): Promise<void> => {
+  await copySelectedSegmentsToClipboard()
+  const ids = currentScene?.selectedSegmentIds ?? []
+  if (ids.length === 0) return
+  postToWorker({ type: 'INTENT', intent: { type: 'DELETE_ENTRY', segmentIds: ids } })
+}
+
+const copySelectedNodesToClipboard = async (): Promise<void> => {
+  const ids = currentScene?.selectedNodeIds ?? []
+  if (ids.length === 0) return
+  const payload = await requestNodeClipboardExport()
+  if (!payload) return
+  try {
+    await navigator.clipboard.writeText(payload)
+  } catch (e) {
+    console.warn('[clipboard] copy nodes failed', e)
+  }
+}
+
+const cutSelectedNodes = async (): Promise<void> => {
+  await copySelectedNodesToClipboard()
+  const ids = currentScene?.selectedNodeIds ?? []
+  if (ids.length === 0) return
+  const roots = ids.filter((nid) => {
+    const n = currentScene?.nodes[nid]
+    if (!n?.parentNodeId) return true
+    return !ids.includes(n.parentNodeId)
+  })
+  for (const nid of roots) {
+    postToWorker({ type: 'INTENT', intent: { type: 'DELETE_NODE', nodeId: nid } })
+  }
+}
+
+const pasteFromSystemClipboard = async (): Promise<void> => {
+  let text: string
+  try {
+    text = await navigator.clipboard.readText()
+  } catch (e) {
+    console.warn('[clipboard] read failed', e)
+    return
+  }
+  const raw = unwrapPastedInventoryJson(text)
+  if (!raw.trim()) return
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return
+  }
+  if (isUnknownRecord(parsed) && parsed.schema === VTT_CLIPBOARD_NODES_V1) {
+    const target = resolvePasteTargetNodeId(currentScene)
+    postToWorker({
+      type: 'INTENT',
+      intent: {
+        type: 'PASTE_NODE_CLIPBOARD',
+        payload: raw,
+        targetNodeId: target,
+      },
+    })
+    return
+  }
+  if (!isUnknownRecord(parsed) || parsed.schema !== INVENTORY_OPS_SCHEMA_V1) return
+  const target = resolvePasteTargetNodeId(currentScene)
+  if (!target) {
+    console.warn('[clipboard] Paste needs a target inventory node (tap title, hover a stack, or select one node).')
+    return
+  }
+  const fixed = applyPasteTargetToInventoryOpsDoc(parsed, target)
+  const doc = parseInventoryOpsDocument(fixed)
+  if (!doc.ok) {
+    console.warn('[clipboard] invalid inventory ops:', doc.error)
+    return
+  }
+  const rows = parseAddItemsRowsFromJson(JSON.stringify(fixed), cachedItemCatalogRows ?? [])
+  if (rows.error || rows.rows.length === 0) {
+    console.warn('[clipboard] could not resolve items:', rows.error ?? 'no rows')
+    return
+  }
+  postApplyAddItemsOp(target, rows.rows)
 }
 
 const refreshAddItemsParsed = (): void => {
@@ -2765,6 +2929,49 @@ toolTextBtnEl?.addEventListener('click', () => {
 })
 
 window.addEventListener('keydown', (event) => {
+  const mod = event.metaKey || event.ctrlKey
+  if (mod && (event.key === 'c' || event.key === 'C')) {
+    const active = document.activeElement
+    if (active?.tagName === 'INPUT' || active?.tagName === 'TEXTAREA' || (active as HTMLElement).isContentEditable) return
+    if (appRoute.mode !== 'canvas') return
+    const segN = currentScene?.selectedSegmentIds?.length ?? 0
+    const nodeN = currentScene?.selectedNodeIds?.length ?? 0
+    if (segN > 0) {
+      event.preventDefault()
+      void copySelectedSegmentsToClipboard()
+      return
+    }
+    if (nodeN > 0) {
+      event.preventDefault()
+      void copySelectedNodesToClipboard()
+      return
+    }
+  }
+  if (mod && (event.key === 'x' || event.key === 'X')) {
+    const active = document.activeElement
+    if (active?.tagName === 'INPUT' || active?.tagName === 'TEXTAREA' || (active as HTMLElement).isContentEditable) return
+    if (appRoute.mode !== 'canvas') return
+    const segN = currentScene?.selectedSegmentIds?.length ?? 0
+    const nodeN = currentScene?.selectedNodeIds?.length ?? 0
+    if (segN > 0) {
+      event.preventDefault()
+      void cutSelectedSegments()
+      return
+    }
+    if (nodeN > 0) {
+      event.preventDefault()
+      void cutSelectedNodes()
+      return
+    }
+  }
+  if (mod && (event.key === 'v' || event.key === 'V')) {
+    const active = document.activeElement
+    if (active?.tagName === 'INPUT' || active?.tagName === 'TEXTAREA' || (active as HTMLElement).isContentEditable) return
+    if (appRoute.mode !== 'canvas') return
+    event.preventDefault()
+    void pasteFromSystemClipboard()
+    return
+  }
   if (event.key === 'Escape') {
     if (accountMenuOpen) {
       closeAccountMenu()

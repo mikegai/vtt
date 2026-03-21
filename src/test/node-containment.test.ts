@@ -29,6 +29,7 @@ const makeLocalState = (overrides: Partial<WorkerLocalState> = {}): WorkerLocalS
     nodeContainment: {},
     labels: {},
     selectedLabelId: null,
+    pasteTargetNodeId: null,
     ...overrides,
   }) as WorkerLocalState
 

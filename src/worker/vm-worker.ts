@@ -12,6 +12,7 @@ import { buildBoardVM } from '../vm/vm'
 import { diffSceneVM } from './scene-diff'
 import { addInventoryNodeToState, createInventoryActorId, nextInventoryName } from './inventory-node'
 import { buildSceneVM, type WorkerLocalState } from './scene-vm'
+import { parseNodeClipboardPayload, serializeNodeClipboard } from './node-clipboard'
 import type { MainToWorkerMessage, SceneVM, WorkerIntent, WorkerToMainMessage } from './protocol'
 import type { PersistenceBackend, PersistedLocalState } from '../persistence/backend'
 import { IndexedDBBackend } from '../persistence/indexeddb-backend'
@@ -73,6 +74,7 @@ let localState: WorkerLocalState = {
   selectedNodeIds: [],
   selectedGroupIds: [],
   selectedLabelIds: [],
+  pasteTargetNodeId: null,
   nodeContainment: {},
   labels: {},
   selectedLabelId: null,
@@ -100,6 +102,7 @@ function stripEphemeralLocalState(state: WorkerLocalState): PersistedLocalState 
     selectedNodeIds: _5,
     selectedGroupIds: _6,
     selectedLabelIds: _7,
+    pasteTargetNodeId: _pt,
     selectedLabelId: _8,
     ...persisted
   } = state
@@ -175,6 +178,7 @@ function applyServerState(
     selectedNodeIds: localState.selectedNodeIds,
     selectedGroupIds: localState.selectedGroupIds,
     selectedLabelIds: localState.selectedLabelIds,
+    pasteTargetNodeId: localState.pasteTargetNodeId,
     selectedLabelId: localState.selectedLabelId,
     nodePositions: newLayoutState.nodePositions ?? {},
     groupPositions: newLayoutState.groupPositions ?? {},
@@ -754,6 +758,22 @@ const applyIntent = (intent: WorkerIntent): void => {
         selectedLabelId: [...label][0] ?? localState.selectedLabelId,
       }
     } else {
+      const empty =
+        intent.selection.segmentIds.length === 0 &&
+        intent.selection.nodeIds.length === 0 &&
+        intent.selection.groupIds.length === 0 &&
+        intent.selection.labelIds.length === 0
+      let nextPasteTarget = localState.pasteTargetNodeId
+      if (empty) {
+        nextPasteTarget = null
+      } else if (
+        intent.selection.segmentIds.length === 0 &&
+        intent.selection.nodeIds.length === 1 &&
+        intent.selection.groupIds.length === 0 &&
+        intent.selection.labelIds.length === 0
+      ) {
+        nextPasteTarget = intent.selection.nodeIds[0] ?? null
+      }
       localState = {
         ...localState,
         selectedSegmentIds: [...intent.selection.segmentIds],
@@ -761,8 +781,15 @@ const applyIntent = (intent: WorkerIntent): void => {
         selectedGroupIds: [...intent.selection.groupIds],
         selectedLabelIds: [...intent.selection.labelIds],
         selectedLabelId: intent.selection.labelIds[0] ?? null,
+        pasteTargetNodeId: nextPasteTarget,
       }
     }
+    recompute()
+    return
+  }
+
+  if (intent.type === 'SET_PASTE_TARGET_NODE') {
+    localState = { ...localState, pasteTargetNodeId: intent.nodeId }
     recompute()
     return
   }
@@ -2158,7 +2185,7 @@ const applyIntent = (intent: WorkerIntent): void => {
         id: newEntryId,
         actorId: entry.actorId,
         itemDefId: entry.itemDefId,
-        quantity: 1,
+        quantity: Math.max(1, entry.quantity),
         zone: isDropped ? 'dropped' : entry.zone,
         carryGroupId: isDropped ? entry.carryGroupId : undefined,
         state: isDropped ? { dropped: true } : undefined,
@@ -2442,6 +2469,169 @@ const applyIntent = (intent: WorkerIntent): void => {
     return
   }
 
+  if (intent.type === 'PASTE_NODE_CLIPBOARD') {
+    if (!worldState) return
+    const doc = parseNodeClipboardPayload(intent.payload)
+    if (!doc) {
+      recompute()
+      return
+    }
+    const sceneBefore = buildSceneVM(worldState, localState)
+    let ws: CanonicalState = {
+      ...worldState,
+      itemDefinitions: { ...worldState.itemDefinitions, ...doc.itemDefinitions },
+    }
+    const actorIdMap = new Map<string, string>()
+    for (const oldId of Object.keys(doc.actors)) {
+      actorIdMap.set(oldId, createInventoryActorId(ws, Date.now, Math.random))
+    }
+    const carryGroupIdMap = new Map<string, string>()
+    for (const cg of Object.values(doc.carryGroups)) {
+      const newOwner = actorIdMap.get(cg.ownerActorId)
+      if (!newOwner) continue
+      const newCgId = droppedGroupIdForActor(newOwner)
+      const oldCgId = cg.id
+      carryGroupIdMap.set(oldCgId, newCgId)
+    }
+    const nextActors = { ...ws.actors }
+    for (const [oldId, actor] of Object.entries(doc.actors)) {
+      const newId = actorIdMap.get(oldId)
+      if (!newId) continue
+      const owner = actor.ownerActorId ? actorIdMap.get(actor.ownerActorId) : undefined
+      nextActors[newId] = {
+        ...actor,
+        id: newId,
+        ownerActorId: owner,
+        leftWieldingEntryId: undefined,
+        rightWieldingEntryId: undefined,
+      }
+      ws = ensureDroppedGroup(ws, newId)
+    }
+    ws = { ...ws, actors: { ...ws.actors, ...nextActors } }
+    const nextCarry = { ...ws.carryGroups }
+    for (const [oldCgId, cg] of Object.entries(doc.carryGroups)) {
+      const newCgId = carryGroupIdMap.get(oldCgId)
+      if (!newCgId) continue
+      const newOwner = actorIdMap.get(cg.ownerActorId)
+      if (!newOwner) continue
+      nextCarry[newCgId] = { ...cg, id: newCgId, ownerActorId: newOwner }
+    }
+    ws = { ...ws, carryGroups: nextCarry }
+    const entryIdMap = new Map<string, string>()
+    let nextEntries = { ...ws.inventoryEntries }
+    for (const entry of Object.values(doc.inventoryEntries)) {
+      const newActorId = actorIdMap.get(entry.actorId)
+      if (!newActorId) continue
+      const newEntryId = createInventoryEntryId(ws, entry.itemDefId)
+      entryIdMap.set(entry.id, newEntryId)
+      let cgId = entry.carryGroupId
+      if (cgId) {
+        cgId = carryGroupIdMap.get(cgId) ?? cgId
+      }
+      nextEntries = {
+        ...nextEntries,
+        [newEntryId]: {
+          ...entry,
+          id: newEntryId,
+          actorId: newActorId,
+          carryGroupId: cgId,
+        },
+      }
+    }
+    ws = { ...ws, inventoryEntries: nextEntries }
+    for (const [oldId, actor] of Object.entries(doc.actors)) {
+      const newId = actorIdMap.get(oldId)
+      if (!newId) continue
+      const a = ws.actors[newId]
+      if (!a) continue
+      const lw = actor.leftWieldingEntryId ? entryIdMap.get(actor.leftWieldingEntryId) : undefined
+      const rw = actor.rightWieldingEntryId ? entryIdMap.get(actor.rightWieldingEntryId) : undefined
+      if (lw !== undefined || rw !== undefined) {
+        ws = {
+          ...ws,
+          actors: {
+            ...ws.actors,
+            [newId]: { ...a, ...(lw !== undefined ? { leftWieldingEntryId: lw } : {}), ...(rw !== undefined ? { rightWieldingEntryId: rw } : {}) },
+          },
+        }
+      }
+    }
+    let nextLocal: WorkerLocalState = { ...localState }
+    const remapKey = (id: string): string | undefined => actorIdMap.get(id)
+    for (const [k, v] of Object.entries(doc.local.nodeGroupOverrides)) {
+      const nk = remapKey(k)
+      if (nk) nextLocal = { ...nextLocal, nodeGroupOverrides: { ...nextLocal.nodeGroupOverrides, [nk]: v } }
+    }
+    for (const [k, v] of Object.entries(doc.local.nodePositions)) {
+      const nk = remapKey(k)
+      if (nk) nextLocal = { ...nextLocal, nodePositions: { ...nextLocal.nodePositions, [nk]: v } }
+    }
+    for (const [k, v] of Object.entries(doc.local.nodeSizeOverrides)) {
+      const nk = remapKey(k)
+      if (nk) nextLocal = { ...nextLocal, nodeSizeOverrides: { ...nextLocal.nodeSizeOverrides, [nk]: v } }
+    }
+    for (const [k, v] of Object.entries(doc.local.layoutExpanded)) {
+      const nk = remapKey(k)
+      if (nk) nextLocal = { ...nextLocal, layoutExpanded: { ...nextLocal.layoutExpanded, [nk]: v } }
+    }
+    for (const [k, v] of Object.entries(doc.local.nodeTitleOverrides)) {
+      const nk = remapKey(k)
+      if (nk) nextLocal = { ...nextLocal, nodeTitleOverrides: { ...nextLocal.nodeTitleOverrides, [nk]: v } }
+    }
+    const nextContain: Record<string, string> = { ...nextLocal.nodeContainment }
+    for (const [c, t] of Object.entries(doc.local.nodeContainment)) {
+      const nc = remapKey(c)
+      const nt = remapKey(t)
+      if (nc && nt) nextContain[nc] = nt
+    }
+    nextLocal = { ...nextLocal, nodeContainment: nextContain }
+    for (const [gid, pos] of Object.entries(doc.local.groupNodePositions)) {
+      const nextPos: Record<string, { x: number; y: number }> = { ...(nextLocal.groupNodePositions[gid] ?? {}) }
+      for (const [aid, p] of Object.entries(pos)) {
+        const na = remapKey(aid)
+        if (na) nextPos[na] = p
+      }
+      nextLocal = { ...nextLocal, groupNodePositions: { ...nextLocal.groupNodePositions, [gid]: nextPos } }
+    }
+    const newRoots = doc.rootNodeIds.map((r) => actorIdMap.get(r)).filter((x): x is string => !!x)
+    const targetNode = intent.targetNodeId ? sceneBefore.nodes[intent.targetNodeId] : null
+    const groupId = targetNode?.groupId ?? null
+    if (groupId && targetNode && newRoots.length > 0) {
+      const tActor = targetNode.actorId
+      const sourceGroupPositions = nextLocal.groupNodePositions[groupId] ?? {}
+      const sourceRelativePos = sourceGroupPositions[tActor] ?? { x: 40, y: 60 }
+      const gPos = { ...sourceGroupPositions }
+      newRoots.forEach((rid, i) => {
+        gPos[rid] = { x: sourceRelativePos.x + 40 + i * 28, y: sourceRelativePos.y + 50 + i * 16 }
+      })
+      const order = [...(nextLocal.groupNodeOrders[groupId] ?? [])]
+      newRoots.forEach((rid) => {
+        if (!order.includes(rid)) order.push(rid)
+      })
+      nextLocal = {
+        ...nextLocal,
+        nodeGroupOverrides: { ...nextLocal.nodeGroupOverrides, ...Object.fromEntries(newRoots.map((r) => [r, groupId])) },
+        groupNodePositions: { ...nextLocal.groupNodePositions, [groupId]: gPos },
+        groupNodeOrders: { ...nextLocal.groupNodeOrders, [groupId]: order },
+        selectedSegmentIds: newRoots.length > 0 ? [] : nextLocal.selectedSegmentIds,
+      }
+    } else if (newRoots.length > 0) {
+      const np = { ...nextLocal.nodePositions }
+      newRoots.forEach((rid, i) => {
+        np[rid] = { x: (typeof intent.worldX === 'number' ? intent.worldX : 120) + i * 40, y: (typeof intent.worldY === 'number' ? intent.worldY : 120) + i * 24 }
+      })
+      nextLocal = {
+        ...nextLocal,
+        nodePositions: np,
+        nodeGroupOverrides: { ...nextLocal.nodeGroupOverrides, ...Object.fromEntries(newRoots.map((r) => [r, null])) },
+      }
+    }
+    worldState = ws
+    localState = nextLocal
+    recompute()
+    return
+  }
+
   if (intent.type === 'DRAG_START') {
     dragActive = true
     return
@@ -2580,6 +2770,7 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       selectedNodeIds: [],
       selectedGroupIds: [],
       selectedLabelIds: [],
+      pasteTargetNodeId: null,
       nodeContainment: {},
       labels: {},
       selectedLabelId: null,
@@ -2616,6 +2807,16 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       requestId: message.requestId,
       definitions: buildItemCatalogRows(worldState),
     })
+    return
+  }
+  if (message.type === 'CLIPBOARD_EXPORT') {
+    if (!worldState) {
+      post({ type: 'CLIPBOARD_EXPORT_RESULT', requestId: message.requestId, payload: '' })
+      return
+    }
+    const scene = buildSceneVM(worldState, localState)
+    const payload = serializeNodeClipboard(worldState, localState, scene, localState.selectedNodeIds)
+    post({ type: 'CLIPBOARD_EXPORT_RESULT', requestId: message.requestId, payload: payload ?? '' })
     return
   }
   if (message.type === 'INTENT') {

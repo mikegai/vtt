@@ -34,6 +34,7 @@ function stripEphemeral(state: WorkerLocalState): PersistedLocalState {
     selectedNodeIds: _5,
     selectedGroupIds: _6,
     selectedLabelIds: _7,
+    pasteTargetNodeId: _pt,
     selectedLabelId: _8,
     ...persisted
   } = state

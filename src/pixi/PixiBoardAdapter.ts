@@ -171,6 +171,8 @@ type AdapterHandlers = {
   ): void
   onDragStart?(): void
   onDragEnd?(): void
+  /** Set keyboard paste target (Cmd+V). */
+  onSetPasteTargetNode?(nodeId: string | null): void
 }
 
 type SegmentView = {
@@ -182,6 +184,7 @@ type NodeView = {
   readonly root: Container
   readonly positionSpring: ReturnType<typeof createSpring2D>
   readonly slotFillLayer: Graphics
+  readonly nodeBg: Graphics
   readonly segmentContainer: Container
   readonly runVisualsContainer: Container
   readonly contentContainer: Container
@@ -3880,9 +3883,7 @@ export class PixiBoardAdapter {
     }
 
     const bg = new Graphics()
-    bg.roundRect(0, 0, totalWidth, totalHeight, 10)
-    bg.fill({ color: 0x0d1a30, alpha: 0.92 })
-    bg.stroke({ width: 1, color: 0x2f4878, alpha: 0.85 })
+    this.drawNodePanelBackground(bg, totalWidth, totalHeight, this.currentScene?.pasteTargetNodeId === node.id)
     contentContainer.addChild(bg)
 
     const speedColor = SPEED_COLORS[node.speedBand ?? 'green'] ?? 0x3dba72
@@ -3999,13 +4000,17 @@ export class PixiBoardAdapter {
       titleTapTarget.fill({ color: 0xffffff, alpha: 0.001 })
       ;(titleTapTarget as Container & { __dragHandle?: boolean }).__dragHandle = true
       titleTapTarget.on('pointertap', (event: any) => {
-        if (event.button !== 0 || !this.shouldTreatAsDoubleTap(`node:${node.id}`)) return
+        if (event.button !== 0) return
         event.stopPropagation()
-        this.handlers.onEditNodeTitleRequest?.(
-          node.id,
-          node.title,
-          this.buildTitleOverlayMetrics(title, 0),
-        )
+        if (this.shouldTreatAsDoubleTap(`node:${node.id}`)) {
+          this.handlers.onEditNodeTitleRequest?.(
+            node.id,
+            node.title,
+            this.buildTitleOverlayMetrics(title, 0),
+          )
+        } else {
+          this.handlers.onSetPasteTargetNode?.(node.id)
+        }
       })
       contentContainer.addChild(titleTapTarget)
     } else {
@@ -4019,6 +4024,19 @@ export class PixiBoardAdapter {
       addExpandCaret(nodeTitleMidY)
       compact.position.set(30, nodeTitleMidY)
       contentContainer.addChild(compact)
+      const compactPasteHit = new Graphics()
+      compactPasteHit.eventMode = 'static'
+      compactPasteHit.cursor = 'pointer'
+      const cb = compact.getLocalBounds()
+      compactPasteHit.roundRect(26 + cb.x - 4, nodeTitleMidY + cb.y - 10, Math.max(60, cb.width + 20), 22, 4)
+      compactPasteHit.fill({ color: 0xffffff, alpha: 0.001 })
+      ;(compactPasteHit as Container & { __dragHandle?: boolean }).__dragHandle = true
+      compactPasteHit.on('pointertap', (event: any) => {
+        if (event.button !== 0) return
+        event.stopPropagation()
+        this.handlers.onSetPasteTargetNode?.(node.id)
+      })
+      contentContainer.addChild(compactPasteHit)
     }
 
     const slotFillLayer = new Graphics()
@@ -4134,6 +4152,7 @@ export class PixiBoardAdapter {
       root,
       positionSpring,
       slotFillLayer,
+      nodeBg: bg,
       segmentContainer,
       runVisualsContainer,
       contentContainer,
@@ -4145,6 +4164,17 @@ export class PixiBoardAdapter {
       clipHeightSpring,
       contentClip,
     }
+  }
+
+  private drawNodePanelBackground(g: Graphics, width: number, height: number, pasteHighlight: boolean): void {
+    g.clear()
+    g.roundRect(0, 0, width, height, 10)
+    g.fill({ color: 0x0d1a30, alpha: 0.92 })
+    g.stroke({
+      width: pasteHighlight ? 2.5 : 1,
+      color: pasteHighlight ? 0x7ae3ff : 0x2f4878,
+      alpha: pasteHighlight ? 0.95 : 0.85,
+    })
   }
 
   private updateNode(
@@ -4232,6 +4262,11 @@ export class PixiBoardAdapter {
     const pillStripHeight = verticalLayout.pillStripHeight
     const slotStartY = verticalLayout.slotStartY
     const visibleSlotCount = verticalLayout.visibleSlotCount
+    const layoutTotalHeight = verticalLayout.totalHeight
+    const pasteHi = this.currentScene?.pasteTargetNodeId === node.id
+    this.drawNodePanelBackground(view.nodeBg, totalWidth, layoutTotalHeight, pasteHi)
+    ;(view as NodeView).totalWidth = totalWidth
+    ;(view as NodeView).totalHeight = layoutTotalHeight
     redrawNodeSlotFillLayer(
       view.slotFillLayer,
       node,

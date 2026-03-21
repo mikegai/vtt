@@ -41,6 +41,8 @@ export type WorkerLocalState = {
   readonly selectedNodeIds: readonly string[]
   readonly selectedGroupIds: readonly string[]
   readonly selectedLabelIds: readonly string[]
+  /** Cmd+V paste target for inventory ops / pasted node subtrees. */
+  readonly pasteTargetNodeId: string | null
   /** Containment relation: contained node id -> container node id. */
   readonly nodeContainment: Record<string, string>
   readonly labels: Record<string, { text: string; x: number; y: number }>
@@ -631,6 +633,8 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
     selectedNodeIds: localState.selectedNodeIds.filter((id) => !!nodes[id] && !containedNodeIds.has(id)),
     selectedGroupIds: localState.selectedGroupIds.filter((id) => !!groups[id]),
     selectedLabelIds: localState.selectedLabelIds.filter((id) => !!localState.labels[id]),
+    pasteTargetNodeId:
+      localState.pasteTargetNodeId && nodes[localState.pasteTargetNodeId] ? localState.pasteTargetNodeId : null,
     nodes,
     freeSegments,
     groups,

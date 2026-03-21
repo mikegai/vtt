@@ -10,6 +10,7 @@ export type PersistedLocalState = Omit<
   | 'selectedNodeIds'
   | 'selectedGroupIds'
   | 'selectedLabelIds'
+  | 'pasteTargetNodeId'
   | 'selectedLabelId'
 >
 

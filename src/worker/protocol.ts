@@ -121,6 +121,8 @@ export type SceneVM = {
   readonly selectedNodeIds: readonly string[]
   readonly selectedGroupIds: readonly string[]
   readonly selectedLabelIds: readonly string[]
+  /** Keyboard paste target for Cmd+V (inventory ops / node blob). */
+  readonly pasteTargetNodeId: string | null
   readonly nodes: Record<string, SceneNodeVM>
   readonly freeSegments: Record<string, SceneFreeSegmentVM>
   readonly groups: Record<string, SceneGroupVM>
@@ -132,7 +134,18 @@ export type ScenePatch =
   | { readonly type: 'ADD_NODE'; readonly node: SceneNodeVM }
   | { readonly type: 'REMOVE_NODE'; readonly nodeId: string }
   | { readonly type: 'UPDATE_NODE'; readonly node: SceneNodeVM }
-  | { readonly type: 'UPDATE_META'; readonly partyPaceText: string; readonly hoveredSegmentId: string | null; readonly filterCategory: ItemCategory | null; readonly selectedSegmentIds: readonly string[]; readonly groups: Record<string, SceneGroupVM>; readonly freeSegments: Record<string, SceneFreeSegmentVM>; readonly labels: Record<string, SceneLabelVM>; readonly selectedLabelId: string | null }
+  | {
+      readonly type: 'UPDATE_META'
+      readonly partyPaceText: string
+      readonly hoveredSegmentId: string | null
+      readonly filterCategory: ItemCategory | null
+      readonly selectedSegmentIds: readonly string[]
+      readonly pasteTargetNodeId: string | null
+      readonly groups: Record<string, SceneGroupVM>
+      readonly freeSegments: Record<string, SceneFreeSegmentVM>
+      readonly labels: Record<string, SceneLabelVM>
+      readonly selectedLabelId: string | null
+    }
 
 export type DropIntent = {
   readonly segmentIds: readonly string[]
@@ -157,6 +170,7 @@ export type WorkerIntent =
       readonly addToSelection: boolean
     }
   | { readonly type: 'SELECT_ALL_OF_TYPE'; readonly itemDefId: string; readonly nodeId?: string }
+  | { readonly type: 'SET_PASTE_TARGET_NODE'; readonly nodeId: string | null }
   | { readonly type: 'MOVE_GROUP'; readonly groupId: string; readonly x: number; readonly y: number }
   | { readonly type: 'RESIZE_GROUP'; readonly groupId: string; readonly width: number; readonly height: number }
   | { readonly type: 'SET_GROUP_LIST_VIEW'; readonly groupId: string; readonly enabled: boolean }
@@ -236,6 +250,13 @@ export type WorkerIntent =
   | { readonly type: 'DUPLICATE_ENTRY'; readonly segmentIds: readonly string[] }
   | { readonly type: 'DELETE_NODE'; readonly nodeId: string }
   | { readonly type: 'DUPLICATE_NODE'; readonly nodeId: string }
+  | {
+      readonly type: 'PASTE_NODE_CLIPBOARD'
+      readonly payload: string
+      readonly targetNodeId: string | null
+      readonly worldX?: number
+      readonly worldY?: number
+    }
   | { readonly type: 'SET_WIELD'; readonly segmentId: string; readonly wield: WieldGrip }
   | { readonly type: 'UNWIELD'; readonly segmentId: string }
   | { readonly type: 'ADD_LABEL'; readonly text: string; readonly x: number; readonly y: number }
@@ -307,6 +328,7 @@ export type MainToWorkerMessage =
   | { readonly type: 'UPDATE_CAMERA'; readonly panX: number; readonly panY: number; readonly zoom: number }
   | { readonly type: 'GET_ITEM_CATALOG'; readonly requestId: string }
   | { readonly type: 'GET_WORLD_HUB'; readonly requestId: string }
+  | { readonly type: 'CLIPBOARD_EXPORT'; readonly requestId: string }
 
 export type WorkerToMainMessage =
   | { readonly type: 'REGISTRY_RECONCILE'; readonly adjust: RegistryAdjust }
@@ -319,4 +341,5 @@ export type WorkerToMainMessage =
   | { readonly type: 'CAMERA_RESTORE'; readonly panX: number; readonly panY: number; readonly zoom: number }
   | { readonly type: 'ITEM_CATALOG'; readonly requestId: string; readonly definitions: readonly ItemCatalogRow[] }
   | { readonly type: 'WORLD_HUB'; readonly requestId: string | null; readonly snapshot: WorldHubSnapshot }
+  | { readonly type: 'CLIPBOARD_EXPORT_RESULT'; readonly requestId: string; readonly payload: string }
 
