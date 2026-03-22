@@ -5121,6 +5121,7 @@ export class PixiBoardAdapter {
       }
     } else {
       this.pendingDragNodeMoveCommit = true
+      this.pendingRebuild = true
       for (const nodeId of drag.nodeIds) {
         this.originatorNodeIds.add(nodeId)
         this.resetOriginatorNodeTracking(nodeId)
@@ -5932,25 +5933,7 @@ export class PixiBoardAdapter {
         return
       }
       if (patch.type === 'UPDATE_NODE') {
-        const view = this.nodeViews.get(patch.node.id)
-        if (view) {
-          if (!this.isNodeExpanded(patch.node.id)) {
-            needsFullRebuild = true
-            return
-          }
-          this.updateNode(
-            patch.node,
-            view,
-            scene.hoveredSegmentId ?? null,
-            scene.filterCategory ?? null,
-            scene.selectedSegmentIds ?? [],
-          )
-          this.pendingDragNodeMoveCommit = false
-          this.updateSelectionOverlay()
-          this.startSpringTicker()
-        } else {
-          needsFullRebuild = true
-        }
+        needsFullRebuild = true
         return
       }
       if (patch.type === 'ADD_NODE' || patch.type === 'REMOVE_NODE') {
