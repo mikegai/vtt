@@ -35,6 +35,13 @@ import { STABLE_DEFAULT_MAIN_CANVAS_ID, STABLE_DEFAULT_WORLD_ID } from '../space
 import { logRoomDebug, setRoomIdDebugFromWorker } from '../spacetimedb/debug-room-ids'
 import { buildWorldHubSnapshot } from '../spacetimedb/world-hub-snapshot'
 import {
+  cloneCanonicalState,
+  canonicalWorldEquals,
+  mergeServerLayoutWithEphemeral,
+  serverPersistedFingerprint,
+  stripEphemeralLocalState,
+} from './vm-worker-rebase'
+import {
   NODE_VM_TOP_BAND_H as TOP_BAND_H,
   SLOT_START_X,
   STONE_GAP,
@@ -44,6 +51,13 @@ import {
 } from '../shared/node-layout'
 
 let worldState: CanonicalState | null = null
+/** Authoritative snapshot from SpacetimeDB reconstruct only (never overwritten by intents). */
+let serverWorldState: CanonicalState | null = null
+let serverPersistedLayout: Partial<PersistedLocalState> = {}
+/** Reducer ops not yet acknowledged as reflected in serverWorldState / serverPersistedLayout. */
+let pendingSyncIntents: WorkerIntent[] = []
+let inReplay = false
+let recomputeSuppressDepth = 0
 let currentContext: WorldCanvasContext = {
   worldId: STABLE_DEFAULT_WORLD_ID,
   canvasId: STABLE_DEFAULT_MAIN_CANVAS_ID,
@@ -115,22 +129,6 @@ let saveTimer: ReturnType<typeof setTimeout> | null = null
 const SAVE_DEBOUNCE_MS = 500
 const INDEXEDDB_ENABLED = false
 
-function stripEphemeralLocalState(state: WorkerLocalState): PersistedLocalState {
-  const {
-    hoveredSegmentId: _1,
-    dropIntent: _2,
-    filterCategory: _3,
-    selectedSegmentIds: _4,
-    selectedNodeIds: _5,
-    selectedGroupIds: _6,
-    selectedLabelIds: _7,
-    pasteTargetNodeId: _pt,
-    selectedLabelId: _8,
-    ...persisted
-  } = state
-  return persisted
-}
-
 function scheduleSave(): void {
   if (!INDEXEDDB_ENABLED) return
   if (isReducerTransportReady()) return
@@ -150,6 +148,77 @@ const post = (message: WorkerToMainMessage): void => {
   self.postMessage(message)
 }
 
+function isSyncIntent(intent: WorkerIntent): boolean {
+  switch (intent.type) {
+    case 'HOVER_SEGMENT':
+    case 'SET_FILTER_CATEGORY':
+    case 'SET_SELECTED_SEGMENTS':
+    case 'SELECT_SEGMENTS_ADD':
+    case 'SELECT_SEGMENTS_REMOVE':
+    case 'SET_MARQUEE_SELECTION':
+    case 'SET_PASTE_TARGET_NODE':
+    case 'SELECT_ALL_OF_TYPE':
+    case 'SELECT_LABEL':
+    case 'DRAG_SEGMENT_START':
+    case 'DRAG_SEGMENT_UPDATE':
+    case 'DRAG_START':
+    case 'DRAG_END':
+      return false
+    default:
+      return true
+  }
+}
+
+/** Rebuild working world/local from server mirrors + pending reducer intents (replay). */
+function deriveWorkingFromServerAndPending(): void {
+  if (!serverWorldState) return
+  recomputeSuppressDepth += 1
+  inReplay = true
+  try {
+    worldState = cloneCanonicalState(serverWorldState)
+    localState = mergeServerLayoutWithEphemeral(serverPersistedLayout, localState)
+    for (const intent of pendingSyncIntents) {
+      applyIntent(intent)
+    }
+  } finally {
+    inReplay = false
+    recomputeSuppressDepth -= 1
+  }
+}
+
+/** Clear pending when server snapshot already matches full replay (reducers echoed). */
+function tryAckPendingSyncIntents(): void {
+  if (pendingSyncIntents.length === 0 || !serverWorldState) return
+  let replayWorld: CanonicalState | null = null
+  let replayPersisted: PersistedLocalState | null = null
+  recomputeSuppressDepth += 1
+  inReplay = true
+  const savedW = worldState
+  const savedL = localState
+  try {
+    worldState = cloneCanonicalState(serverWorldState)
+    localState = mergeServerLayoutWithEphemeral(serverPersistedLayout, savedL)
+    for (const intent of pendingSyncIntents) {
+      applyIntent(intent)
+    }
+    replayWorld = worldState
+    replayPersisted = stripEphemeralLocalState(localState)
+  } finally {
+    worldState = savedW
+    localState = savedL
+    inReplay = false
+    recomputeSuppressDepth -= 1
+  }
+  if (
+    replayWorld &&
+    replayPersisted &&
+    canonicalWorldEquals(replayWorld, serverWorldState) &&
+    serverPersistedFingerprint(serverPersistedLayout) === serverPersistedFingerprint(replayPersisted)
+  ) {
+    pendingSyncIntents = []
+  }
+}
+
 let dragActive = false
 let deferredServerState: { world: CanonicalState; layout: Partial<PersistedLocalState> } | null = null
 let initialWorldTemplate: CanonicalState | null = null
@@ -166,7 +235,9 @@ function applyServerState(
     Object.keys(newWorldState.inventoryEntries).length === 0
   ) {
     hasBootstrappedCurrentContext = true
-    worldState = migrateWieldToActor(initialWorldTemplate)
+    serverWorldState = migrateWieldToActor(initialWorldTemplate)
+    serverPersistedLayout = {}
+    pendingSyncIntents = []
     localState = {
       ...localState,
       nodePositions: {},
@@ -186,40 +257,16 @@ function applyServerState(
       nodeContainment: {},
       labels: {},
     }
+    deriveWorkingFromServerAndPending()
     recompute()
     syncToSpacetimeDB(null, localState)
     return
   }
 
-  worldState = newWorldState
-  localState = {
-    hoveredSegmentId: localState.hoveredSegmentId,
-    dropIntent: localState.dropIntent,
-    filterCategory: localState.filterCategory,
-    selectedSegmentIds: localState.selectedSegmentIds,
-    selectedNodeIds: localState.selectedNodeIds,
-    selectedGroupIds: localState.selectedGroupIds,
-    selectedLabelIds: localState.selectedLabelIds,
-    pasteTargetNodeId: localState.pasteTargetNodeId,
-    selectedLabelId: localState.selectedLabelId,
-    nodePositions: newLayoutState.nodePositions ?? {},
-    groupPositions: newLayoutState.groupPositions ?? {},
-    groupSizeOverrides: newLayoutState.groupSizeOverrides ?? {},
-    nodeSizeOverrides: newLayoutState.nodeSizeOverrides ?? {},
-    groupListViewEnabled: newLayoutState.groupListViewEnabled ?? {},
-    layoutExpanded: newLayoutState.layoutExpanded ?? {},
-    nodeGroupOverrides: newLayoutState.nodeGroupOverrides ?? {},
-    groupNodePositions: newLayoutState.groupNodePositions ?? {},
-    freeSegmentPositions: newLayoutState.freeSegmentPositions ?? {},
-    groupFreeSegmentPositions: newLayoutState.groupFreeSegmentPositions ?? {},
-    groupNodeOrders: newLayoutState.groupNodeOrders ?? {},
-    customGroups: newLayoutState.customGroups ?? {},
-    groupTitleOverrides: newLayoutState.groupTitleOverrides ?? {},
-    nodeTitleOverrides: newLayoutState.nodeTitleOverrides ?? {},
-    nodeContainment: newLayoutState.nodeContainment ?? {},
-    labels: newLayoutState.labels ?? {},
-    stonesPerRow: newLayoutState.stonesPerRow ?? localState.stonesPerRow,
-  }
+  serverWorldState = newWorldState
+  serverPersistedLayout = { ...newLayoutState }
+  tryAckPendingSyncIntents()
+  deriveWorkingFromServerAndPending()
   recompute()
   scheduleSave()
 }
@@ -687,6 +734,7 @@ const buildItemCatalogRows = (state: CanonicalState | null): readonly ItemCatalo
 }
 
 const recompute = (sendInitIfFirst = false): void => {
+  if (recomputeSuppressDepth > 0) return
   if (!worldState) return
   if (!sendInitIfFirst && batchDepth > 0) {
     pendingRecomputeAfterBatch = true
@@ -747,6 +795,16 @@ const runIntentBatch = (intents: readonly WorkerIntent[]): void => {
 }
 
 const applyIntent = (intent: WorkerIntent): void => {
+  if (!inReplay && isSyncIntent(intent)) {
+    if (intent.type === 'SET_WORLD_STATE') {
+      pendingSyncIntents = []
+    }
+    pendingSyncIntents.push(intent)
+    deriveWorkingFromServerAndPending()
+    recompute()
+    return
+  }
+
   if (intent.type === 'HOVER_SEGMENT') {
     localState = {
       ...localState,
@@ -2741,12 +2799,18 @@ async function initFromPersistence(fallbackWorldState: CanonicalState, stonesPer
     if (stonesPerRow != null) {
       localState = { ...localState, stonesPerRow }
     }
+    serverWorldState = worldState
+    serverPersistedLayout = stripEphemeralLocalState(localState)
+    pendingSyncIntents = []
     recompute(true)
   } else {
     worldState = migrateWieldToActor(fallbackWorldState)
     if (stonesPerRow != null) {
       localState = { ...localState, stonesPerRow }
     }
+    serverWorldState = worldState
+    serverPersistedLayout = stripEphemeralLocalState(localState)
+    pendingSyncIntents = []
   }
 
   initSpacetimeDB(token)
@@ -2811,6 +2875,9 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
     const oldWorld = worldState
     const oldLocal = localState
     worldState = migrateWieldToActor(message.worldState)
+    serverWorldState = worldState
+    serverPersistedLayout = {}
+    pendingSyncIntents = []
     localState = {
       hoveredSegmentId: null,
       groupPositions: {},
@@ -2846,6 +2913,7 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
   }
   if (message.type === 'SET_STONES_PER_ROW') {
     localState = { ...localState, stonesPerRow: message.stonesPerRow }
+    serverPersistedLayout = { ...serverPersistedLayout, stonesPerRow: message.stonesPerRow }
     recompute(true)
     return
   }

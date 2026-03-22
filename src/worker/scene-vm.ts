@@ -262,8 +262,8 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
       let yCursor = 0
       for (const segment of row.segments) {
         const entryId = segmentIdToEntryId(segment.id)
-        const entry = worldState.inventoryEntries[entryId]
-        const prototype = worldState.itemDefinitions[segment.itemDefId]
+        const entry = effectiveState.inventoryEntries[entryId]
+        const prototype = effectiveState.itemDefinitions[segment.itemDefId]
         const overridePrototypeId = parseInstanceOverrideBaseId(entryId, segment.itemDefId) ?? undefined
         const ownerGroupId = segmentGroupOwner.get(segment.id)
         const groupRelativePos = ownerGroupId ? localState.groupFreeSegmentPositions[ownerGroupId]?.[segment.id] : undefined
@@ -325,7 +325,7 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
       continue
     }
 
-    const actor = worldState.actors[row.actorId]
+    const actor = effectiveState.actors[row.actorId]
     const twoBandSlots = actor?.kind === 'animal' || actor?.kind === 'vehicle'
     const baseStoneSlots = Math.ceil(row.capacitySixths / SIXTHS_PER_STONE)
     const defaultSlotCols = Math.max(1, Math.min(baseStoneSlots, localState.stonesPerRow))
@@ -345,14 +345,14 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
     const hasOverride = Object.prototype.hasOwnProperty.call(localState.nodeGroupOverrides, row.id)
     const groupId = hasOverride ? localState.nodeGroupOverrides[row.id] : baseGroupId
     const groupTitle = groupId
-      ? (localState.groupTitleOverrides[groupId] ?? localState.customGroups[groupId]?.title ?? worldState.movementGroups[groupId]?.name ?? groupId)
+      ? (localState.groupTitleOverrides[groupId] ?? localState.customGroups[groupId]?.title ?? effectiveState.movementGroups[groupId]?.name ?? groupId)
       : null
     const parentNodeId = row.parentActorId
 
     const mappedSegments = row.segments.map((segment) => {
       const entryId = segmentIdToEntryId(segment.id)
-      const entry = worldState.inventoryEntries[entryId]
-      const prototype = worldState.itemDefinitions[segment.itemDefId]
+      const entry = effectiveState.inventoryEntries[entryId]
+      const prototype = effectiveState.itemDefinitions[segment.itemDefId]
       const overridePrototypeId = parseInstanceOverrideBaseId(entryId, segment.itemDefId) ?? undefined
       return {
         id: segment.id,
