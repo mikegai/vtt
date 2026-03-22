@@ -210,6 +210,9 @@ export type WorkerIntent =
       readonly y?: number
       /** Present and complete for free/canvas drops; null when dropping into a node (renderer does not send a map). */
       readonly freeSegmentPositions?: Readonly<Record<string, { x: number; y: number }>> | null
+      /** Snapshotted from dropIntent at queue time for replay-safety (worker-internal). */
+      readonly replaySegmentIds?: readonly string[]
+      readonly replaySourceNodeIds?: Readonly<Record<string, string>>
     }
   | {
       readonly type: 'SPAWN_ITEM_INSTANCE'
@@ -288,6 +291,24 @@ export type WorkerIntent =
   | { readonly type: 'CATALOG_REMOVE_DEFINITION'; readonly id: string }
   | { readonly type: 'DRAG_START' }
   | { readonly type: 'DRAG_END' }
+
+export type DragSegmentEndIntent = Extract<WorkerIntent, { type: 'DRAG_SEGMENT_END' }>
+
+/** Resolve drop context for DRAG_SEGMENT_END: live dropIntent, or replay snapshot when ephemeral was cleared. */
+export function effectiveDropIntentForDragSegmentEnd(
+  localDropIntent: DropIntent | null,
+  intent: DragSegmentEndIntent,
+): DropIntent | null {
+  if (localDropIntent) return localDropIntent
+  if (intent.replaySegmentIds && intent.replaySourceNodeIds) {
+    return {
+      segmentIds: intent.replaySegmentIds,
+      sourceNodeIds: intent.replaySourceNodeIds,
+      targetNodeId: intent.targetNodeId,
+    }
+  }
+  return null
+}
 
 export interface ConnectedUser {
   identityHex: string

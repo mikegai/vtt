@@ -13,7 +13,13 @@ import { diffSceneVM } from './scene-diff'
 import { addInventoryNodeToState, createInventoryActorId, nextInventoryName } from './inventory-node'
 import { buildSceneVM, type WorkerLocalState } from './scene-vm'
 import { parseNodeClipboardPayload, serializeNodeClipboard } from './node-clipboard'
-import type { MainToWorkerMessage, SceneVM, WorkerIntent, WorkerToMainMessage } from './protocol'
+import {
+  effectiveDropIntentForDragSegmentEnd,
+  type MainToWorkerMessage,
+  type SceneVM,
+  type WorkerIntent,
+  type WorkerToMainMessage,
+} from './protocol'
 import type { PersistenceBackend, PersistedLocalState } from '../persistence/backend'
 import { IndexedDBBackend } from '../persistence/indexeddb-backend'
 import {
@@ -832,7 +838,15 @@ const applyIntent = (intent: WorkerIntent): void => {
     if (intent.type === 'SET_WORLD_STATE') {
       pendingSyncIntents = []
     }
-    pendingSyncIntents.push(intent)
+    let stored: WorkerIntent = intent
+    if (intent.type === 'DRAG_SEGMENT_END' && localState.dropIntent) {
+      stored = {
+        ...intent,
+        replaySegmentIds: localState.dropIntent.segmentIds,
+        replaySourceNodeIds: localState.dropIntent.sourceNodeIds,
+      }
+    }
+    pendingSyncIntents.push(stored)
     deriveWorkingFromServerAndPending()
     recompute()
     return
@@ -1582,12 +1596,9 @@ const applyIntent = (intent: WorkerIntent): void => {
   }
 
   if (intent.type === 'DRAG_SEGMENT_END') {
-    const hoverTargetNodeId = localState.dropIntent
-      ? intent.targetNodeId
-      : null
-    const hoverTargetGroupId = localState.dropIntent
-      ? intent.targetGroupId ?? null
-      : null
+    const effectiveDropIntent = effectiveDropIntentForDragSegmentEnd(localState.dropIntent, intent)
+    const hoverTargetNodeId = effectiveDropIntent ? intent.targetNodeId : null
+    const hoverTargetGroupId = effectiveDropIntent ? intent.targetGroupId ?? null : null
     debugDrag('DRAG_SEGMENT_END received', {
       targetNodeId: intent.targetNodeId,
       targetGroupId: intent.targetGroupId,
@@ -1597,10 +1608,10 @@ const applyIntent = (intent: WorkerIntent): void => {
       y: intent.y,
       hasFreeSegmentPositions: !!intent.freeSegmentPositions,
       freeSegmentPositionCount: intent.freeSegmentPositions ? Object.keys(intent.freeSegmentPositions).length : 0,
-      segmentIds: localState.dropIntent?.segmentIds ?? [],
+      segmentIds: effectiveDropIntent?.segmentIds ?? [],
     })
-    if (localState.dropIntent && hoverTargetNodeId) {
-      const { segmentIds, sourceNodeIds } = localState.dropIntent
+    if (effectiveDropIntent && hoverTargetNodeId) {
+      const { segmentIds, sourceNodeIds } = effectiveDropIntent
       const target = parseNodeId(hoverTargetNodeId)
       let movedAny = false
       if (worldState) {
@@ -1662,8 +1673,8 @@ const applyIntent = (intent: WorkerIntent): void => {
         movedAny,
         clearedFreeSegmentPositionsFor: movedAny ? segmentIds : [],
       })
-    } else if (localState.dropIntent && worldState && intent.x != null && intent.y != null) {
-      const { segmentIds, sourceNodeIds } = localState.dropIntent
+    } else if (effectiveDropIntent && worldState && intent.x != null && intent.y != null) {
+      const { segmentIds, sourceNodeIds } = effectiveDropIntent
       const firstSourceNodeId = segmentIds[0] ? sourceNodeIds[segmentIds[0]] : null
       const source = firstSourceNodeId ? parseNodeId(firstSourceNodeId) : null
       const sceneAtDrop = buildSceneVM(worldState, localState)

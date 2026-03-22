@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { sampleState } from '../sample-data'
 import type { WorkerLocalState } from '../worker/scene-vm'
+import { effectiveDropIntentForDragSegmentEnd } from '../worker/protocol'
 import {
   canonicalWorldEquals,
   cloneCanonicalState,
@@ -108,5 +109,48 @@ describe('optimistic rebase helpers', () => {
       },
     }
     expect(merged.freeSegmentPositions.segA).toEqual({ x: 50, y: 60 })
+  })
+
+  it('effectiveDropIntentForDragSegmentEnd prefers live dropIntent when replay fields are null', () => {
+    const live = {
+      segmentIds: ['cutthroatHandAxe'],
+      sourceNodeIds: { cutthroatHandAxe: 'cutthroat' },
+      targetNodeId: 'cutthroat',
+    } as const
+    const intent = {
+      type: 'DRAG_SEGMENT_END' as const,
+      targetNodeId: null,
+      freeSegmentPositions: { cutthroatHandAxe: { x: 10, y: 20 } },
+      replaySegmentIds: ['wrong'],
+      replaySourceNodeIds: { wrong: 'x' },
+    }
+    expect(effectiveDropIntentForDragSegmentEnd(live, intent)).toBe(live)
+  })
+
+  it('effectiveDropIntentForDragSegmentEnd restores from replay snapshot when dropIntent is null', () => {
+    const intent = {
+      type: 'DRAG_SEGMENT_END' as const,
+      targetNodeId: null,
+      x: 100,
+      y: 200,
+      freeSegmentPositions: { segA: { x: 50, y: 60 } },
+      replaySegmentIds: ['segA'],
+      replaySourceNodeIds: { segA: 'cutthroat' },
+    }
+    const e = effectiveDropIntentForDragSegmentEnd(null, intent)
+    expect(e).not.toBeNull()
+    expect(e!.segmentIds).toEqual(['segA'])
+    expect(e!.sourceNodeIds).toEqual({ segA: 'cutthroat' })
+    expect(e!.targetNodeId).toBeNull()
+  })
+
+  it('effectiveDropIntentForDragSegmentEnd returns null when replay snapshot is incomplete', () => {
+    const intent = {
+      type: 'DRAG_SEGMENT_END' as const,
+      targetNodeId: null,
+      replaySegmentIds: ['segA'],
+      // missing replaySourceNodeIds
+    }
+    expect(effectiveDropIntentForDragSegmentEnd(null, intent)).toBeNull()
   })
 })
