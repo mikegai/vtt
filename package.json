@@ -11,13 +11,15 @@
     "test:watch": "vitest",
     "stdb:build": "spacetime build",
     "stdb:generate": "spacetime generate --lang typescript --out-dir src/module_bindings -y",
-    "stdb:publish": "spacetime publish vtt -y"
+    "stdb:publish": "spacetime publish vtt -y",
+    "deploy:cf": "npm run build && wrangler pages deploy"
   },
   "devDependencies": {
     "@pixi/msdf-bmfont-xml": "^3.0.0",
     "typescript": "~5.9.3",
     "vite": "^8.0.0",
-    "vitest": "^4.1.0"
+    "vitest": "^4.1.0",
+    "wrangler": "^4.0.0"
   },
   "dependencies": {
     "fuse.js": "^7.1.0",

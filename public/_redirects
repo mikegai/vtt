@@ -1,0 +1,2 @@
+# Client-side routing: serve index.html for all paths (see Cloudflare Pages "Proxying")
+/*    /index.html   200
