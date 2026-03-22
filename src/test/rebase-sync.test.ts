@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { sampleState } from '../sample-data'
+import type { WorkerLocalState } from '../worker/scene-vm'
 import {
   canonicalWorldEquals,
   cloneCanonicalState,
@@ -32,7 +33,7 @@ describe('optimistic rebase helpers', () => {
       hoveredSegmentId: 'seg1',
       selectedSegmentIds: ['s1'],
     }
-    const merged = mergeServerLayoutWithEphemeral(serverLayout, ep as import('../worker/scene-vm').WorkerLocalState)
+    const merged = mergeServerLayoutWithEphemeral(serverLayout, ep as WorkerLocalState)
     expect(merged.hoveredSegmentId).toBe('seg1')
     expect(merged.selectedSegmentIds).toEqual(['s1'])
     expect(merged.nodePositions.a).toEqual({ x: 1, y: 2 })
@@ -49,5 +50,63 @@ describe('optimistic rebase helpers', () => {
     const merged = mergeServerLayoutWithEphemeral({ nodePositions: { n: { x: 0, y: 0 } } }, ZERO_EPHEMERAL_LOCAL)
     const p = stripEphemeralLocalState(merged)
     expect(serverPersistedFingerprint(p)).toBe(serverPersistedFingerprint({ nodePositions: { n: { x: 0, y: 0 } } }))
+  })
+
+  it('mergeServerLayoutWithEphemeral uses server freeSegmentPositions over stale local ephemeral', () => {
+    const serverLayout = { freeSegmentPositions: { a: { x: 1, y: 1 } } }
+    const ep: typeof ZERO_EPHEMERAL_LOCAL = {
+      ...ZERO_EPHEMERAL_LOCAL,
+      freeSegmentPositions: { a: { x: 99, y: 99 } },
+    }
+    const merged = mergeServerLayoutWithEphemeral(serverLayout, ep as WorkerLocalState)
+    expect(merged.freeSegmentPositions.a).toEqual({ x: 1, y: 1 })
+  })
+
+  it('mergeServerLayoutWithEphemeral does not copy local-only freeSegmentPositions missing from server', () => {
+    const serverLayout = { freeSegmentPositions: { other: { x: 0, y: 0 } } }
+    const ep: typeof ZERO_EPHEMERAL_LOCAL = {
+      ...ZERO_EPHEMERAL_LOCAL,
+      freeSegmentPositions: {
+        other: { x: 0, y: 0 },
+        justDropped: { x: 400, y: 300 },
+      },
+    }
+    const merged = mergeServerLayoutWithEphemeral(serverLayout, ep as WorkerLocalState)
+    expect(merged.freeSegmentPositions.other).toEqual({ x: 0, y: 0 })
+    expect(merged.freeSegmentPositions.justDropped).toBeUndefined()
+  })
+
+  it('mergeServerLayoutWithEphemeral uses server groupFreeSegmentPositions over stale local ephemeral', () => {
+    const serverLayout = {
+      groupFreeSegmentPositions: { g1: { s1: { x: 1, y: 1 } } },
+    }
+    const ep: typeof ZERO_EPHEMERAL_LOCAL = {
+      ...ZERO_EPHEMERAL_LOCAL,
+      groupFreeSegmentPositions: { g1: { s1: { x: 99, y: 99 } } },
+    }
+    const merged = mergeServerLayoutWithEphemeral(serverLayout, ep as WorkerLocalState)
+    expect(merged.groupFreeSegmentPositions.g1!.s1).toEqual({ x: 1, y: 1 })
+  })
+
+  it('after server-wins merge, replay-style intent patch restores optimistic freeSegmentPositions', () => {
+    const serverLayout = { freeSegmentPositions: { segA: { x: 1, y: 1 } } }
+    const ep: typeof ZERO_EPHEMERAL_LOCAL = {
+      ...ZERO_EPHEMERAL_LOCAL,
+      freeSegmentPositions: { segA: { x: 99, y: 99 } },
+    }
+    let merged = mergeServerLayoutWithEphemeral(serverLayout, ep as WorkerLocalState)
+    expect(merged.freeSegmentPositions.segA).toEqual({ x: 1, y: 1 })
+
+    // Mirrors deriveWorkingFromServerAndPending: merge first, then pending DRAG_SEGMENT_END applies
+    // explicit coordinates (same spread as vm-worker DRAG_SEGMENT_END when intent.freeSegmentPositions is set).
+    const intentFreeSegmentPositions = { segA: { x: 50, y: 60 } }
+    merged = {
+      ...merged,
+      freeSegmentPositions: {
+        ...merged.freeSegmentPositions,
+        ...intentFreeSegmentPositions,
+      },
+    }
+    expect(merged.freeSegmentPositions.segA).toEqual({ x: 50, y: 60 })
   })
 })

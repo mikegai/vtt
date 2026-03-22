@@ -25,6 +25,7 @@ import { groupContiguousSameType } from './group-contiguous-same-type'
 import { resolveDragStartFromSegment } from './drag-start-resolution'
 import { decideNodeMotion } from './drag-motion-policy'
 import { nodeHeightForRows as vmNodeHeightForRows, nodeWidthForCols as vmNodeWidthForCols } from '../shared/node-layout'
+import { freeDropPositionsFromPointerDelta } from '../shared/free-segment-drop-geometry'
 
 /** Stored on segment blocks for context-menu hit testing. */
 type SegmentContext = { segmentId: string; nodeId: string }
@@ -3158,6 +3159,28 @@ export class PixiBoardAdapter {
     return { nodeId: targetNodeId, startSixth }
   }
 
+  /**
+   * True when the pointer is over the stone/slot grid (not title band or worn-pill strip).
+   * Used to avoid classifying a canvas-intent drop as a node drop when the pointer is only
+   * inside the node's outer chrome while the absolute drag proxy is showing.
+   */
+  private isPointerInNodeSlotGrid(worldX: number, worldY: number, node: SceneNodeVM): boolean {
+    const visibleSlotCount = this.getVisibleSlotCount(node)
+    const layoutCols = this.getNodeLayoutCols(node)
+    const nodeMeterWidth = meterWidthForCols(layoutCols)
+    const slotAreaH = slotAreaHeightForSlots(visibleSlotCount, layoutCols)
+    const pos = this.getNodeDisplayPosition(node)
+    const tier = getZoomTier(this.zoom)
+    const totalWidth = SLOT_START_X + meterWidthForCols(layoutCols) + 20
+    const pillStripHeight = wornPillStripHeight(node.segments, totalWidth, tier)
+    const slotStartY = TOP_BAND_H + pillStripHeight
+    const inY = worldY >= pos.y + slotStartY && worldY <= pos.y + slotStartY + slotAreaH
+    if (!inY) return false
+    const localX = worldX - pos.x - SLOT_START_X
+    if (localX < -STONE_W || localX > nodeMeterWidth + STONE_W) return false
+    return true
+  }
+
   private buildDragProxy(segments: readonly SceneSegmentVM[]): DragProxyLayout {
     const proxy = new Container()
     if (segments.length > 1) {
@@ -3633,14 +3656,24 @@ export class PixiBoardAdapter {
       : drag.snap?.nodeId
         ? ({ type: 'node', nodeId: drag.snap.nodeId } as const)
         : null
-    const targetNodeId = dropTarget?.type === 'node' ? dropTarget.nodeId : null
+    let targetNodeId = dropTarget?.type === 'node' ? dropTarget.nodeId : null
     const targetGroupId = dropTarget?.type === 'group' ? dropTarget.groupId : null
+    if (!drag.isExternal && drag.proxyMode === 'absolute' && targetNodeId && world && this.currentScene) {
+      const node = this.currentScene.nodes[targetNodeId]
+      if (node && !this.isPointerInNodeSlotGrid(world.x, world.y, node)) {
+        targetNodeId = null
+      }
+    }
+    const dropVisualKind: 'canvas' | 'nodeHit' =
+      targetNodeId != null ? 'nodeHit' : 'canvas'
     this.setSegmentDragHoveredGroup(null)
     console.info('[pixi drag] endSegmentDrag start', {
       isExternal: !!drag.isExternal,
       hasEvent: !!event,
       targetNodeId,
       targetGroupId,
+      proxyMode: drag.proxyMode,
+      dropVisualKind,
       worldX: world?.x ?? null,
       worldY: world?.y ?? null,
       segmentIds: drag.segmentIds,
@@ -3703,15 +3736,12 @@ export class PixiBoardAdapter {
         dropX = world.x - drag.dropAnchorOffset.x
         dropY = world.y - drag.dropAnchorOffset.y
       } else {
-        const deltaX = world.x - drag.pointerWorldAtStart.x
-        const deltaY = world.y - drag.pointerWorldAtStart.y
-        freeSegmentPositions = {}
-        for (const segId of drag.segmentIds) {
-          const pos = drag.initialSegmentPositions[segId]
-          if (pos) {
-            freeSegmentPositions[segId] = { x: pos.x + deltaX, y: pos.y + deltaY }
-          }
-        }
+        freeSegmentPositions = freeDropPositionsFromPointerDelta(
+          drag.segmentIds,
+          drag.initialSegmentPositions,
+          drag.pointerWorldAtStart,
+          world,
+        )
         dropX = world.x - drag.dropAnchorOffset.x
         dropY = world.y - drag.dropAnchorOffset.y
       }
@@ -3719,6 +3749,7 @@ export class PixiBoardAdapter {
     console.info('[pixi drag] internal drag end payload', {
       targetNodeId,
       effectiveTarget,
+      dropVisualKind,
       dropX,
       dropY,
       freeSegmentPositionsCount: freeSegmentPositions ? Object.keys(freeSegmentPositions).length : 0,

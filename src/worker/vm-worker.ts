@@ -681,6 +681,39 @@ const computeDroppedFreeSegmentPositions = (
   return out
 }
 
+const resolveFreeDropLayoutFromIntent = (
+  intent: { readonly freeSegmentPositions?: Readonly<Record<string, { x: number; y: number }>> | null },
+  segmentIds: readonly string[],
+  scene: SceneVM,
+  anchorX: number,
+  anchorY: number,
+  stonesPerRow: number,
+): Record<string, { x: number; y: number }> => {
+  const raw = intent.freeSegmentPositions
+  const complete =
+    raw != null &&
+    segmentIds.length > 0 &&
+    segmentIds.every((id) => raw[id] != null)
+  if (complete) {
+    const out: Record<string, { x: number; y: number }> = {}
+    for (const id of segmentIds) {
+      const p = raw[id]!
+      out[id] = { x: p.x, y: p.y }
+    }
+    return out
+  }
+  debugDrag('free drop layout: missing or incomplete freeSegmentPositions from renderer; using fallback packer', {
+    segmentIds,
+    receivedKeys: raw != null ? Object.keys(raw) : [],
+    rawWasNullish: raw == null,
+  })
+  console.warn('[vm-worker] unexpected missing freeSegmentPositions for free drop; using fallback packer', {
+    segmentIds,
+    receivedKeys: raw != null ? Object.keys(raw) : [],
+  })
+  return computeDroppedFreeSegmentPositions(scene, segmentIds, anchorX, anchorY, stonesPerRow)
+}
+
 /** Migrate legacy entry.state.wield to actor.leftWieldingEntryId/rightWieldingEntryId. */
 const migrateWieldToActor = (state: CanonicalState): CanonicalState => {
   const actors = { ...state.actors }
@@ -1674,15 +1707,22 @@ const applyIntent = (intent: WorkerIntent): void => {
           }
         }
 
-        const droppedLayout =
-          intent.freeSegmentPositions ??
-          computeDroppedFreeSegmentPositions(
-            sceneAtDrop,
-            segmentIds,
-            intent.x,
-            intent.y,
-            localState.stonesPerRow,
-          )
+        debugDrag('droppedLayout choice', {
+          hasFreeSegmentPositions: intent.freeSegmentPositions != null,
+          freeSegmentPositionKeyCount:
+            intent.freeSegmentPositions != null ? Object.keys(intent.freeSegmentPositions).length : 0,
+          targetNodeId: intent.targetNodeId,
+          segmentCount: segmentIds.length,
+          dropKind: hoverTargetNodeId ? 'targeted-node' : 'absolute-free',
+        })
+        const droppedLayout = resolveFreeDropLayoutFromIntent(
+          intent,
+          segmentIds,
+          sceneAtDrop,
+          intent.x,
+          intent.y,
+          localState.stonesPerRow,
+        )
         const cleanedGroups = removeSegmentsFromGroupPositions(localState.groupFreeSegmentPositions, segmentIds)
 
         if (groupCanAcceptSegments && targetGroup && hoverTargetGroupId) {

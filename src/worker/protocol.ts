@@ -208,7 +208,8 @@ export type WorkerIntent =
       readonly targetGroupId?: string | null
       readonly x?: number
       readonly y?: number
-      readonly freeSegmentPositions?: Readonly<Record<string, { x: number; y: number }>>
+      /** Present and complete for free/canvas drops; null when dropping into a node (renderer does not send a map). */
+      readonly freeSegmentPositions?: Readonly<Record<string, { x: number; y: number }>> | null
     }
   | {
       readonly type: 'SPAWN_ITEM_INSTANCE'
