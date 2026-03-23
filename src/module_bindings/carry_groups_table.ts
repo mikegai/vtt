@@ -13,6 +13,7 @@ import {
 export default __t.row({
   id: __t.string().primaryKey(),
   worldId: __t.string().name("world_id"),
+  canvasId: __t.string().name("canvas_id"),
   ownerActorId: __t.string().name("owner_actor_id"),
   name: __t.string(),
   dropped: __t.bool(),

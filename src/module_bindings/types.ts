@@ -13,6 +13,7 @@ import {
 export const Actors = __t.object("Actors", {
   id: __t.string(),
   worldId: __t.string(),
+  canvasId: __t.string(),
   name: __t.string(),
   kind: __t.string(),
   strengthMod: __t.i32(),
@@ -50,6 +51,7 @@ export type Canvases = __Infer<typeof Canvases>;
 export const CarryGroups = __t.object("CarryGroups", {
   id: __t.string(),
   worldId: __t.string(),
+  canvasId: __t.string(),
   ownerActorId: __t.string(),
   name: __t.string(),
   dropped: __t.bool(),
@@ -140,6 +142,7 @@ export type GroupTitleOverrides = __Infer<typeof GroupTitleOverrides>;
 export const InventoryEntries = __t.object("InventoryEntries", {
   id: __t.string(),
   worldId: __t.string(),
+  canvasId: __t.string(),
   actorId: __t.string(),
   itemDefId: __t.string(),
   quantity: __t.u32(),
@@ -186,6 +189,7 @@ export type LayoutExpanded = __Infer<typeof LayoutExpanded>;
 export const MovementGroups = __t.object("MovementGroups", {
   id: __t.string(),
   worldId: __t.string(),
+  canvasId: __t.string(),
   name: __t.string(),
   active: __t.bool(),
 });

@@ -16,10 +16,12 @@ import { sampleState } from '../sample-data'
 
 export function reconstructCanonicalState(conn: DbConnection, context: WorldCanvasContext): CanonicalState {
   const wp = worldPrefix(context)
+  const cp = canvasPrefix(context)
   const actors: Record<string, Actor> = {}
   for (const row of conn.db.actors.iter()) {
     if (row.worldId !== context.worldId) continue
-    const localActorId = withoutPrefix(row.id, wp)
+    if (row.canvasId !== context.canvasId) continue
+    const localActorId = withoutPrefix(row.id, cp)
     if (!localActorId) continue
     const baseSpeedProfile =
       row.baseExplorationFeet != null &&
@@ -39,13 +41,13 @@ export function reconstructCanonicalState(conn: DbConnection, context: WorldCanv
       name: row.name,
       kind: row.kind as ActorKind,
       stats: { strengthMod: row.strengthMod, hasLoadBearing: row.hasLoadBearing },
-      movementGroupId: withoutPrefix(row.movementGroupId, wp) ?? row.movementGroupId,
+      movementGroupId: withoutPrefix(row.movementGroupId, cp) ?? row.movementGroupId,
       active: row.active,
-      ownerActorId: row.ownerActorId ? (withoutPrefix(row.ownerActorId, wp) ?? undefined) : undefined,
+      ownerActorId: row.ownerActorId ? (withoutPrefix(row.ownerActorId, cp) ?? undefined) : undefined,
       capacityStone: row.capacityStone ?? undefined,
       baseSpeedProfile,
-      leftWieldingEntryId: row.leftWieldingEntryId ? (withoutPrefix(row.leftWieldingEntryId, wp) ?? undefined) : undefined,
-      rightWieldingEntryId: row.rightWieldingEntryId ? (withoutPrefix(row.rightWieldingEntryId, wp) ?? undefined) : undefined,
+      leftWieldingEntryId: row.leftWieldingEntryId ? (withoutPrefix(row.leftWieldingEntryId, cp) ?? undefined) : undefined,
+      rightWieldingEntryId: row.rightWieldingEntryId ? (withoutPrefix(row.rightWieldingEntryId, cp) ?? undefined) : undefined,
     }
   }
 
@@ -72,8 +74,9 @@ export function reconstructCanonicalState(conn: DbConnection, context: WorldCanv
   const inventoryEntries: Record<string, InventoryEntry> = {}
   for (const row of conn.db.inventory_entries.iter()) {
     if (row.worldId !== context.worldId) continue
-    const localEntryId = withoutPrefix(row.id, wp)
-    const localActorId = withoutPrefix(row.actorId, wp)
+    if (row.canvasId !== context.canvasId) continue
+    const localEntryId = withoutPrefix(row.id, cp)
+    const localActorId = withoutPrefix(row.actorId, cp)
     const localItemDefId = withoutPrefix(row.itemDefId, wp)
     if (!localEntryId || !localActorId || !localItemDefId) continue
     const state: EquipmentState = {
@@ -91,15 +94,16 @@ export function reconstructCanonicalState(conn: DbConnection, context: WorldCanv
       quantity: row.quantity,
       zone: row.zone as CarryZone,
       state: Object.keys(state).length > 0 ? state : undefined,
-      carryGroupId: row.carryGroupId ? (withoutPrefix(row.carryGroupId, wp) ?? undefined) : undefined,
+      carryGroupId: row.carryGroupId ? (withoutPrefix(row.carryGroupId, cp) ?? undefined) : undefined,
     }
   }
 
   const carryGroups: Record<string, CarryGroup> = {}
   for (const row of conn.db.carry_groups.iter()) {
     if (row.worldId !== context.worldId) continue
-    const localCarryGroupId = withoutPrefix(row.id, wp)
-    const localOwnerActorId = withoutPrefix(row.ownerActorId, wp)
+    if (row.canvasId !== context.canvasId) continue
+    const localCarryGroupId = withoutPrefix(row.id, cp)
+    const localOwnerActorId = withoutPrefix(row.ownerActorId, cp)
     if (!localCarryGroupId || !localOwnerActorId) continue
     carryGroups[localCarryGroupId] = {
       id: localCarryGroupId,
@@ -112,7 +116,8 @@ export function reconstructCanonicalState(conn: DbConnection, context: WorldCanv
   const movementGroups: Record<string, MovementGroup> = {}
   for (const row of conn.db.movement_groups.iter()) {
     if (row.worldId !== context.worldId) continue
-    const localMovementGroupId = withoutPrefix(row.id, wp)
+    if (row.canvasId !== context.canvasId) continue
+    const localMovementGroupId = withoutPrefix(row.id, cp)
     if (!localMovementGroupId) continue
     movementGroups[localMovementGroupId] = {
       id: localMovementGroupId,

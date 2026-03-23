@@ -137,6 +137,10 @@ const tablesSchema = __schema({
       { accessor: 'id', name: 'actors_id_idx_btree', algorithm: 'btree', columns: [
         'id',
       ] },
+      { accessor: 'byWorldCanvas', name: 'actors_world_id_canvas_id_idx_btree', algorithm: 'btree', columns: [
+        'worldId',
+        'canvasId',
+      ] },
       { accessor: 'worldId', name: 'actors_world_id_idx_btree', algorithm: 'btree', columns: [
         'worldId',
       ] },
@@ -183,6 +187,10 @@ const tablesSchema = __schema({
       ] },
       { accessor: 'ownerActorId', name: 'carry_groups_owner_actor_id_idx_btree', algorithm: 'btree', columns: [
         'ownerActorId',
+      ] },
+      { accessor: 'byWorldCanvas', name: 'carry_groups_world_id_canvas_id_idx_btree', algorithm: 'btree', columns: [
+        'worldId',
+        'canvasId',
       ] },
       { accessor: 'worldId', name: 'carry_groups_world_id_idx_btree', algorithm: 'btree', columns: [
         'worldId',
@@ -348,6 +356,10 @@ const tablesSchema = __schema({
       { accessor: 'id', name: 'inventory_entries_id_idx_btree', algorithm: 'btree', columns: [
         'id',
       ] },
+      { accessor: 'byWorldCanvas', name: 'inventory_entries_world_id_canvas_id_idx_btree', algorithm: 'btree', columns: [
+        'worldId',
+        'canvasId',
+      ] },
       { accessor: 'worldId', name: 'inventory_entries_world_id_idx_btree', algorithm: 'btree', columns: [
         'worldId',
       ] },
@@ -405,6 +417,10 @@ const tablesSchema = __schema({
     indexes: [
       { accessor: 'id', name: 'movement_groups_id_idx_btree', algorithm: 'btree', columns: [
         'id',
+      ] },
+      { accessor: 'byWorldCanvas', name: 'movement_groups_world_id_canvas_id_idx_btree', algorithm: 'btree', columns: [
+        'worldId',
+        'canvasId',
       ] },
       { accessor: 'worldId', name: 'movement_groups_world_id_idx_btree', algorithm: 'btree', columns: [
         'worldId',

@@ -197,7 +197,15 @@ export type WorkerIntent =
   | { readonly type: 'RESIZE_NODE'; readonly nodeId: string; readonly slotCols: number; readonly slotRows: number }
   | { readonly type: 'ADD_GROUP'; readonly x: number; readonly y: number }
   | { readonly type: 'DELETE_GROUP'; readonly groupId: string }
-  | { readonly type: 'ADD_INVENTORY_NODE'; readonly x: number; readonly y: number; readonly groupId?: string | null }
+  | {
+      readonly type: 'ADD_INVENTORY_NODE'
+      readonly x: number
+      readonly y: number
+      readonly groupId?: string | null
+      /** Set when queueing sync intent so server+pending replay matches first application. */
+      readonly replayActorId?: string
+      readonly replayActorName?: string
+    }
   | { readonly type: 'UPDATE_GROUP_TITLE'; readonly groupId: string; readonly title: string }
   | { readonly type: 'MOVE_NODE_TO_GROUP_INDEX'; readonly nodeId: string; readonly groupId: string; readonly index: number }
   | {

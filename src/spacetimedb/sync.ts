@@ -48,23 +48,24 @@ export function syncWorldState(
   context: WorldCanvasContext,
 ): void {
   const w = (id: string) => withWorldPrefix(context, id)
+  const c = (id: string) => withCanvasPrefix(context, id)
   const oldItemOverlay = buildSparseItemCatalogOverlay(oldWorld?.itemDefinitions ?? null)
   const newItemOverlay = buildSparseItemCatalogOverlay(newWorld.itemDefinitions)
   diffMap(oldWorld?.actors ?? {}, newWorld.actors,
-    (a) => safe(`upsertActor(${a.id})`, () => syncActor(conn, a, w)),
-    (id) => safe(`deleteActor(${id})`, () => conn.reducers.deleteActor({ id: w(id) })))
+    (a) => safe(`upsertActor(${a.id})`, () => syncActor(conn, a, c)),
+    (id) => safe(`deleteActor(${id})`, () => conn.reducers.deleteActor({ id: c(id) })))
   diffGenericMap(oldItemOverlay, newItemOverlay,
     (id, d) => safe(`upsertItemDef(${id})`, () => syncItemDefOverlay(conn, id, d, w)),
     (id) => safe(`deleteItemDef(${id})`, () => conn.reducers.deleteItemDefinition({ id: w(id) })))
   diffMap(oldWorld?.inventoryEntries ?? {}, newWorld.inventoryEntries,
-    (e) => safe(`upsertEntry(${e.id})`, () => syncEntry(conn, e, w)),
-    (id) => safe(`deleteEntry(${id})`, () => conn.reducers.deleteInventoryEntry({ id: w(id) })))
+    (e) => safe(`upsertEntry(${e.id})`, () => syncEntry(conn, e, w, c)),
+    (id) => safe(`deleteEntry(${id})`, () => conn.reducers.deleteInventoryEntry({ id: c(id) })))
   diffMap(oldWorld?.carryGroups ?? {}, newWorld.carryGroups,
-    (cg) => safe(`upsertCarryGroup(${cg.id})`, () => syncCarryGroup(conn, cg, w)),
-    (id) => safe(`deleteCarryGroup(${id})`, () => conn.reducers.deleteCarryGroup({ id: w(id) })))
+    (cg) => safe(`upsertCarryGroup(${cg.id})`, () => syncCarryGroup(conn, cg, c)),
+    (id) => safe(`deleteCarryGroup(${id})`, () => conn.reducers.deleteCarryGroup({ id: c(id) })))
   diffMap(oldWorld?.movementGroups ?? {}, newWorld.movementGroups,
-    (mg) => safe(`upsertMovementGroup(${mg.id})`, () => syncMovementGroup(conn, mg, w)),
-    (id) => safe(`deleteMovementGroup(${id})`, () => conn.reducers.deleteMovementGroup({ id: w(id) })))
+    (mg) => safe(`upsertMovementGroup(${mg.id})`, () => syncMovementGroup(conn, mg, c)),
+    (id) => safe(`deleteMovementGroup(${id})`, () => conn.reducers.deleteMovementGroup({ id: c(id) })))
 }
 
 export function syncLocalState(
@@ -152,23 +153,24 @@ export function syncLocalState(
 
 // ─── Domain entity sync helpers ───────────────────────────────────────────────
 
-function syncActor(conn: DbConnection, a: Actor, w: (id: string) => string): void {
+/** Canvas-scoped board entities (inventories, movement groups); item catalog uses `w` in syncEntry. */
+function syncActor(conn: DbConnection, a: Actor, c: (id: string) => string): void {
   conn.reducers.upsertActor({
-    id: w(a.id),
+    id: c(a.id),
     name: a.name,
     kind: a.kind,
     strengthMod: a.stats.strengthMod,
     hasLoadBearing: a.stats.hasLoadBearing,
-    movementGroupId: w(a.movementGroupId),
+    movementGroupId: c(a.movementGroupId),
     active: a.active,
-    ownerActorId: a.ownerActorId ? w(a.ownerActorId) : undefined,
+    ownerActorId: a.ownerActorId ? c(a.ownerActorId) : undefined,
     capacityStone: a.capacityStone,
     baseExplorationFeet: a.baseSpeedProfile?.explorationFeet,
     baseCombatFeet: a.baseSpeedProfile?.combatFeet,
     baseRunningFeet: a.baseSpeedProfile?.runningFeet,
     baseMilesPerDay: a.baseSpeedProfile?.milesPerDay,
-    leftWieldingEntryId: a.leftWieldingEntryId ? w(a.leftWieldingEntryId) : undefined,
-    rightWieldingEntryId: a.rightWieldingEntryId ? w(a.rightWieldingEntryId) : undefined,
+    leftWieldingEntryId: a.leftWieldingEntryId ? c(a.leftWieldingEntryId) : undefined,
+    rightWieldingEntryId: a.rightWieldingEntryId ? c(a.rightWieldingEntryId) : undefined,
   })
 }
 
@@ -236,10 +238,15 @@ function syncItemDefOverlay(
   syncItemDef(conn, overlay.definition, w)
 }
 
-function syncEntry(conn: DbConnection, e: InventoryEntry, w: (id: string) => string): void {
+function syncEntry(
+  conn: DbConnection,
+  e: InventoryEntry,
+  w: (id: string) => string,
+  c: (id: string) => string,
+): void {
   conn.reducers.upsertInventoryEntry({
-    id: w(e.id),
-    actorId: w(e.actorId),
+    id: c(e.id),
+    actorId: c(e.actorId),
     itemDefId: w(e.itemDefId),
     quantity: e.quantity,
     zone: e.zone,
@@ -248,22 +255,22 @@ function syncEntry(conn: DbConnection, e: InventoryEntry, w: (id: string) => str
     stateHeldHands: e.state?.heldHands,
     stateDropped: e.state?.dropped,
     stateInaccessible: e.state?.inaccessible,
-    carryGroupId: e.carryGroupId ? w(e.carryGroupId) : undefined,
+    carryGroupId: e.carryGroupId ? c(e.carryGroupId) : undefined,
   })
 }
 
-function syncCarryGroup(conn: DbConnection, cg: CarryGroup, w: (id: string) => string): void {
+function syncCarryGroup(conn: DbConnection, cg: CarryGroup, c: (id: string) => string): void {
   conn.reducers.upsertCarryGroup({
-    id: w(cg.id),
-    ownerActorId: w(cg.ownerActorId),
+    id: c(cg.id),
+    ownerActorId: c(cg.ownerActorId),
     name: cg.name,
     dropped: cg.dropped,
   })
 }
 
-function syncMovementGroup(conn: DbConnection, mg: MovementGroup, w: (id: string) => string): void {
+function syncMovementGroup(conn: DbConnection, mg: MovementGroup, c: (id: string) => string): void {
   conn.reducers.upsertMovementGroup({
-    id: w(mg.id),
+    id: c(mg.id),
     name: mg.name,
     active: mg.active,
   })

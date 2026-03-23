@@ -13,6 +13,7 @@ import {
 export default __t.row({
   id: __t.string().primaryKey(),
   worldId: __t.string().name("world_id"),
+  canvasId: __t.string().name("canvas_id"),
   name: __t.string(),
   active: __t.bool(),
 });

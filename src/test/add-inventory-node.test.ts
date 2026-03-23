@@ -101,4 +101,43 @@ describe('addInventoryNodeToState', () => {
 
     expect(moved.inventoryEntries.cutthroatHandAxe?.actorId).toBe(created.newActorId)
   })
+
+  it('uses replayActorId and replayActorName instead of generating id/name', () => {
+    const localState = makeLocalState()
+    const result = addInventoryNodeToState({
+      worldState: sampleState,
+      localState,
+      x: 1,
+      y: 2,
+      groupId: null,
+      replayActorId: 'inventory_replay_test',
+      replayActorName: 'Inventory 42',
+    })
+    expect(result.newActorId).toBe('inventory_replay_test')
+    expect(result.worldState.actors.inventory_replay_test?.name).toBe('Inventory 42')
+  })
+
+  it('replay fields make id/name stable across calls from the same base world', () => {
+    const base = sampleState
+    const r1 = addInventoryNodeToState({
+      worldState: base,
+      localState: makeLocalState(),
+      x: 10,
+      y: 20,
+      groupId: null,
+      replayActorId: 'inventory_deterministic',
+      replayActorName: 'Inventory 7',
+    })
+    const r2 = addInventoryNodeToState({
+      worldState: base,
+      localState: makeLocalState(),
+      x: 10,
+      y: 20,
+      groupId: null,
+      replayActorId: 'inventory_deterministic',
+      replayActorName: 'Inventory 7',
+    })
+    expect(r1.newActorId).toBe('inventory_deterministic')
+    expect(r2.newActorId).toBe(r1.newActorId)
+  })
 })

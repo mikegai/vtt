@@ -138,11 +138,11 @@ function subscriptionQueriesForContext(ctx: WorldCanvasContext): string[] {
   const room = `"worldId" = ${w} AND "canvasId" = ${c}`
   return [
     ...registrySubs(),
-    `SELECT * FROM actors WHERE "worldId" = ${w}`,
+    `SELECT * FROM actors WHERE ${room}`,
     `SELECT * FROM item_definitions WHERE "worldId" = ${w}`,
-    `SELECT * FROM inventory_entries WHERE "worldId" = ${w}`,
-    `SELECT * FROM carry_groups WHERE "worldId" = ${w}`,
-    `SELECT * FROM movement_groups WHERE "worldId" = ${w}`,
+    `SELECT * FROM inventory_entries WHERE ${room}`,
+    `SELECT * FROM carry_groups WHERE ${room}`,
+    `SELECT * FROM movement_groups WHERE ${room}`,
     `SELECT * FROM node_positions WHERE ${room}`,
     `SELECT * FROM group_positions WHERE ${room}`,
     `SELECT * FROM group_size_overrides WHERE ${room}`,

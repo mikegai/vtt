@@ -112,11 +112,15 @@ const actors = table(
   {
     name: 'actors',
     public: true,
-    indexes: [{ accessor: 'worldId', name: 'idx_actors_world', algorithm: 'btree' as const, columns: ['worldId'] }],
+    indexes: [
+      { accessor: 'worldId', name: 'idx_actors_world', algorithm: 'btree' as const, columns: ['worldId'] },
+      { accessor: 'byWorldCanvas', name: 'idx_actors_room', algorithm: 'btree' as const, columns: ['worldId', 'canvasId'] },
+    ],
   },
   {
     id: t.string().primaryKey(),
     worldId: t.string(),
+    canvasId: t.string(),
     name: t.string(),
     kind: t.string(),
     strengthMod: t.i32(),
@@ -159,11 +163,13 @@ const inventory_entries = table(
     indexes: [
       { accessor: 'actorId', name: 'idx_entries_actor', algorithm: 'btree' as const, columns: ['actorId'] },
       { accessor: 'worldId', name: 'idx_entries_world', algorithm: 'btree' as const, columns: ['worldId'] },
+      { accessor: 'byWorldCanvas', name: 'idx_entries_room', algorithm: 'btree' as const, columns: ['worldId', 'canvasId'] },
     ],
   },
   {
     id: t.string().primaryKey(),
     worldId: t.string(),
+    canvasId: t.string(),
     actorId: t.string(),
     itemDefId: t.string(),
     quantity: t.u32(),
@@ -184,11 +190,13 @@ const carry_groups = table(
     indexes: [
       { accessor: 'ownerActorId', name: 'idx_cg_owner', algorithm: 'btree' as const, columns: ['ownerActorId'] },
       { accessor: 'worldId', name: 'idx_cg_world', algorithm: 'btree' as const, columns: ['worldId'] },
+      { accessor: 'byWorldCanvas', name: 'idx_cg_room', algorithm: 'btree' as const, columns: ['worldId', 'canvasId'] },
     ],
   },
   {
     id: t.string().primaryKey(),
     worldId: t.string(),
+    canvasId: t.string(),
     ownerActorId: t.string(),
     name: t.string(),
     dropped: t.bool(),
@@ -199,11 +207,15 @@ const movement_groups = table(
   {
     name: 'movement_groups',
     public: true,
-    indexes: [{ accessor: 'worldId', name: 'idx_mg_world', algorithm: 'btree' as const, columns: ['worldId'] }],
+    indexes: [
+      { accessor: 'worldId', name: 'idx_mg_world', algorithm: 'btree' as const, columns: ['worldId'] },
+      { accessor: 'byWorldCanvas', name: 'idx_mg_room', algorithm: 'btree' as const, columns: ['worldId', 'canvasId'] },
+    ],
   },
   {
     id: t.string().primaryKey(),
     worldId: t.string(),
+    canvasId: t.string(),
     name: t.string(),
     active: t.bool(),
   }
@@ -872,8 +884,8 @@ export const upsert_actor = spacetimedb.reducer(
     rightWieldingEntryId: t.string().optional(),
   },
   (ctx, args) => {
-    const worldId = requireWorldId(args.id, 'actors');
-    const row = { ...args, worldId };
+    const { worldId, canvasId } = requireCanvasScope(args.id, 'actors');
+    const row = { ...args, worldId, canvasId };
     const existing = ctx.db.actors.id.find(args.id);
     if (existing) {
       ctx.db.actors.id.update(row);
@@ -965,8 +977,8 @@ export const upsert_inventory_entry = spacetimedb.reducer(
     carryGroupId: t.string().optional(),
   },
   (ctx, args) => {
-    const worldId = requireWorldId(args.id, 'inventory_entries');
-    const row = { ...args, worldId };
+    const { worldId, canvasId } = requireCanvasScope(args.id, 'inventory_entries');
+    const row = { ...args, worldId, canvasId };
     const existing = ctx.db.inventory_entries.id.find(args.id);
     if (existing) {
       ctx.db.inventory_entries.id.update(row);
@@ -1009,8 +1021,8 @@ export const upsert_carry_group = spacetimedb.reducer(
     dropped: t.bool(),
   },
   (ctx, args) => {
-    const worldId = requireWorldId(args.id, 'carry_groups');
-    const row = { ...args, worldId };
+    const { worldId, canvasId } = requireCanvasScope(args.id, 'carry_groups');
+    const row = { ...args, worldId, canvasId };
     const existing = ctx.db.carry_groups.id.find(args.id);
     if (existing) {
       ctx.db.carry_groups.id.update(row);
@@ -1036,8 +1048,8 @@ export const upsert_movement_group = spacetimedb.reducer(
     active: t.bool(),
   },
   (ctx, args) => {
-    const worldId = requireWorldId(args.id, 'movement_groups');
-    const row = { ...args, worldId };
+    const { worldId, canvasId } = requireCanvasScope(args.id, 'movement_groups');
+    const row = { ...args, worldId, canvasId };
     const existing = ctx.db.movement_groups.id.find(args.id);
     if (existing) {
       ctx.db.movement_groups.id.update(row);
@@ -1535,12 +1547,13 @@ export const set_world_state = spacetimedb.reducer(
     if (data.actors) {
       for (const a of data.actors) {
         const aid = a.id as string;
-        const worldId = requireWorldId(aid, 'set_world_state actors');
+        const { worldId, canvasId } = requireCanvasScope(aid, 'set_world_state actors');
         const speed = a.baseSpeedProfile as { explorationFeet?: number; combatFeet?: number; runningFeet?: number; milesPerDay?: number } | undefined;
         const stats = a.stats as { strengthMod?: number; hasLoadBearing?: boolean } | undefined;
         ctx.db.actors.insert({
           id: aid,
           worldId,
+          canvasId,
           name: a.name as string,
           kind: a.kind as string,
           strengthMod: (stats?.strengthMod ?? 0) as number,
@@ -1579,11 +1592,12 @@ export const set_world_state = spacetimedb.reducer(
     if (data.inventoryEntries) {
       for (const e of data.inventoryEntries) {
         const eid = e.id as string;
-        const worldId = requireWorldId(eid, 'set_world_state inventory_entries');
+        const { worldId, canvasId } = requireCanvasScope(eid, 'set_world_state inventory_entries');
         const st = e.state as { worn?: boolean; attached?: boolean; heldHands?: number; dropped?: boolean; inaccessible?: boolean } | undefined;
         ctx.db.inventory_entries.insert({
           id: eid,
           worldId,
+          canvasId,
           actorId: e.actorId as string,
           itemDefId: e.itemDefId as string,
           quantity: (e.quantity ?? 1) as number,
@@ -1601,10 +1615,11 @@ export const set_world_state = spacetimedb.reducer(
     if (data.carryGroups) {
       for (const cg of data.carryGroups) {
         const cid = cg.id as string;
-        const worldId = requireWorldId(cid, 'set_world_state carry_groups');
+        const { worldId, canvasId } = requireCanvasScope(cid, 'set_world_state carry_groups');
         ctx.db.carry_groups.insert({
           id: cid,
           worldId,
+          canvasId,
           ownerActorId: cg.ownerActorId as string,
           name: cg.name as string,
           dropped: (cg.dropped ?? false) as boolean,
@@ -1615,10 +1630,11 @@ export const set_world_state = spacetimedb.reducer(
     if (data.movementGroups) {
       for (const mg of data.movementGroups) {
         const mid = mg.id as string;
-        const worldId = requireWorldId(mid, 'set_world_state movement_groups');
+        const { worldId, canvasId } = requireCanvasScope(mid, 'set_world_state movement_groups');
         ctx.db.movement_groups.insert({
           id: mid,
           worldId,
+          canvasId,
           name: mg.name as string,
           active: (mg.active ?? true) as boolean,
         });

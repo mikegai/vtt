@@ -31,6 +31,8 @@ export const applyVmIntent = (
         x: intent.x,
         y: intent.y,
         groupId: intent.groupId,
+        replayActorId: intent.replayActorId,
+        replayActorName: intent.replayActorName,
       })
       return { worldState: result.worldState, localState: result.localState }
     }

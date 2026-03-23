@@ -57,6 +57,7 @@ import {
   mergeServerLayoutWithEphemeral,
   serverPersistedFingerprint,
   stripEphemeralLocalState,
+  ZERO_EPHEMERAL_LOCAL,
 } from './vm-worker-rebase'
 import {
   NODE_VM_TOP_BAND_H as TOP_BAND_H,
@@ -66,6 +67,9 @@ import {
   STONE_ROW_GAP,
   STONE_W,
 } from '../shared/node-layout'
+
+/** Stable key for canvas-scoped room (SpacetimeDB world + canvas). */
+const roomKeyForContext = (ctx: WorldCanvasContext): string => `${ctx.worldId}::${ctx.canvasId}`
 
 let worldState: CanonicalState | null = null
 /** Authoritative snapshot from SpacetimeDB reconstruct only (never overwritten by intents). */
@@ -773,6 +777,33 @@ const runIntentBatch = (intents: readonly WorkerIntent[]): void => {
   }
 }
 
+/** Same base as deriveWorkingFromServerAndPending: clone(server) + prior pending, then one id/name for stable replay. */
+const enrichAddInventoryNodeForSyncReplay = (
+  intent: Extract<WorkerIntent, { type: 'ADD_INVENTORY_NODE' }>,
+): Extract<WorkerIntent, { type: 'ADD_INVENTORY_NODE' }> => {
+  if (intent.replayActorId != null && intent.replayActorName != null) return intent
+  if (!serverWorldState) return intent
+  recomputeSuppressDepth += 1
+  inReplay = true
+  const savedW = worldState
+  const savedL = localState
+  try {
+    worldState = cloneCanonicalState(serverWorldState)
+    localState = mergeServerLayoutWithEphemeral(serverPersistedLayout, savedL)
+    for (const pending of pendingSyncIntents) {
+      applyIntent(pending)
+    }
+    const replayActorId = createInventoryActorId(worldState, Date.now, Math.random)
+    const replayActorName = nextInventoryName(worldState)
+    return { ...intent, replayActorId, replayActorName }
+  } finally {
+    worldState = savedW
+    localState = savedL
+    inReplay = false
+    recomputeSuppressDepth -= 1
+  }
+}
+
 const applyIntent = (intent: WorkerIntent): void => {
   if (!inReplay && isSyncIntent(intent)) {
     if (intent.type === 'SET_WORLD_STATE') {
@@ -785,6 +816,9 @@ const applyIntent = (intent: WorkerIntent): void => {
         replaySegmentIds: localState.dropIntent.segmentIds,
         replaySourceNodeIds: localState.dropIntent.sourceNodeIds,
       }
+    }
+    if (intent.type === 'ADD_INVENTORY_NODE') {
+      stored = enrichAddInventoryNodeForSyncReplay(intent)
     }
     pendingSyncIntents.push(stored)
     deriveWorkingFromServerAndPending()
@@ -1087,6 +1121,8 @@ const applyIntent = (intent: WorkerIntent): void => {
       x,
       y,
       groupId,
+      replayActorId: intent.replayActorId,
+      replayActorName: intent.replayActorName,
     })
     worldState = result.worldState
     localState = result.localState
@@ -2527,6 +2563,7 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
   }
   if (message.type === 'SET_APP_ROUTE') {
     if (message.debugRoomIds != null) setRoomIdDebugFromWorker(message.debugRoomIds)
+    const previousContext = currentContext
     appRoute = message.appRoute
     currentContext = message.context
     logRoomDebug('worker SET_APP_ROUTE', {
@@ -2534,6 +2571,27 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       canvasId: message.context.canvasId,
       routeMode: message.appRoute.mode,
     })
+    // Canvas-scoped board data must not leak across rooms: until SpacetimeDB sends the new snapshot,
+    // clear domain + layout so a new/empty canvas is not painted with the previous canvas's groups.
+    if (message.appRoute.mode === 'canvas' && worldState) {
+      const prevKey = roomKeyForContext(previousContext)
+      const nextKey = roomKeyForContext(message.context)
+      if (prevKey !== nextKey) {
+        pendingSyncIntents = []
+        worldState = {
+          ...worldState,
+          actors: {},
+          inventoryEntries: {},
+          carryGroups: {},
+          movementGroups: {},
+        }
+        localState = mergeServerLayoutWithEphemeral(
+          {},
+          { ...ZERO_EPHEMERAL_LOCAL, stonesPerRow: localState.stonesPerRow },
+        )
+        recompute()
+      }
+    }
     setAppSubscriptionRoute(currentContext, message.appRoute.mode === 'hub' ? 'hub' : 'canvas', message.appRoute)
     refreshPresence()
     maybePushWorldHub()

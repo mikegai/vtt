@@ -9,6 +9,9 @@ type AddInventoryNodeArgs = {
   readonly groupId?: string | null
   readonly now?: () => number
   readonly random?: () => number
+  /** When both set (e.g. worker sync replay), use instead of createInventoryActorId / nextInventoryName. */
+  readonly replayActorId?: string
+  readonly replayActorName?: string
 }
 
 type AddInventoryNodeResult = {
@@ -54,13 +57,16 @@ export const addInventoryNodeToState = ({
   groupId,
   now = Date.now,
   random = Math.random,
+  replayActorId,
+  replayActorName,
 }: AddInventoryNodeArgs): AddInventoryNodeResult => {
-  const actorId = createInventoryActorId(worldState, now, random)
+  const useReplay = replayActorId != null && replayActorName != null
+  const actorId = useReplay ? replayActorId! : createInventoryActorId(worldState, now, random)
   const resolvedGroupId = groupId ?? null
   const movementGroupId = resolvedGroupId ?? defaultMovementGroupId(worldState)
   const actor: Actor = {
     id: actorId,
-    name: nextInventoryName(worldState),
+    name: useReplay ? replayActorName! : nextInventoryName(worldState),
     kind: 'pc',
     stats: { strengthMod: 0, hasLoadBearing: false },
     movementGroupId,
