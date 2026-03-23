@@ -280,7 +280,10 @@ export type WorkerIntent =
       readonly minToCount?: number
       readonly sixthsPerBundle?: number
       readonly replay?: {
-        /** Deterministic entry ids to allocate in order. */
+        /**
+         * Deterministic entry ids. Non-pooled: one per quantity unit.
+         * Pooled coin/gem: single id for a new stack, or `[]` when quantity merges into an existing stack.
+         */
         readonly entryIds?: readonly string[]
       }
     }
@@ -305,7 +308,8 @@ export type WorkerIntent =
       readonly replay?: {
         /**
          * Per-item deterministic entry ids for replay. `spawnEntryIdsByItem[i]`
-         * corresponds to `items[i]` and contains one id per spawned quantity unit.
+         * corresponds to `items[i]`. Non-pooled items: one id per quantity unit.
+         * Pooled coin/gem rows: one id when a new stack is created, or `[]` when merged into an existing stack.
          */
         readonly spawnEntryIdsByItem?: readonly (readonly string[])[]
       }

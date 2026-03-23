@@ -1,5 +1,7 @@
-import type { CanonicalState, InventoryEntry } from '../domain/types'
+import { findPooledCoinageStackToMerge, isCoinagePooledDefinition } from '../domain/coinage'
+import type { CanonicalState, CarryZone, InventoryEntry, ItemDefinition, ItemKind } from '../domain/types'
 import { snapshotDuplicateEntryReplay, snapshotDuplicateNodeReplay } from '../vm/duplicate-intents'
+import { parseNodeId } from '../vm/drop-intent'
 import { createInventoryEntryId } from '../vm/inventory-ids'
 import type { DropIntent, WorkerIntent } from './protocol'
 import { createInventoryActorId, nextInventoryName } from './inventory-node'
@@ -43,6 +45,58 @@ const reserveSpawnEntryIds = (
     }
   }
   return { ids, worldState: ws }
+}
+
+type SpawnItemInstanceIntent = Extract<WorkerIntent, { type: 'SPAWN_ITEM_INSTANCE' }>
+type AddItemsRow = Extract<WorkerIntent, { type: 'APPLY_ADD_ITEMS_OP' }>['items'][number]
+
+const resolveSpawnItemDefinition = (ws: CanonicalState, intent: SpawnItemInstanceIntent): ItemDefinition | undefined => {
+  const existing = ws.itemDefinitions[intent.itemDefId]
+  if (existing) return existing
+  if (!intent.itemName) return undefined
+  const kind = (intent.itemKind as ItemKind) ?? 'standard'
+  return {
+    id: intent.itemDefId,
+    canonicalName: intent.itemName,
+    kind,
+    sixthsPerUnit: intent.sixthsPerUnit ?? 1,
+    armorClass: intent.armorClass,
+    ...(kind === 'bundled'
+      ? {
+          bundleSize: intent.bundleSize ?? 20,
+          minToCount: intent.minToCount ?? 1,
+          sixthsPerBundle: intent.sixthsPerBundle ?? 1,
+        }
+      : {}),
+    ...((kind === 'standard' || kind === 'coins') && {
+      ...(intent.coinagePool !== undefined ? { coinagePool: intent.coinagePool } : {}),
+      ...(intent.coinDenom !== undefined ? { coinDenom: intent.coinDenom } : {}),
+    }),
+  }
+}
+
+const resolveAddItemRowDefinition = (ws: CanonicalState, item: AddItemsRow): ItemDefinition | undefined => {
+  const existing = ws.itemDefinitions[item.itemDefId]
+  if (existing) return existing
+  const kind = (item.itemKind as ItemKind) ?? 'standard'
+  return {
+    id: item.itemDefId,
+    canonicalName: item.itemName,
+    kind,
+    sixthsPerUnit: item.sixthsPerUnit ?? 1,
+    armorClass: item.armorClass,
+    ...(kind === 'bundled'
+      ? {
+          bundleSize: item.bundleSize ?? 20,
+          minToCount: item.minToCount ?? 1,
+          sixthsPerBundle: item.sixthsPerBundle ?? 1,
+        }
+      : {}),
+    ...((kind === 'standard' || kind === 'coins') && {
+      ...(item.coinagePool !== undefined ? { coinagePool: item.coinagePool } : {}),
+      ...(item.coinDenom !== undefined ? { coinDenom: item.coinDenom } : {}),
+    }),
+  }
 }
 
 export const canonicalizeIntentForReplay = (
@@ -105,10 +159,52 @@ export const canonicalizeIntentForReplay = (
   }
 
   if (intent.type === 'SPAWN_ITEM_INSTANCE') {
-    if (intent.replay?.entryIds?.length) return intent
+    if (intent.replay?.entryIds !== undefined) return intent
     const base = options.deriveReplayBase()
     if (!base) return intent
-    const allocated = reserveSpawnEntryIds(base.worldState, intent.itemDefId, intent.quantity)
+    const qty = Math.max(1, Math.floor(intent.quantity))
+    const def = resolveSpawnItemDefinition(base.worldState, intent)
+    if (def && isCoinagePooledDefinition(def)) {
+      if (intent.targetNodeId) {
+        const target = parseNodeId(intent.targetNodeId)
+        if (target.actorId && base.worldState.actors[target.actorId]) {
+          const shouldDrop = !!target.carryGroupId
+          const zone: CarryZone = shouldDrop ? 'dropped' : intent.wornClothing ? 'worn' : (intent.zoneHint ?? 'stowed')
+          const state: InventoryEntry['state'] | undefined = shouldDrop
+            ? { dropped: true }
+            : intent.wornClothing
+              ? { worn: true }
+              : undefined
+          const existing = findPooledCoinageStackToMerge(
+            base.worldState,
+            target.actorId,
+            target.carryGroupId,
+            zone,
+            state,
+            intent.itemDefId,
+            def,
+          )
+          if (existing) {
+            return {
+              ...intent,
+              replay: {
+                ...(intent.replay ?? {}),
+                entryIds: [],
+              },
+            }
+          }
+        }
+      }
+      const allocated = reserveSpawnEntryIds(base.worldState, intent.itemDefId, 1)
+      return {
+        ...intent,
+        replay: {
+          ...(intent.replay ?? {}),
+          entryIds: allocated.ids,
+        },
+      }
+    }
+    const allocated = reserveSpawnEntryIds(base.worldState, intent.itemDefId, qty)
     return {
       ...intent,
       replay: {
@@ -123,9 +219,66 @@ export const canonicalizeIntentForReplay = (
     const base = options.deriveReplayBase()
     if (!base) return intent
     let nextWorld = base.worldState
+    let simEntries: Record<string, InventoryEntry> = { ...base.worldState.inventoryEntries }
     const spawnEntryIdsByItem: string[][] = []
     for (const item of intent.items) {
-      const allocated = reserveSpawnEntryIds(nextWorld, item.itemDefId, item.quantity)
+      const def = resolveAddItemRowDefinition(nextWorld, item)
+      const rowQty = Math.max(1, Math.floor(item.quantity))
+      if (def && isCoinagePooledDefinition(def) && intent.targetNodeId) {
+        const target = parseNodeId(intent.targetNodeId)
+        if (target.actorId && base.worldState.actors[target.actorId]) {
+          const shouldDrop = !!target.carryGroupId
+          const zone: CarryZone = shouldDrop ? 'dropped' : item.wornClothing ? 'worn' : (item.zoneHint ?? 'stowed')
+          const state: InventoryEntry['state'] | undefined = shouldDrop
+            ? { dropped: true }
+            : item.wornClothing
+              ? { worn: true }
+              : undefined
+          const simWs: CanonicalState = { ...base.worldState, inventoryEntries: simEntries }
+          const existing = findPooledCoinageStackToMerge(
+            simWs,
+            target.actorId,
+            target.carryGroupId,
+            zone,
+            state,
+            item.itemDefId,
+            def,
+          )
+          if (existing) {
+            spawnEntryIdsByItem.push([])
+            const ex = simEntries[existing.id]!
+            simEntries = {
+              ...simEntries,
+              [existing.id]: { ...ex, quantity: Math.max(1, Math.floor(ex.quantity)) + rowQty },
+            }
+            continue
+          }
+          const allocated = reserveSpawnEntryIds(nextWorld, item.itemDefId, 1)
+          nextWorld = allocated.worldState
+          spawnEntryIdsByItem.push(allocated.ids)
+          const newId = allocated.ids[0]!
+          simEntries = {
+            ...simEntries,
+            [newId]: {
+              id: newId,
+              actorId: target.actorId,
+              itemDefId: item.itemDefId,
+              quantity: rowQty,
+              zone,
+              carryGroupId: target.carryGroupId,
+              state,
+            },
+          }
+          continue
+        }
+      }
+      if (def && isCoinagePooledDefinition(def)) {
+        const allocated = reserveSpawnEntryIds(nextWorld, item.itemDefId, 1)
+        nextWorld = allocated.worldState
+        spawnEntryIdsByItem.push(allocated.ids)
+        continue
+      }
+      const allocated = reserveSpawnEntryIds(nextWorld, item.itemDefId, rowQty)
       spawnEntryIdsByItem.push(allocated.ids)
       nextWorld = allocated.worldState
     }

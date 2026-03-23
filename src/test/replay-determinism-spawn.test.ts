@@ -51,4 +51,110 @@ describe('spawn replay determinism', () => {
     expect(r1.worldState.inventoryEntries.spawnA1?.itemDefId).toBe('handAxe')
     expect(r1.worldState.inventoryEntries.spawnD1?.itemDefId).toBe('dagger')
   })
+
+  it('SPAWN_ITEM_INSTANCE stacks pooled coinage as one entry (quantity on one row)', () => {
+    const w0 = minimalVmWorld()
+    const world = {
+      ...w0,
+      itemDefinitions: {
+        ...w0.itemDefinitions,
+        coinGp: {
+          id: 'coinGp',
+          canonicalName: 'gp',
+          kind: 'standard' as const,
+          sixthsPerUnit: 1,
+          coinagePool: true,
+          coinDenom: 'gp' as const,
+        },
+      },
+    }
+    const local = makeWorkerLocalState()
+    const intent = {
+      type: 'SPAWN_ITEM_INSTANCE' as const,
+      itemDefId: 'coinGp',
+      quantity: 500,
+      targetNodeId: 'alpha',
+    }
+    const r = applySpawnItemInstance(world, local, intent)
+    const coinRows = Object.values(r.worldState.inventoryEntries).filter((e) => e.itemDefId === 'coinGp')
+    expect(coinRows.length).toBe(1)
+    expect(coinRows[0]?.quantity).toBe(500)
+  })
+
+  it('SPAWN_ITEM_INSTANCE merges pooled coinage into an existing stack on the same node', () => {
+    const w0 = minimalVmWorld()
+    const base = {
+      ...w0,
+      itemDefinitions: {
+        ...w0.itemDefinitions,
+        coinGp: {
+          id: 'coinGp',
+          canonicalName: 'gp',
+          kind: 'standard' as const,
+          sixthsPerUnit: 1,
+          coinagePool: true,
+          coinDenom: 'gp' as const,
+        },
+      },
+      inventoryEntries: {
+        existingGp: {
+          id: 'existingGp',
+          actorId: 'alpha',
+          itemDefId: 'coinGp',
+          quantity: 200,
+          zone: 'stowed' as const,
+        },
+      },
+    }
+    const local = makeWorkerLocalState()
+    const r = applySpawnItemInstance(base, local, {
+      type: 'SPAWN_ITEM_INSTANCE',
+      itemDefId: 'coinGp',
+      quantity: 100,
+      targetNodeId: 'alpha',
+    })
+    const gp = Object.values(r.worldState.inventoryEntries).filter((e) => e.itemDefId === 'coinGp')
+    expect(gp.length).toBe(1)
+    expect(gp[0]?.quantity).toBe(300)
+  })
+
+  it('SPAWN_ITEM_INSTANCE keeps separate dropped piles (canvas/group) — no merge across drops', () => {
+    const w0 = minimalVmWorld()
+    const world: typeof w0 = {
+      ...w0,
+      itemDefinitions: {
+        ...w0.itemDefinitions,
+        coinGp: {
+          id: 'coinGp',
+          canonicalName: 'gp',
+          kind: 'standard' as const,
+          sixthsPerUnit: 1,
+          coinagePool: true,
+          coinDenom: 'gp' as const,
+        },
+      },
+      carryGroups: {
+        g1: { id: 'g1', ownerActorId: 'alpha', name: 'Pile zone', dropped: true },
+      },
+    }
+    const local = makeWorkerLocalState()
+    const dropTarget = 'alpha:dropped:g1'
+    let ws = world
+    ws = applySpawnItemInstance(ws, local, {
+      type: 'SPAWN_ITEM_INSTANCE',
+      itemDefId: 'coinGp',
+      quantity: 200,
+      targetNodeId: dropTarget,
+    }).worldState
+    ws = applySpawnItemInstance(ws, local, {
+      type: 'SPAWN_ITEM_INSTANCE',
+      itemDefId: 'coinGp',
+      quantity: 500,
+      targetNodeId: dropTarget,
+    }).worldState
+    const gp = Object.values(ws.inventoryEntries).filter((e) => e.itemDefId === 'coinGp' && e.zone === 'dropped')
+    expect(gp.length).toBe(2)
+    const qs = gp.map((e) => e.quantity).sort((a, b) => a - b)
+    expect(qs).toEqual([200, 500])
+  })
 })

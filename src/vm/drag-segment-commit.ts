@@ -1,4 +1,4 @@
-import { expandSegmentIdsForCoinageMerge } from '../domain/coinage'
+import { consolidatePooledCoinageInInventory, expandSegmentIdsForCoinageMerge } from '../domain/coinage'
 import type { Actor, CanonicalState, InventoryEntry } from '../domain/types'
 import { parseNodeId, segmentIdToEntryId } from './drop-intent'
 import type { WorkerLocalState } from '../worker/scene-vm'
@@ -32,6 +32,59 @@ export const removeSegmentsFromGroupPositions = (
     if (Object.keys(kept).length > 0) next[groupId] = kept
   }
   return next
+}
+
+const pruneFreeLayoutForRemovedInventoryEntries = (
+  ls: WorkerLocalState,
+  removedEntryIds: readonly string[],
+): WorkerLocalState => {
+  if (removedEntryIds.length === 0) return ls
+  const removed = new Set(removedEntryIds)
+  const freeSegmentPositions = Object.fromEntries(
+    Object.entries(ls.freeSegmentPositions).filter(([segId]) => !removed.has(segmentIdToEntryId(segId))),
+  )
+  const groupFreeSegmentPositions: WorkerLocalState['groupFreeSegmentPositions'] = {}
+  for (const [groupId, positions] of Object.entries(ls.groupFreeSegmentPositions)) {
+    const nextPos = Object.fromEntries(
+      Object.entries(positions).filter(([segId]) => !removed.has(segmentIdToEntryId(segId))),
+    )
+    if (Object.keys(nextPos).length > 0) groupFreeSegmentPositions[groupId] = nextPos
+  }
+  return { ...ls, freeSegmentPositions, groupFreeSegmentPositions }
+}
+
+/** After moves/spawns: merge split pooled coin rows and drop layout keys for removed entries. */
+export const finalizePooledCoinageStacks = (
+  worldState: CanonicalState,
+  localState: WorkerLocalState,
+): {
+  worldState: CanonicalState
+  localState: WorkerLocalState
+  entryRemapToKeeper: ReadonlyMap<string, string>
+} => {
+  const { worldState: ws, removedEntryIds, entryRemapToKeeper } = consolidatePooledCoinageInInventory(worldState)
+  if (removedEntryIds.length === 0) {
+    return { worldState: ws, localState, entryRemapToKeeper }
+  }
+  return {
+    worldState: ws,
+    localState: pruneFreeLayoutForRemovedInventoryEntries(localState, removedEntryIds),
+    entryRemapToKeeper,
+  }
+}
+
+/** Rewrite segment ids when inventory entries were merged away (canvas free-drop layout). */
+export const remapSegmentIdAfterEntryConsolidation = (
+  segmentId: string,
+  entryRemap: ReadonlyMap<string, string>,
+): string => {
+  if (entryRemap.size === 0) return segmentId
+  const eid = segmentIdToEntryId(segmentId)
+  const keeper = entryRemap.get(eid)
+  if (!keeper) return segmentId
+  if (segmentId === eid) return keeper
+  if (segmentId.startsWith(`${eid}:`)) return `${keeper}${segmentId.slice(eid.length)}`
+  return segmentId
 }
 
 /** Worker-equivalent: drop dragged segments onto a target node (inventory row). */
@@ -100,5 +153,6 @@ export const commitDragSegmentOntoNode = (
       groupFreeSegmentPositions: removeSegmentsFromGroupPositions(ls.groupFreeSegmentPositions, segmentIds),
     }
   }
-  return { worldState: ws, localState: ls }
+  const fin = finalizePooledCoinageStacks(ws, ls)
+  return { worldState: fin.worldState, localState: fin.localState }
 }

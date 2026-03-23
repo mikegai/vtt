@@ -18,7 +18,13 @@ import {
   collectSceneSubtreeNodeIds,
 } from '../vm/scene-node-mutations'
 import { applyDuplicateEntryIntent, applyDuplicateNodeIntent } from '../vm/duplicate-intents'
-import { commitDragSegmentOntoNode, expandDragSegmentToEntryIds, removeSegmentsFromGroupPositions } from '../vm/drag-segment-commit'
+import {
+  commitDragSegmentOntoNode,
+  expandDragSegmentToEntryIds,
+  finalizePooledCoinageStacks,
+  remapSegmentIdAfterEntryConsolidation,
+  removeSegmentsFromGroupPositions,
+} from '../vm/drag-segment-commit'
 import { buildSegmentIdToSourceNodeId } from '../vm/segment-source-map'
 import { applySpawnItemInstance } from '../vm/spawn-item-instance'
 import { diffSceneVM } from './scene-diff'
@@ -1497,6 +1503,26 @@ const applyIntent = (intent: WorkerIntent): void => {
           }
         }
 
+        const finDrop = finalizePooledCoinageStacks(worldState, localState)
+        worldState = finDrop.worldState
+        localState = finDrop.localState
+        const layoutSegmentIds = segmentIds.map((sid) =>
+          remapSegmentIdAfterEntryConsolidation(sid, finDrop.entryRemapToKeeper),
+        )
+        const sceneAfterDrop = buildSceneVM(worldState, localState)
+        const remappedFreePositions =
+          intent.freeSegmentPositions && finDrop.entryRemapToKeeper.size > 0
+            ? Object.fromEntries(
+                segmentIds
+                  .map((sid) => {
+                    const ns = remapSegmentIdAfterEntryConsolidation(sid, finDrop.entryRemapToKeeper)
+                    const p = intent.freeSegmentPositions![sid]
+                    return p != null ? ([ns, p] as const) : null
+                  })
+                  .filter((x): x is readonly [string, { x: number; y: number }] => x != null),
+              )
+            : intent.freeSegmentPositions
+
         debugDrag('droppedLayout choice', {
           hasFreeSegmentPositions: intent.freeSegmentPositions != null,
           freeSegmentPositionKeyCount:
@@ -1505,10 +1531,14 @@ const applyIntent = (intent: WorkerIntent): void => {
           segmentCount: segmentIds.length,
           dropKind: hoverTargetNodeId ? 'targeted-node' : 'absolute-free',
         })
+        const layoutIntentForResolve =
+          remappedFreePositions !== intent.freeSegmentPositions
+            ? { ...intent, freeSegmentPositions: remappedFreePositions }
+            : intent
         const droppedLayout = resolveFreeDropLayoutFromIntent(
-          intent,
-          segmentIds,
-          sceneAtDrop,
+          layoutIntentForResolve,
+          layoutSegmentIds,
+          sceneAfterDrop,
           intent.x,
           intent.y,
           localState.stonesPerRow,
@@ -1523,13 +1553,13 @@ const applyIntent = (intent: WorkerIntent): void => {
             },
           }
           const freeSegmentPositions = { ...localState.freeSegmentPositions }
-          for (const segmentId of segmentIds) {
+          for (const segmentId of segmentIds) delete freeSegmentPositions[segmentId]
+          for (const segmentId of layoutSegmentIds) {
             const nextPos = droppedLayout[segmentId] ?? { x: intent.x, y: intent.y }
             nextGroupPositions[hoverTargetGroupId]![segmentId] = {
               x: nextPos.x - targetGroup.x,
               y: nextPos.y - targetGroup.y,
             }
-            delete freeSegmentPositions[segmentId]
           }
           localState = {
             ...localState,
@@ -1538,7 +1568,8 @@ const applyIntent = (intent: WorkerIntent): void => {
           }
         } else {
           const freeSegmentPositions = { ...localState.freeSegmentPositions }
-          for (const segmentId of segmentIds) {
+          for (const segmentId of segmentIds) delete freeSegmentPositions[segmentId]
+          for (const segmentId of layoutSegmentIds) {
             const nextPos = droppedLayout[segmentId] ?? { x: intent.x, y: intent.y }
             freeSegmentPositions[segmentId] = nextPos
           }
@@ -1789,6 +1820,9 @@ const applyIntent = (intent: WorkerIntent): void => {
       ),
       groupFreeSegmentPositions: removeSegmentsFromGroupPositions(localState.groupFreeSegmentPositions, [segmentId]),
     }
+    const finMove = finalizePooledCoinageStacks(worldState, localState)
+    worldState = finMove.worldState
+    localState = finMove.localState
   }
 
   if (intent.type === 'MOVE_ENTRY_TO') {

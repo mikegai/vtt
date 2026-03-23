@@ -224,3 +224,102 @@ export const expandSegmentIdsForCoinageMerge = (
   }
   return out
 }
+
+/** Groups pooled coin/gem lines that share the same stack key (for merge-on-drop / consolidate). */
+export const pooledCoinageStateFingerprint = (e: Pick<InventoryEntry, 'state' | 'zone'>): string => {
+  if (e.zone === 'dropped') return 'd'
+  if (e.zone === 'worn') return 'w'
+  if (e.state?.dropped) return 'd'
+  if (e.state?.worn) return 'w'
+  return ''
+}
+
+/**
+ * Find an existing pooled coin/gem stack to add quantity to (inventory rows only).
+ * Dropped piles (canvas / group free space) never merge — each drop stays its own block.
+ */
+export const findPooledCoinageStackToMerge = (
+  ws: CanonicalState,
+  actorId: string,
+  carryGroupId: string | undefined,
+  zone: InventoryEntry['zone'],
+  state: InventoryEntry['state'] | undefined,
+  itemDefId: string,
+  itemDef: ItemDefinition,
+): InventoryEntry | undefined => {
+  if (!isCoinagePooledDefinition(itemDef)) return undefined
+  if (zone === 'dropped') return undefined
+  const finger = pooledCoinageStateFingerprint({ zone, state })
+  const candidates = Object.values(ws.inventoryEntries).filter((e) => {
+    if (e.actorId !== actorId) return false
+    if (carryGroupId) {
+      if (e.carryGroupId !== carryGroupId) return false
+    } else if (e.carryGroupId) {
+      return false
+    }
+    if (e.zone !== zone) return false
+    if (e.itemDefId !== itemDefId) return false
+    return pooledCoinageStateFingerprint(e) === finger
+  })
+  candidates.sort((a, b) => a.id.localeCompare(b.id))
+  return candidates[0]
+}
+
+export type ConsolidatePooledCoinageResult = {
+  readonly worldState: CanonicalState
+  readonly removedEntryIds: readonly string[]
+  /** Removed inventory entry id → keeper id (for remapping free-segment keys after a canvas drop). */
+  readonly entryRemapToKeeper: ReadonlyMap<string, string>
+}
+
+/**
+ * Merge duplicate pooled coin/gem rows on inventory nodes only.
+ * Skips `zone: 'dropped'` so separate piles on the canvas or in groups stay distinct.
+ */
+export const consolidatePooledCoinageInInventory = (ws: CanonicalState): ConsolidatePooledCoinageResult => {
+  const groups = new Map<string, InventoryEntry[]>()
+  for (const entry of Object.values(ws.inventoryEntries)) {
+    const def = ws.itemDefinitions[entry.itemDefId]
+    if (!def || !isCoinagePooledDefinition(def)) continue
+    if (entry.zone === 'dropped') continue
+    const key = `${entry.actorId}|${entry.carryGroupId ?? ''}|${entry.zone}|${entry.itemDefId}|${pooledCoinageStateFingerprint(entry)}`
+    const list = groups.get(key)
+    if (list) list.push(entry)
+    else groups.set(key, [entry])
+  }
+
+  const entryRemapToKeeper = new Map<string, string>()
+  let inventoryEntries = { ...ws.inventoryEntries }
+  let actors = { ...ws.actors }
+  const removedEntryIds: string[] = []
+
+  for (const list of groups.values()) {
+    if (list.length < 2) continue
+    list.sort((a, b) => a.id.localeCompare(b.id))
+    const keeper = list[0]!
+    const totalQty = list.reduce((s, e) => s + Math.max(1, Math.floor(e.quantity)), 0)
+    inventoryEntries[keeper.id] = { ...keeper, quantity: totalQty }
+    for (let i = 1; i < list.length; i++) {
+      const rid = list[i]!.id
+      entryRemapToKeeper.set(rid, keeper.id)
+      removedEntryIds.push(rid)
+      const { [rid]: _deleted, ...rest } = inventoryEntries
+      inventoryEntries = rest
+      for (const aid of Object.keys(actors)) {
+        const a = actors[aid]!
+        if (a.leftWieldingEntryId === rid || a.rightWieldingEntryId === rid) {
+          actors[aid] = {
+            ...a,
+            leftWieldingEntryId: a.leftWieldingEntryId === rid ? undefined : a.leftWieldingEntryId,
+            rightWieldingEntryId: a.rightWieldingEntryId === rid ? undefined : a.rightWieldingEntryId,
+          }
+        }
+      }
+    }
+  }
+
+  if (removedEntryIds.length === 0) {
+    return { worldState: ws, removedEntryIds, entryRemapToKeeper }
+  }
+  return { worldState: { ...ws, inventoryEntries, actors }, removedEntryIds, entryRemapToKeeper }
+}

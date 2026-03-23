@@ -1,4 +1,5 @@
-import type { CanonicalState, InventoryEntry, ItemDefinition, ItemKind } from '../domain/types'
+import { findPooledCoinageStackToMerge, isCoinagePooledDefinition } from '../domain/coinage'
+import type { CanonicalState, CarryZone, InventoryEntry, ItemDefinition, ItemKind } from '../domain/types'
 import { parseNodeId, segmentIdToEntryId } from './drop-intent'
 import { droppedGroupIdForActor, ensureDroppedGroup, resolveRenderableDropActorId } from './dropped-ground'
 import { createInventoryEntryId } from './inventory-ids'
@@ -102,28 +103,75 @@ export const applySpawnItemInstance = (
   const preferredZone = intent.wornClothing ? 'worn' : (intent.zoneHint ?? 'stowed')
   const preferredState = intent.wornClothing ? { worn: true as const } : undefined
 
+  const zone: CarryZone = shouldDropToGround ? 'dropped' : preferredZone
+  const entryState: InventoryEntry['state'] | undefined = shouldDropToGround ? { dropped: true } : preferredState
+
   const createdEntryIds: string[] = []
   const replayEntryIds = intent.replay?.entryIds ?? []
-  for (let i = 0; i < quantity; i += 1) {
-    const entryId = replayEntryIds[i] ?? createInventoryEntryId(ws, intent.itemDefId, i)
-    createdEntryIds.push(entryId)
-    const zone = shouldDropToGround ? 'dropped' : preferredZone
-    const state = shouldDropToGround ? { dropped: true } : preferredState
-    const nextEntry: InventoryEntry = {
-      id: entryId,
-      actorId: targetActorId,
-      itemDefId: intent.itemDefId,
-      quantity: 1,
-      zone,
-      carryGroupId: targetCarryGroupId,
-      state,
+
+  if (isCoinagePooledDefinition(itemDef)) {
+    const existing = !shouldDropToGround
+      ? findPooledCoinageStackToMerge(
+          ws,
+          targetActorId,
+          targetCarryGroupId,
+          zone,
+          entryState,
+          intent.itemDefId,
+          itemDef,
+        )
+      : undefined
+    if (existing) {
+      ws = {
+        ...ws,
+        inventoryEntries: {
+          ...ws.inventoryEntries,
+          [existing.id]: {
+            ...existing,
+            quantity: Math.max(1, Math.floor(existing.quantity)) + quantity,
+          },
+        },
+      }
+    } else {
+      const entryId = replayEntryIds[0] ?? createInventoryEntryId(ws, intent.itemDefId)
+      createdEntryIds.push(entryId)
+      const nextEntry: InventoryEntry = {
+        id: entryId,
+        actorId: targetActorId,
+        itemDefId: intent.itemDefId,
+        quantity,
+        zone,
+        carryGroupId: targetCarryGroupId,
+        state: entryState,
+      }
+      ws = {
+        ...ws,
+        inventoryEntries: {
+          ...ws.inventoryEntries,
+          [entryId]: nextEntry,
+        },
+      }
     }
-    ws = {
-      ...ws,
-      inventoryEntries: {
-        ...ws.inventoryEntries,
-        [entryId]: nextEntry,
-      },
+  } else {
+    for (let i = 0; i < quantity; i += 1) {
+      const entryId = replayEntryIds[i] ?? createInventoryEntryId(ws, intent.itemDefId, i)
+      createdEntryIds.push(entryId)
+      const nextEntry: InventoryEntry = {
+        id: entryId,
+        actorId: targetActorId,
+        itemDefId: intent.itemDefId,
+        quantity: 1,
+        zone,
+        carryGroupId: targetCarryGroupId,
+        state: entryState,
+      }
+      ws = {
+        ...ws,
+        inventoryEntries: {
+          ...ws.inventoryEntries,
+          [entryId]: nextEntry,
+        },
+      }
     }
   }
 
