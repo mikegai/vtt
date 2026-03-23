@@ -3,6 +3,7 @@ import type { WorkerIntent } from '../worker/protocol'
 import { effectiveDropIntentForDragSegmentEnd } from '../worker/protocol'
 import { addInventoryNodeToState } from '../worker/inventory-node'
 import type { WorkerLocalState } from '../worker/scene-vm'
+import { applyDuplicateEntryIntent, applyDuplicateNodeIntent } from './duplicate-intents'
 import { commitDragSegmentOntoNode } from './drag-segment-commit'
 import {
   applyMoveNodeInGroup,
@@ -31,8 +32,8 @@ export const applyVmIntent = (
         x: intent.x,
         y: intent.y,
         groupId: intent.groupId,
-        replayActorId: intent.replayActorId,
-        replayActorName: intent.replayActorName,
+        replayActorId: intent.replay?.actorId ?? intent.replayActorId,
+        replayActorName: intent.replay?.actorName ?? intent.replayActorName,
       })
       return { worldState: result.worldState, localState: result.localState }
     }
@@ -99,6 +100,10 @@ export const applyVmIntent = (
       }
       return { worldState, localState: { ...localState, dropIntent: null } }
     }
+    case 'DUPLICATE_NODE':
+      return applyDuplicateNodeIntent(worldState, localState, intent)
+    case 'DUPLICATE_ENTRY':
+      return applyDuplicateEntryIntent(worldState, localState, intent)
     default:
       return { worldState, localState }
   }

@@ -103,8 +103,9 @@ export const applySpawnItemInstance = (
   const preferredState = intent.wornClothing ? { worn: true as const } : undefined
 
   const createdEntryIds: string[] = []
+  const replayEntryIds = intent.replay?.entryIds ?? []
   for (let i = 0; i < quantity; i += 1) {
-    const entryId = createInventoryEntryId(ws, intent.itemDefId, i)
+    const entryId = replayEntryIds[i] ?? createInventoryEntryId(ws, intent.itemDefId, i)
     createdEntryIds.push(entryId)
     const zone = shouldDropToGround ? 'dropped' : preferredZone
     const state = shouldDropToGround ? { dropped: true } : preferredState
@@ -160,7 +161,9 @@ export const applyAddItemsOp = (
 ): { worldState: CanonicalState; localState: WorkerLocalState } => {
   let ws = worldState
   let ls = localState
-  for (const item of intent.items) {
+  const replayByItem = intent.replay?.spawnEntryIdsByItem ?? []
+  for (let i = 0; i < intent.items.length; i += 1) {
+    const item = intent.items[i]!
     const r = applySpawnItemInstance(ws, ls, {
       type: 'SPAWN_ITEM_INSTANCE',
       itemDefId: item.itemDefId,
@@ -177,6 +180,7 @@ export const applyAddItemsOp = (
       bundleSize: item.bundleSize,
       minToCount: item.minToCount,
       sixthsPerBundle: item.sixthsPerBundle,
+      replay: replayByItem[i] ? { entryIds: replayByItem[i] } : undefined,
     })
     ws = r.worldState
     ls = r.localState

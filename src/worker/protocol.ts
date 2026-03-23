@@ -195,14 +195,27 @@ export type WorkerIntent =
   | { readonly type: 'SET_GROUP_LIST_VIEW'; readonly groupId: string; readonly enabled: boolean }
   | { readonly type: 'SET_LAYOUT_EXPANDED'; readonly containerId: string; readonly expanded: boolean }
   | { readonly type: 'RESIZE_NODE'; readonly nodeId: string; readonly slotCols: number; readonly slotRows: number }
-  | { readonly type: 'ADD_GROUP'; readonly x: number; readonly y: number }
+  | {
+      readonly type: 'ADD_GROUP'
+      readonly x: number
+      readonly y: number
+      readonly replay?: {
+        readonly groupId?: string
+        readonly groupTitle?: string
+      }
+    }
   | { readonly type: 'DELETE_GROUP'; readonly groupId: string }
   | {
       readonly type: 'ADD_INVENTORY_NODE'
       readonly x: number
       readonly y: number
       readonly groupId?: string | null
-      /** Set when queueing sync intent so server+pending replay matches first application. */
+      readonly replay?: {
+        /** Deterministic replay values computed when queueing. */
+        readonly actorId?: string
+        readonly actorName?: string
+      }
+      /** Legacy replay fields (back-compat for tests/queued payloads). */
       readonly replayActorId?: string
       readonly replayActorName?: string
     }
@@ -237,7 +250,12 @@ export type WorkerIntent =
       readonly y?: number
       /** Present and complete for free/canvas drops; null when dropping into a node (renderer does not send a map). */
       readonly freeSegmentPositions?: Readonly<Record<string, { x: number; y: number }>> | null
-      /** Snapshotted from dropIntent at queue time for replay-safety (worker-internal). */
+      readonly replay?: {
+        /** Snapshotted from dropIntent at queue time for replay-safety (worker-internal). */
+        readonly segmentIds?: readonly string[]
+        readonly sourceNodeIds?: Readonly<Record<string, string>>
+      }
+      /** Legacy replay fields (back-compat for tests/queued payloads). */
       readonly replaySegmentIds?: readonly string[]
       readonly replaySourceNodeIds?: Readonly<Record<string, string>>
     }
@@ -261,6 +279,10 @@ export type WorkerIntent =
       readonly bundleSize?: number
       readonly minToCount?: number
       readonly sixthsPerBundle?: number
+      readonly replay?: {
+        /** Deterministic entry ids to allocate in order. */
+        readonly entryIds?: readonly string[]
+      }
     }
   | {
       readonly type: 'APPLY_ADD_ITEMS_OP'
@@ -280,6 +302,13 @@ export type WorkerIntent =
         readonly minToCount?: number
         readonly sixthsPerBundle?: number
       }[]
+      readonly replay?: {
+        /**
+         * Per-item deterministic entry ids for replay. `spawnEntryIdsByItem[i]`
+         * corresponds to `items[i]` and contains one id per spawned quantity unit.
+         */
+        readonly spawnEntryIdsByItem?: readonly (readonly string[])[]
+      }
     }
   | { readonly type: 'MOVE_ENTRY_TO'; readonly segmentId: string; readonly sourceNodeId: string; readonly targetNodeId: string }
   | {
@@ -288,9 +317,25 @@ export type WorkerIntent =
       readonly targetNodeId: string
     }
   | { readonly type: 'DELETE_ENTRY'; readonly segmentIds: readonly string[] }
-  | { readonly type: 'DUPLICATE_ENTRY'; readonly segmentIds: readonly string[] }
+  | {
+      readonly type: 'DUPLICATE_ENTRY'
+      readonly segmentIds: readonly string[]
+      readonly replay?: {
+        /** One new entry id per duplicated row, in nested-loop order (same as apply). */
+        readonly newEntryIds?: readonly string[]
+      }
+    }
   | { readonly type: 'DELETE_NODE'; readonly nodeId: string }
-  | { readonly type: 'DUPLICATE_NODE'; readonly nodeId: string }
+  | {
+      readonly type: 'DUPLICATE_NODE'
+      readonly nodeId: string
+      readonly replay?: {
+        readonly newActorId?: string
+        readonly newActorName?: string
+        /** Map source inventory entry id → new entry id for the duplicated actor. */
+        readonly entryIdsBySourceEntryId?: Readonly<Record<string, string>>
+      }
+    }
   | {
       readonly type: 'PASTE_NODE_CLIPBOARD'
       readonly payload: string
@@ -300,7 +345,15 @@ export type WorkerIntent =
     }
   | { readonly type: 'SET_WIELD'; readonly segmentId: string; readonly wield: WieldGrip }
   | { readonly type: 'UNWIELD'; readonly segmentId: string }
-  | { readonly type: 'ADD_LABEL'; readonly text: string; readonly x: number; readonly y: number }
+  | {
+      readonly type: 'ADD_LABEL'
+      readonly text: string
+      readonly x: number
+      readonly y: number
+      readonly replay?: {
+        readonly labelId?: string
+      }
+    }
   | { readonly type: 'UPDATE_LABEL_TEXT'; readonly labelId: string; readonly text: string }
   | { readonly type: 'MOVE_LABEL'; readonly labelId: string; readonly x: number; readonly y: number }
   | { readonly type: 'DELETE_LABEL'; readonly labelId: string }
@@ -337,10 +390,12 @@ export function effectiveDropIntentForDragSegmentEnd(
   intent: DragSegmentEndIntent,
 ): DropIntent | null {
   if (localDropIntent) return localDropIntent
-  if (intent.replaySegmentIds && intent.replaySourceNodeIds) {
+  const replaySegmentIds = intent.replay?.segmentIds ?? intent.replaySegmentIds
+  const replaySourceNodeIds = intent.replay?.sourceNodeIds ?? intent.replaySourceNodeIds
+  if (replaySegmentIds && replaySourceNodeIds) {
     return {
-      segmentIds: intent.replaySegmentIds,
-      sourceNodeIds: intent.replaySourceNodeIds,
+      segmentIds: replaySegmentIds,
+      sourceNodeIds: replaySourceNodeIds,
       targetNodeId: intent.targetNodeId,
     }
   }

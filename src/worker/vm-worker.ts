@@ -17,13 +17,15 @@ import {
   collectActorSubtreeIds,
   collectSceneSubtreeNodeIds,
 } from '../vm/scene-node-mutations'
+import { applyDuplicateEntryIntent, applyDuplicateNodeIntent } from '../vm/duplicate-intents'
 import { commitDragSegmentOntoNode, expandDragSegmentToEntryIds, removeSegmentsFromGroupPositions } from '../vm/drag-segment-commit'
 import { buildSegmentIdToSourceNodeId } from '../vm/segment-source-map'
 import { applySpawnItemInstance } from '../vm/spawn-item-instance'
 import { diffSceneVM } from './scene-diff'
-import { addInventoryNodeToState, createInventoryActorId, nextInventoryName } from './inventory-node'
+import { addInventoryNodeToState, createInventoryActorId } from './inventory-node'
 import { buildSceneVM, type WorkerLocalState } from './scene-vm'
 import { parseNodeClipboardPayload, serializeNodeClipboard } from './node-clipboard'
+import { canonicalizeIntentForReplay } from './replay-canonicalize'
 import {
   effectiveDropIntentForDragSegmentEnd,
   type MainToWorkerMessage,
@@ -70,6 +72,8 @@ import {
 
 /** Stable key for canvas-scoped room (SpacetimeDB world + canvas). */
 const roomKeyForContext = (ctx: WorldCanvasContext): string => `${ctx.worldId}::${ctx.canvasId}`
+const createFallbackReplayToken = (prefix: string): string =>
+  `${prefix}:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 7)}`
 
 let worldState: CanonicalState | null = null
 /** Authoritative snapshot from SpacetimeDB reconstruct only (never overwritten by intents). */
@@ -777,12 +781,8 @@ const runIntentBatch = (intents: readonly WorkerIntent[]): void => {
   }
 }
 
-/** Same base as deriveWorkingFromServerAndPending: clone(server) + prior pending, then one id/name for stable replay. */
-const enrichAddInventoryNodeForSyncReplay = (
-  intent: Extract<WorkerIntent, { type: 'ADD_INVENTORY_NODE' }>,
-): Extract<WorkerIntent, { type: 'ADD_INVENTORY_NODE' }> => {
-  if (intent.replayActorId != null && intent.replayActorName != null) return intent
-  if (!serverWorldState) return intent
+const withReplayBaseState = <T>(fn: (state: CanonicalState, ls: WorkerLocalState) => T): T | null => {
+  if (!serverWorldState) return null
   recomputeSuppressDepth += 1
   inReplay = true
   const savedW = worldState
@@ -793,9 +793,7 @@ const enrichAddInventoryNodeForSyncReplay = (
     for (const pending of pendingSyncIntents) {
       applyIntent(pending)
     }
-    const replayActorId = createInventoryActorId(worldState, Date.now, Math.random)
-    const replayActorName = nextInventoryName(worldState)
-    return { ...intent, replayActorId, replayActorName }
+    return fn(worldState, localState)
   } finally {
     worldState = savedW
     localState = savedL
@@ -809,17 +807,14 @@ const applyIntent = (intent: WorkerIntent): void => {
     if (intent.type === 'SET_WORLD_STATE') {
       pendingSyncIntents = []
     }
-    let stored: WorkerIntent = intent
-    if (intent.type === 'DRAG_SEGMENT_END' && localState.dropIntent) {
-      stored = {
-        ...intent,
-        replaySegmentIds: localState.dropIntent.segmentIds,
-        replaySourceNodeIds: localState.dropIntent.sourceNodeIds,
-      }
-    }
-    if (intent.type === 'ADD_INVENTORY_NODE') {
-      stored = enrichAddInventoryNodeForSyncReplay(intent)
-    }
+    const stored: WorkerIntent = canonicalizeIntentForReplay(intent, {
+      localDropIntent: localState.dropIntent,
+      deriveReplayBase: () =>
+        withReplayBaseState((state, ls) => ({
+          worldState: state,
+          localState: ls,
+        })),
+    })
     pendingSyncIntents.push(stored)
     deriveWorkingFromServerAndPending()
     recompute()
@@ -1011,8 +1006,8 @@ const applyIntent = (intent: WorkerIntent): void => {
   }
 
   if (intent.type === 'ADD_GROUP') {
-    const groupId = `custom-group:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 7)}`
-    const title = `Group ${Object.keys(localState.customGroups).length + 1}`
+    const groupId = intent.replay?.groupId ?? createFallbackReplayToken('custom-group')
+    const title = intent.replay?.groupTitle ?? `Group ${Object.keys(localState.customGroups).length + 1}`
     localState = {
       ...localState,
       customGroups: {
@@ -1121,8 +1116,8 @@ const applyIntent = (intent: WorkerIntent): void => {
       x,
       y,
       groupId,
-      replayActorId: intent.replayActorId,
-      replayActorName: intent.replayActorName,
+      replayActorId: intent.replay?.actorId ?? intent.replayActorId,
+      replayActorName: intent.replay?.actorName ?? intent.replayActorName,
     })
     worldState = result.worldState
     localState = result.localState
@@ -1606,7 +1601,8 @@ const applyIntent = (intent: WorkerIntent): void => {
     if (worldState) {
       pendingSnapFromInventoryBeforeIntent = new Set(Object.keys(worldState.inventoryEntries))
     }
-    runIntentBatch(intent.items.map((item) => ({
+    const replayByItem = intent.replay?.spawnEntryIdsByItem ?? []
+    runIntentBatch(intent.items.map((item, idx) => ({
       type: 'SPAWN_ITEM_INSTANCE' as const,
       itemDefId: item.itemDefId,
       quantity: item.quantity,
@@ -1622,6 +1618,7 @@ const applyIntent = (intent: WorkerIntent): void => {
       bundleSize: item.bundleSize,
       minToCount: item.minToCount,
       sixthsPerBundle: item.sixthsPerBundle,
+      replay: replayByItem[idx] ? { entryIds: replayByItem[idx] } : undefined,
     })))
     return
   }
@@ -1886,185 +1883,18 @@ const applyIntent = (intent: WorkerIntent): void => {
 
   if (intent.type === 'DUPLICATE_NODE') {
     if (!worldState) return
-    const actorId = parseNodeId(intent.nodeId).actorId
-    const actor = worldState.actors[actorId]
-    if (!actor) {
-      recompute()
-      return
-    }
-    const scene = buildSceneVM(worldState, localState)
-    const sourceEntries = Object.values(worldState.inventoryEntries).filter((e) => e.actorId === actorId)
-    const newActorId = createInventoryActorId(worldState, Date.now, Math.random)
-    const newName = actor.name.match(/^Inventory (\d+)$/)
-      ? nextInventoryName(worldState)
-      : `${actor.name} (copy)`
-    const newActor: Actor = {
-      ...actor,
-      id: newActorId,
-      name: newName,
-      leftWieldingEntryId: undefined,
-      rightWieldingEntryId: undefined,
-    }
-    worldState = {
-      ...worldState,
-      actors: {
-        ...worldState.actors,
-        [newActorId]: newActor,
-      },
-    }
-    worldState = ensureDroppedGroup(worldState, newActorId)
-    const newCarryGroupId = droppedGroupIdForActor(newActorId)
-    const entryIdMap = new Map<string, string>()
-    let nextFreeSegmentPositions = { ...localState.freeSegmentPositions }
-    const nextGroupFreeSegmentPositions = { ...localState.groupFreeSegmentPositions }
-    for (const entry of sourceEntries) {
-      const newEntryId = createInventoryEntryId(worldState, entry.itemDefId)
-      entryIdMap.set(entry.id, newEntryId)
-      const isDropped = !!entry.carryGroupId || entry.zone === 'dropped' || !!entry.state?.dropped
-      const nextEntry: InventoryEntry = {
-        id: newEntryId,
-        actorId: newActorId,
-        itemDefId: entry.itemDefId,
-        quantity: entry.quantity,
-        zone: isDropped ? 'dropped' : entry.zone,
-        carryGroupId: isDropped ? newCarryGroupId : undefined,
-        state: isDropped ? { dropped: true } : undefined,
-      }
-      worldState = {
-        ...worldState,
-        inventoryEntries: {
-          ...worldState.inventoryEntries,
-          [newEntryId]: nextEntry,
-        },
-      }
-      if (isDropped) {
-        const freeSeg = Object.values(scene.freeSegments ?? {}).find((f) => segmentIdToEntryId(f.id) === entry.id)
-        const offsetX = 40
-        const offsetY = 60
-        const srcX = freeSeg?.x ?? 120
-        const srcY = freeSeg?.y ?? 120
-        const newPos = { x: srcX + offsetX, y: srcY + offsetY }
-        if (freeSeg?.groupId) {
-          const groupPos = nextGroupFreeSegmentPositions[freeSeg.groupId] ?? {}
-          nextGroupFreeSegmentPositions[freeSeg.groupId] = { ...groupPos, [newEntryId]: newPos }
-        } else {
-          nextFreeSegmentPositions = { ...nextFreeSegmentPositions, [newEntryId]: newPos }
-        }
-      }
-    }
-    const node = scene.nodes[intent.nodeId] ?? Object.values(scene.nodes).find((n) => n.actorId === actorId)
-    const groupId = node?.groupId ?? null
-    const sourceSizeOverride = localState.nodeSizeOverrides[actorId]
-    if (groupId) {
-      const sourceGroupPositions = localState.groupNodePositions[groupId] ?? {}
-      const sourceRelativePos = sourceGroupPositions[actorId] ?? { x: 40, y: 60 }
-      localState = {
-        ...localState,
-        freeSegmentPositions: nextFreeSegmentPositions,
-        groupFreeSegmentPositions: nextGroupFreeSegmentPositions,
-        nodeGroupOverrides: { ...localState.nodeGroupOverrides, [newActorId]: groupId },
-        groupNodePositions: {
-          ...localState.groupNodePositions,
-          [groupId]: {
-            ...sourceGroupPositions,
-            [newActorId]: { x: sourceRelativePos.x + 40, y: sourceRelativePos.y + 60 },
-          },
-        },
-        nodeSizeOverrides: sourceSizeOverride
-          ? { ...localState.nodeSizeOverrides, [newActorId]: sourceSizeOverride }
-          : localState.nodeSizeOverrides,
-        groupNodeOrders: {
-          ...localState.groupNodeOrders,
-          [groupId]: [...(localState.groupNodeOrders[groupId] ?? []), newActorId],
-        },
-        selectedSegmentIds: Array.from(entryIdMap.values()),
-      }
-    } else {
-      const pos = localState.nodePositions[actorId] ?? { x: 120, y: 120 }
-      localState = {
-        ...localState,
-        freeSegmentPositions: nextFreeSegmentPositions,
-        groupFreeSegmentPositions: nextGroupFreeSegmentPositions,
-        nodeGroupOverrides: { ...localState.nodeGroupOverrides, [newActorId]: null },
-        nodePositions: {
-          ...localState.nodePositions,
-          [newActorId]: { x: pos.x + 40, y: pos.y + 60 },
-        },
-        nodeSizeOverrides: sourceSizeOverride
-          ? { ...localState.nodeSizeOverrides, [newActorId]: sourceSizeOverride }
-          : localState.nodeSizeOverrides,
-        selectedSegmentIds: Array.from(entryIdMap.values()),
-      }
-    }
+    const r = applyDuplicateNodeIntent(worldState, localState, intent)
+    worldState = r.worldState
+    localState = r.localState
     recompute()
     return
   }
 
   if (intent.type === 'DUPLICATE_ENTRY') {
     if (!worldState) return
-    const scene = buildSceneVM(worldState, localState)
-    const newSegmentIds: string[] = []
-    for (const segmentId of intent.segmentIds.filter((id) => !isSelfWeightTokenId(id))) {
-      const entryIds = entryIdsForSegmentMutation(worldState, segmentId)
-      for (const entryId of entryIds) {
-      const entry = worldState.inventoryEntries[entryId]
-      if (!entry) continue
-      const itemDef = worldState.itemDefinitions[entry.itemDefId]
-      if (!itemDef) continue
-
-      const newEntryId = createInventoryEntryId(worldState, entry.itemDefId)
-      const isDropped = !!entry.carryGroupId || entry.zone === 'dropped' || !!entry.state?.dropped
-      const freeSeg = scene.freeSegments?.[segmentId]
-
-      const nextEntry: InventoryEntry = {
-        id: newEntryId,
-        actorId: entry.actorId,
-        itemDefId: entry.itemDefId,
-        quantity: Math.max(1, entry.quantity),
-        zone: isDropped ? 'dropped' : entry.zone,
-        carryGroupId: isDropped ? entry.carryGroupId : undefined,
-        state: isDropped ? { dropped: true } : undefined,
-      }
-      worldState = {
-        ...worldState,
-        inventoryEntries: {
-          ...worldState.inventoryEntries,
-          [newEntryId]: nextEntry,
-        },
-      }
-      newSegmentIds.push(newEntryId)
-
-      if (isDropped && freeSeg) {
-        const offsetX = 40
-        const offsetY = 60
-        const srcX = freeSeg.x
-        const srcY = freeSeg.y
-        const newPos = { x: srcX + offsetX, y: srcY + offsetY }
-        if (freeSeg.groupId) {
-          const groupPos = localState.groupFreeSegmentPositions[freeSeg.groupId] ?? {}
-          localState = {
-            ...localState,
-            groupFreeSegmentPositions: {
-              ...localState.groupFreeSegmentPositions,
-              [freeSeg.groupId]: { ...groupPos, [newEntryId]: newPos },
-            },
-          }
-        } else {
-          localState = {
-            ...localState,
-            freeSegmentPositions: {
-              ...localState.freeSegmentPositions,
-              [newEntryId]: newPos,
-            },
-          }
-        }
-      }
-      }
-    }
-    localState = {
-      ...localState,
-      selectedSegmentIds: newSegmentIds,
-    }
+    const r = applyDuplicateEntryIntent(worldState, localState, intent)
+    worldState = r.worldState
+    localState = r.localState
     recompute()
     return
   }
@@ -2198,7 +2028,7 @@ const applyIntent = (intent: WorkerIntent): void => {
       recompute()
       return
     }
-    const labelId = `label:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 7)}`
+    const labelId = intent.replay?.labelId ?? createFallbackReplayToken('label')
     localState = {
       ...localState,
       labels: {
