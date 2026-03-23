@@ -21,13 +21,12 @@ import {
   type MutateAddItemsOp,
 } from './domain/inventory-ops-schema'
 import { allSourceItems, itemSourceCatalog, type EncumbranceExpr, type SourceItem } from './domain/item-source-catalog'
-import type { ItemCatalogRow } from './domain/types'
 import { formatSixthsAsStone, stoneToSixths } from './domain/rules'
 import { createSourceItemSearchIndex } from './domain/item-source-search'
 import { getWieldOptions } from './domain/weapon-metadata'
 import { PixiBoardAdapter } from './pixi/PixiBoardAdapter'
 import { emptyBoardState, sampleState } from './sample-data'
-import type { ActorKind, CarryZone } from './domain/types'
+import type { ActorKind, CarryZone, CoinDenom, ItemCatalogRow, ItemKind } from './domain/types'
 import type { ConnectedUser, MainToWorkerMessage, RemoteCursor, SceneSegmentVM, SceneVM, WorkerToMainMessage } from './worker/protocol'
 import type { ItemCategory } from './domain/item-category'
 import {
@@ -350,6 +349,7 @@ function showItemEditorDialog(segment: SceneSegmentVM): void {
               <option value="bulky" ${prototype.kind === 'bulky' ? 'selected' : ''}>bulky</option>
               <option value="armor" ${prototype.kind === 'armor' ? 'selected' : ''}>armor</option>
               <option value="coins" ${prototype.kind === 'coins' ? 'selected' : ''}>coins</option>
+              <option value="bundled" ${prototype.kind === 'bundled' ? 'selected' : ''}>bundled</option>
             </select>
           </label>
           <label style="display:block;">
@@ -363,6 +363,38 @@ function showItemEditorDialog(segment: SceneSegmentVM): void {
           <label style="display:block;">
             <span style="display:block;font-size:11px;color:#8ea0b6;margin-bottom:4px;">Price (gp)</span>
             <input id="item-editor-price-gp" type="number" min="0" step="0.01" value="${prototype.priceInGp ?? ''}" style="width:100%;box-sizing:border-box;padding:7px 9px;background:#0c1118;border:1px solid #334455;border-radius:6px;color:#d0dae8;" />
+          </label>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:8px;">
+          <label style="display:block;">
+            <span style="display:block;font-size:11px;color:#8ea0b6;margin-bottom:4px;">Bundle size (bundled)</span>
+            <input id="item-editor-bundle-size" type="number" min="1" step="1" value="${prototype.bundleSize ?? ''}" placeholder="20" style="width:100%;box-sizing:border-box;padding:7px 9px;background:#0c1118;border:1px solid #334455;border-radius:6px;color:#d0dae8;" />
+          </label>
+          <label style="display:block;">
+            <span style="display:block;font-size:11px;color:#8ea0b6;margin-bottom:4px;">Min to count (bundled)</span>
+            <input id="item-editor-min-to-count" type="number" min="1" step="1" value="${prototype.minToCount ?? ''}" placeholder="1" style="width:100%;box-sizing:border-box;padding:7px 9px;background:#0c1118;border:1px solid #334455;border-radius:6px;color:#d0dae8;" />
+          </label>
+          <label style="display:block;">
+            <span style="display:block;font-size:11px;color:#8ea0b6;margin-bottom:4px;">Sixths / bundle (bundled)</span>
+            <input id="item-editor-sixths-per-bundle" type="number" min="1" step="1" value="${prototype.sixthsPerBundle ?? ''}" placeholder="1" style="width:100%;box-sizing:border-box;padding:7px 9px;background:#0c1118;border:1px solid #334455;border-radius:6px;color:#d0dae8;" />
+          </label>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px;align-items:end;">
+          <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:#c3d0e0;">
+            <input id="item-editor-coinage-pool" type="checkbox" ${prototype.coinagePool ? 'checked' : ''}/>
+            Coinage pool (standard / coins)
+          </label>
+          <label style="display:block;">
+            <span style="display:block;font-size:11px;color:#8ea0b6;margin-bottom:4px;">Coin denom</span>
+            <select id="item-editor-coin-denom" style="width:100%;box-sizing:border-box;padding:7px 9px;background:#0c1118;border:1px solid #334455;border-radius:6px;color:#d0dae8;">
+              <option value="" ${!prototype.coinDenom ? 'selected' : ''}>—</option>
+              <option value="cp" ${prototype.coinDenom === 'cp' ? 'selected' : ''}>cp</option>
+              <option value="bp" ${prototype.coinDenom === 'bp' ? 'selected' : ''}>bp</option>
+              <option value="sp" ${prototype.coinDenom === 'sp' ? 'selected' : ''}>sp</option>
+              <option value="ep" ${prototype.coinDenom === 'ep' ? 'selected' : ''}>ep</option>
+              <option value="gp" ${prototype.coinDenom === 'gp' ? 'selected' : ''}>gp</option>
+              <option value="pp" ${prototype.coinDenom === 'pp' ? 'selected' : ''}>pp</option>
+            </select>
           </label>
         </div>
         <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:#c3d0e0;margin-top:8px;">
@@ -417,11 +449,23 @@ function showItemEditorDialog(segment: SceneSegmentVM): void {
     const parsedQuantity = Number(itemEditorDialog.querySelector<HTMLInputElement>('#item-editor-quantity')?.value ?? 1)
     const quantityValue = Number.isFinite(parsedQuantity) ? Math.max(1, Math.floor(parsedQuantity)) : 1
     const zoneValue = (itemEditorDialog.querySelector<HTMLSelectElement>('#item-editor-zone')?.value ?? 'stowed') as 'worn' | 'attached' | 'accessible' | 'stowed' | 'dropped'
-    const kindValue = (itemEditorDialog.querySelector<HTMLSelectElement>('#item-editor-kind')?.value ?? 'standard') as 'armor' | 'bulky' | 'standard' | 'coins'
+    const kindValue = (itemEditorDialog.querySelector<HTMLSelectElement>('#item-editor-kind')?.value ??
+      'standard') as ItemKind
     const parseOptionalPositiveNumber = (raw: string): number | undefined => {
       const n = Number(raw)
       return Number.isFinite(n) && n > 0 ? n : undefined
     }
+    const parseOptionalPositiveInt = (raw: string): number | undefined => {
+      const n = Number(raw)
+      return Number.isFinite(n) && n >= 1 ? Math.floor(n) : undefined
+    }
+    const denomRaw = itemEditorDialog.querySelector<HTMLSelectElement>('#item-editor-coin-denom')?.value ?? ''
+    const coinDenomForPatch: CoinDenom | '' | undefined =
+      kindValue === 'standard' || kindValue === 'coins'
+        ? denomRaw === ''
+          ? ''
+          : (denomRaw as CoinDenom)
+        : undefined
 
     postToWorker({
       type: 'INTENT',
@@ -446,6 +490,25 @@ function showItemEditorDialog(segment: SceneSegmentVM): void {
           armorClass: parseOptionalPositiveNumber(itemEditorDialog.querySelector<HTMLInputElement>('#item-editor-armor-class')?.value ?? ''),
           priceInGp: parseOptionalPositiveNumber(itemEditorDialog.querySelector<HTMLInputElement>('#item-editor-price-gp')?.value ?? ''),
           isFungibleVisual: !!itemEditorDialog.querySelector<HTMLInputElement>('#item-editor-fungible')?.checked,
+          ...(kindValue === 'bundled'
+            ? {
+                bundleSize: parseOptionalPositiveNumber(
+                  itemEditorDialog.querySelector<HTMLInputElement>('#item-editor-bundle-size')?.value ?? '',
+                ),
+                minToCount: parseOptionalPositiveInt(
+                  itemEditorDialog.querySelector<HTMLInputElement>('#item-editor-min-to-count')?.value ?? '',
+                ),
+                sixthsPerBundle: parseOptionalPositiveNumber(
+                  itemEditorDialog.querySelector<HTMLInputElement>('#item-editor-sixths-per-bundle')?.value ?? '',
+                ),
+              }
+            : {}),
+          ...(kindValue === 'standard' || kindValue === 'coins'
+            ? {
+                coinagePool: !!itemEditorDialog.querySelector<HTMLInputElement>('#item-editor-coinage-pool')?.checked,
+                coinDenom: coinDenomForPatch,
+              }
+            : {}),
         },
       },
     })
@@ -1441,7 +1504,18 @@ const deriveItemKind = (source: SourceItem): { kind: string; sixthsPerUnit: numb
   return { kind: 'standard', sixthsPerUnit: perUnit }
 }
 
-const deriveItemKindFromCatalogRow = (row: ItemCatalogRow): { kind: string; sixthsPerUnit: number; armorClass?: number } => {
+type DerivedItemFromCatalogRow = {
+  kind: ItemKind
+  sixthsPerUnit: number
+  armorClass?: number
+  bundleSize?: number
+  minToCount?: number
+  sixthsPerBundle?: number
+  coinagePool?: boolean
+  coinDenom?: CoinDenom
+}
+
+const deriveItemKindFromCatalogRow = (row: ItemCatalogRow): DerivedItemFromCatalogRow => {
   const perUnit = row.sixthsPerUnit ?? 6
   if (row.kind === 'armor') {
     return {
@@ -1451,8 +1525,29 @@ const deriveItemKindFromCatalogRow = (row: ItemCatalogRow): { kind: string; sixt
     }
   }
   if (row.kind === 'bulky') return { kind: 'bulky', sixthsPerUnit: perUnit }
-  if (row.kind === 'coins') return { kind: 'coins', sixthsPerUnit: perUnit }
-  return { kind: 'standard', sixthsPerUnit: perUnit }
+  if (row.kind === 'coins') {
+    return {
+      kind: 'coins',
+      sixthsPerUnit: perUnit,
+      coinagePool: row.coinagePool,
+      coinDenom: row.coinDenom,
+    }
+  }
+  if (row.kind === 'bundled') {
+    return {
+      kind: 'bundled',
+      sixthsPerUnit: perUnit,
+      bundleSize: row.bundleSize ?? 20,
+      minToCount: row.minToCount ?? 1,
+      sixthsPerBundle: row.sixthsPerBundle ?? 1,
+    }
+  }
+  return {
+    kind: 'standard',
+    sixthsPerUnit: perUnit,
+    coinagePool: row.coinagePool,
+    coinDenom: row.coinDenom,
+  }
 }
 
 const consumedParsedIds = new Set<string>()
@@ -2415,6 +2510,11 @@ const buildApplyAddItemsPayload = (
   armorClass?: number
   wornClothing?: boolean
   zoneHint?: CarryZone
+  coinagePool?: boolean
+  coinDenom?: CoinDenom
+  bundleSize?: number
+  minToCount?: number
+  sixthsPerBundle?: number
 }[] => {
   const spawnRows = rows.filter((row) => row.itemDefId)
   return spawnRows.map((row) => {
@@ -2433,11 +2533,29 @@ const buildApplyAddItemsPayload = (
     }
     const catRow = row.itemDefId && !row.itemDefId.startsWith('custom:') ? addItemsCatalogById.get(row.itemDefId) : null
     const sourceItem = row.itemDefId && !row.itemDefId.startsWith('custom:') ? sourceItemById.get(row.itemDefId) : null
-    const derived = catRow
-      ? deriveItemKindFromCatalogRow(catRow)
-      : sourceItem
-        ? deriveItemKind(sourceItem)
-        : { kind: 'standard', sixthsPerUnit: row.sixthsPerUnit ?? 1 }
+    if (catRow) {
+      const d = deriveItemKindFromCatalogRow(catRow)
+      return {
+        itemDefId: row.itemDefId!,
+        itemName: row.itemName,
+        quantity: row.quantity,
+        sixthsPerUnit: row.sixthsPerUnit ?? d.sixthsPerUnit,
+        itemKind: d.kind,
+        armorClass: d.armorClass,
+        wornClothing: row.wornClothing,
+        zoneHint: row.zoneHint,
+        ...(d.kind === 'bundled'
+          ? { bundleSize: d.bundleSize, minToCount: d.minToCount, sixthsPerBundle: d.sixthsPerBundle }
+          : {}),
+        ...(d.kind === 'standard' || d.kind === 'coins'
+          ? {
+              ...(d.coinagePool !== undefined ? { coinagePool: d.coinagePool } : {}),
+              ...(d.coinDenom !== undefined ? { coinDenom: d.coinDenom } : {}),
+            }
+          : {}),
+      }
+    }
+    const derived = sourceItem ? deriveItemKind(sourceItem) : { kind: 'standard', sixthsPerUnit: row.sixthsPerUnit ?? 1 }
     return {
       itemDefId: row.itemDefId!,
       itemName: row.itemName,

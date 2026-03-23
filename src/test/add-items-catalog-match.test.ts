@@ -42,4 +42,21 @@ describe('add-items catalog match', () => {
     expect(m.status).toBe('unknown')
     expect(m.alternatives.length).toBe(0)
   })
+
+  const defaultCoinRows: readonly ItemCatalogRow[] = [
+    { id: 'coinCp', canonicalName: 'cp', kind: 'standard', coinagePool: true, coinDenom: 'cp' },
+    { id: 'coinBp', canonicalName: 'bp', kind: 'standard', coinagePool: true, coinDenom: 'bp' },
+    { id: 'coinSp', canonicalName: 'sp', kind: 'standard', coinagePool: true, coinDenom: 'sp' },
+    { id: 'coinEp', canonicalName: 'ep', kind: 'standard', coinagePool: true, coinDenom: 'ep' },
+    { id: 'coinGp', canonicalName: 'gp', kind: 'standard', coinagePool: true, coinDenom: 'gp' },
+    { id: 'coinPp', canonicalName: 'pp', kind: 'standard', coinagePool: true, coinDenom: 'pp' },
+  ]
+
+  it('resolves denomination short names (exact match for JSON add-items)', () => {
+    expect(resolveAddItemsCatalogMatch('gp', undefined, defaultCoinRows).resolvedItemId).toBe('coinGp')
+    expect(resolveAddItemsCatalogMatch('sp', undefined, defaultCoinRows).resolvedItemId).toBe('coinSp')
+    expect(resolveAddItemsCatalogMatch('ep', undefined, defaultCoinRows).resolvedItemId).toBe('coinEp')
+    expect(resolveAddItemsCatalogMatch('cp', undefined, defaultCoinRows).resolvedItemId).toBe('coinCp')
+    expect(resolveAddItemsCatalogMatch('pp', undefined, defaultCoinRows).resolvedItemId).toBe('coinPp')
+  })
 })

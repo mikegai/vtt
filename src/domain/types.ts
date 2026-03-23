@@ -4,7 +4,10 @@ export const BASE_CAPACITY_SIXTHS = BASE_CAPACITY_STONE * SIXTHS_PER_STONE
 
 export type ActorKind = 'pc' | 'retainer' | 'hireling' | 'animal' | 'vehicle' | 'loot-pile'
 
-export type ItemKind = 'armor' | 'bulky' | 'standard' | 'coins'
+export type ItemKind = 'armor' | 'bulky' | 'standard' | 'coins' | 'bundled'
+
+/** For coin/gem lines that participate in treasury display. */
+export type CoinDenom = 'cp' | 'bp' | 'sp' | 'ep' | 'gp' | 'pp'
 
 export type CarryZone = 'worn' | 'attached' | 'accessible' | 'stowed' | 'dropped'
 
@@ -29,6 +32,16 @@ export type ItemDefinition = {
   readonly priceInGp?: number
   /** When true, contiguous same-type segments may be visually merged. Fallback: sizeSixths <= 1. */
   readonly isFungibleVisual?: boolean
+  /** When true with kind standard (or coins), weight uses coin pool (1000 units ≈ 1 stone). */
+  readonly coinagePool?: boolean
+  /** Denomination for coin lines (treasury + bar color). Gems may omit and use priceInGp only. */
+  readonly coinDenom?: CoinDenom
+  /** Pieces per encumbrance step (e.g. 20 arrows = one sixth). */
+  readonly bundleSize?: number
+  /** First N-1 pieces incur no encumbrance (default 1). */
+  readonly minToCount?: number
+  /** Sixths per full bundle step (default 1). */
+  readonly sixthsPerBundle?: number
 }
 
 /** Snapshot of item definitions for LLM prompt + add-items exact matching (main ↔ worker). */
@@ -39,6 +52,11 @@ export type ItemCatalogRow = {
   readonly sixthsPerUnit?: number
   readonly armorClass?: number
   readonly priceInGp?: number
+  readonly coinagePool?: boolean
+  readonly coinDenom?: CoinDenom
+  readonly bundleSize?: number
+  readonly minToCount?: number
+  readonly sixthsPerBundle?: number
 }
 
 export type InventoryEntry = {

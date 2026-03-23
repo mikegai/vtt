@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { COINAGE_MERGED_DEF_ID } from '../domain/coinage'
 import { packDeterministic, type PackInput } from '../domain/packing'
 import { stoneToSixths } from '../domain/rules'
 import type { InventoryEntry, ItemDefinition } from '../domain/types'
@@ -13,6 +14,7 @@ const defs: Record<string, ItemDefinition> = {
   fiveSixths: { id: 'fiveSixths', canonicalName: '5/6 item', kind: 'standard', sixthsPerUnit: 5 },
   ironRationsDay: { id: 'ironRationsDay', canonicalName: 'Daily iron rations', kind: 'standard', sixthsPerUnit: 1 },
   tunic: { id: 'tunic', canonicalName: 'Tunic and pants', kind: 'standard', sixthsPerUnit: 0 },
+  coinageMerged: { id: COINAGE_MERGED_DEF_ID, canonicalName: 'Coinage & gems', kind: 'coins' },
 }
 
 const mkEntry = (id: string, itemDefId: string, zone: InventoryEntry['zone'], quantity = 1): InventoryEntry => ({
@@ -47,6 +49,16 @@ describe('deterministic packing', () => {
     const first = packDeterministic(items, stoneToSixths(20))
     const second = packDeterministic(items, stoneToSixths(20))
     expect(second).toEqual(first)
+  })
+
+  it('sorts merged coinage after other stowed items', () => {
+    const items = [
+      asInput(mkEntry('b', 'coinageMerged', 'stowed', 1)),
+      asInput(mkEntry('a', 'torch', 'stowed', 1)),
+    ]
+    const packed = packDeterministic(items, stoneToSixths(20))
+    const placed = packed.filter((s) => !s.isOverflow).map((s) => s.itemDefId)
+    expect(placed).toEqual(['torch', COINAGE_MERGED_DEF_ID])
   })
 
   it('marks overflow when capacity exceeded', () => {

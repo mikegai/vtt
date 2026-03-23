@@ -6,6 +6,8 @@ export const SLOT_START_X = 10
 export const NODE_VM_TOP_BAND_H = 34
 export const NODE_VM_BOTTOM_PADDING = 6
 export const NODE_VM_WORN_PILL_STRIP_H = 18
+/** Row under title for coin/gem treasury medallions. */
+export const NODE_VM_TREASURY_STRIP_H = 20
 export const NODE_WIDTH_RIGHT_PAD = 20
 
 export const meterWidthForCols = (slotCols: number): number =>
@@ -20,8 +22,10 @@ export const nodeWidthForCols = (slotCols: number): number =>
 export const nodeHeightForRows = (
   slotRows: number,
   hasWornPills: boolean,
+  hasTreasury = false,
 ): number =>
   NODE_VM_TOP_BAND_H +
   slotAreaHeightForRows(slotRows) +
   NODE_VM_BOTTOM_PADDING +
+  (hasTreasury ? NODE_VM_TREASURY_STRIP_H : 0) +
   (hasWornPills ? NODE_VM_WORN_PILL_STRIP_H : 0)

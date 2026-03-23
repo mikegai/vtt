@@ -1,5 +1,6 @@
 import { Application, Assets, BitmapText, Color, Container, Graphics, Point, Rectangle } from 'pixi.js'
 import { createSpring1D, createSpring2D, setSpring1DTarget, setSpringTarget, updateSpring1D, updateSpring2D } from './spring'
+import type { CoinageMetalFraction } from '../domain/coinage'
 import type { SceneFreeSegmentVM, SceneGroupVM, SceneLabelVM, SceneNodeVM, ScenePatch, SceneVM, SceneSegmentVM } from '../worker/protocol'
 import { resolveNodeGroupDropMode } from './node-drop-mode'
 import { canShowNodeResizeHandles } from './node-resize-availability'
@@ -24,7 +25,11 @@ const memoizeLast = <T extends (...args: any[]) => any>(fn: T): T => {
 import { groupContiguousSameType } from './group-contiguous-same-type'
 import { resolveDragStartFromSegment } from './drag-start-resolution'
 import { decideNodeMotion } from './drag-motion-policy'
-import { nodeHeightForRows as vmNodeHeightForRows, nodeWidthForCols as vmNodeWidthForCols } from '../shared/node-layout'
+import {
+  NODE_VM_TREASURY_STRIP_H,
+  nodeHeightForRows as vmNodeHeightForRows,
+  nodeWidthForCols as vmNodeWidthForCols,
+} from '../shared/node-layout'
 import { freeDropPositionsFromPointerDelta } from '../shared/free-segment-drop-geometry'
 
 /** Stored on segment blocks for context-menu hit testing. */
@@ -620,18 +625,21 @@ const slotSegmentsOnly = memoizeLast((segments: readonly SceneSegmentVM[]): read
 const wornPillSegmentsOnly = memoizeLast((segments: readonly SceneSegmentVM[]): readonly SceneSegmentVM[] =>
   segments.filter((segment) => segment.isWornPill))
 
-const wornPillStripHeight = memoizeLast((segments: readonly SceneSegmentVM[], totalWidth: number, tier: ZoomTier): number => {
-  const pills = wornPillSegmentsOnly(segments)
-  if (pills.length === 0) return 0
-  const positions = layoutWornPills(pills, totalWidth, tier)
-  let maxRow = 0
-  for (const pos of positions.values()) {
-    const row = Math.round((pos.y - TOP_BAND_H - WORN_PILL_STRIP_PAD_TOP) / (WORN_PILL_H + WORN_PILL_ROW_GAP))
-    maxRow = Math.max(maxRow, row)
-  }
-  const rows = maxRow + 1
-  return WORN_PILL_STRIP_PAD_TOP + rows * WORN_PILL_H + (rows - 1) * WORN_PILL_ROW_GAP + WORN_PILL_STRIP_PAD_BOTTOM
-})
+const wornPillStripHeight = memoizeLast(
+  (segments: readonly SceneSegmentVM[], totalWidth: number, tier: ZoomTier, treasuryStripHeight: number): number => {
+    const pills = wornPillSegmentsOnly(segments)
+    if (pills.length === 0) return 0
+    const positions = layoutWornPills(pills, totalWidth, tier, treasuryStripHeight)
+    const pillTop = TOP_BAND_H + treasuryStripHeight + WORN_PILL_STRIP_PAD_TOP
+    let maxRow = 0
+    for (const pos of positions.values()) {
+      const row = Math.round((pos.y - pillTop) / (WORN_PILL_H + WORN_PILL_ROW_GAP))
+      maxRow = Math.max(maxRow, row)
+    }
+    const rows = maxRow + 1
+    return WORN_PILL_STRIP_PAD_TOP + rows * WORN_PILL_H + (rows - 1) * WORN_PILL_ROW_GAP + WORN_PILL_STRIP_PAD_BOTTOM
+  },
+)
 
 const WORN_PILL_HGAP = 6
 
@@ -642,11 +650,13 @@ const layoutWornPills = memoizeLast((
   pills: readonly SceneSegmentVM[],
   totalWidth: number,
   tier: ZoomTier,
+  treasuryStripHeight: number,
 ): Map<string, { x: number; y: number }> => {
   const usableWidth = Math.max(80, totalWidth - SLOT_START_X - 8)
   const result = new Map<string, { x: number; y: number }>()
   let cursorX = 0
   let row = 0
+  const pillTop = TOP_BAND_H + treasuryStripHeight + WORN_PILL_STRIP_PAD_TOP
   for (const pill of pills) {
     const label = tier === 'far' ? pill.shortLabel : (tier === 'medium' ? pill.mediumLabel : pill.fullLabel)
     const text = label.trim().length > 0 ? label : pill.fullLabel
@@ -657,7 +667,7 @@ const layoutWornPills = memoizeLast((
     }
     result.set(pill.id, {
       x: SLOT_START_X + cursorX,
-      y: TOP_BAND_H + WORN_PILL_STRIP_PAD_TOP + row * (WORN_PILL_H + WORN_PILL_ROW_GAP),
+      y: pillTop + row * (WORN_PILL_H + WORN_PILL_ROW_GAP),
     })
     cursorX += w + WORN_PILL_HGAP
   }
@@ -667,6 +677,7 @@ const layoutWornPills = memoizeLast((
 type NodeVerticalLayout = {
   readonly visibleSlotCount: number
   readonly slotAreaHeight: number
+  readonly treasuryStripHeight: number
   readonly pillStripHeight: number
   readonly slotStartY: number
   readonly totalHeight: number
@@ -683,13 +694,15 @@ const computeNodeVerticalLayout = memoizeLast((
   const visibleSlotCount = isExpanded
     ? Math.max(slotCount, node.slotCols * node.slotRows)
     : collapsedVisibleSlotCount(slotSegments, slotCount)
-  const pillStripHeight = wornPillStripHeight(node.segments, totalWidth, tier)
-  const slotStartY = TOP_BAND_H + pillStripHeight
+  const treasuryStripHeight = node.treasury ? NODE_VM_TREASURY_STRIP_H : 0
+  const pillStripHeight = wornPillStripHeight(node.segments, totalWidth, tier, treasuryStripHeight)
+  const slotStartY = TOP_BAND_H + treasuryStripHeight + pillStripHeight
   const slotAreaHeight = isExpanded ? slotAreaHeightForRows(node.slotRows) : slotAreaHeightForSlots(visibleSlotCount)
-  const totalHeight = TOP_BAND_H + slotAreaHeight + NODE_BOTTOM_PADDING + pillStripHeight
+  const totalHeight = TOP_BAND_H + treasuryStripHeight + slotAreaHeight + NODE_BOTTOM_PADDING + pillStripHeight
   return {
     visibleSlotCount,
     slotAreaHeight,
+    treasuryStripHeight,
     pillStripHeight,
     slotStartY,
     totalHeight,
@@ -1413,6 +1426,43 @@ const drawRunVisuals = (
   }
 }
 
+const drawCoinageMetalStrip = (
+  container: Container,
+  bounds: { x: number; y: number; w: number; h: number },
+  metals: CoinageMetalFraction,
+): void => {
+  const g = new Graphics()
+  g.eventMode = 'none'
+  const { x, y, w, h } = bounds
+  const barH = Math.max(4, Math.floor(h * 0.28))
+  const barY = y + h - barH - 1
+  const innerW = Math.max(0, w - 4)
+  let x0 = x + 2
+  const pairs: [number, number][] = [
+    [0xb87333, metals.cp],
+    [0xcd7f32, metals.bp],
+    [0xc0c0c0, metals.sp],
+    [0x9acd32, metals.ep],
+    [0xffd700, metals.gp],
+    [0xe5e4e2, metals.pp],
+  ]
+  let total = pairs.reduce((s, [, f]) => s + f, 0)
+  if (total <= 0) total = 1
+  for (const [col, frac] of pairs) {
+    if (frac <= 0) continue
+    const ww = Math.max(0, innerW * (frac / total))
+    g.roundRect(x0, barY, ww, barH, 1)
+    g.fill({ color: col, alpha: 0.92 })
+    x0 += ww
+  }
+  const end = x + w - 2
+  if (x0 < end) {
+    g.roundRect(x0, barY, end - x0, barH, 1)
+    g.fill({ color: 0x2a2a2a, alpha: 0.45 })
+  }
+  container.addChild(g)
+}
+
 const drawSegmentBlock = (
   container: Container,
   segment: SceneSegmentVM,
@@ -1597,6 +1647,9 @@ const drawSegmentBlock = (
     block.fill({ color: 0xffffff, alpha: 0.001 })
     block.hitArea = new Rectangle(blockBounds.x, blockBounds.y, blockBounds.w, blockBounds.h)
     drawGripIndicators(container, segment.wield, blockBounds, dimmed, dimmedAlpha)
+    if (segment.coinageVisual?.metals) {
+      drawCoinageMetalStrip(container, blockBounds, segment.coinageVisual.metals)
+    }
   } else {
     const { hitBounds, groupBounds } = drawBlendedSegmentRects(
       container,
@@ -1623,6 +1676,9 @@ const drawSegmentBlock = (
     }
     container.addChild(block)
     drawGripIndicators(container, segment.wield, hitBounds, dimmed, dimmedAlpha)
+    if (segment.coinageVisual?.metals) {
+      drawCoinageMetalStrip(container, hitBounds, segment.coinageVisual.metals)
+    }
   }
 }
 
@@ -2858,8 +2914,9 @@ export class PixiBoardAdapter {
     mutableNode.slotCols = Math.max(1, Math.floor(slotCols))
     mutableNode.slotRows = Math.max(1, Math.floor(slotRows))
     const hasWornPills = mutableNode.segments.some((segment) => segment.isWornPill)
+    const hasTreasury = mutableNode.treasury != null
     mutableNode.width = vmNodeWidthForCols(mutableNode.slotCols)
-    mutableNode.height = vmNodeHeightForRows(mutableNode.slotRows, hasWornPills)
+    mutableNode.height = vmNodeHeightForRows(mutableNode.slotRows, hasWornPills, hasTreasury)
     this.recomputeDisplayFlow(this.currentScene)
     this.rebuildAllNodes(this.currentScene)
   }
@@ -3172,8 +3229,9 @@ export class PixiBoardAdapter {
     const pos = this.getNodeDisplayPosition(node)
     const tier = getZoomTier(this.zoom)
     const totalWidth = SLOT_START_X + meterWidthForCols(layoutCols) + 20
-    const pillStripHeight = wornPillStripHeight(node.segments, totalWidth, tier)
-    const slotStartY = TOP_BAND_H + pillStripHeight
+    const treasuryStripHeight = node.treasury ? NODE_VM_TREASURY_STRIP_H : 0
+    const pillStripHeight = wornPillStripHeight(node.segments, totalWidth, tier, treasuryStripHeight)
+    const slotStartY = TOP_BAND_H + treasuryStripHeight + pillStripHeight
     const inY = worldY >= pos.y + slotStartY && worldY <= pos.y + slotStartY + slotAreaH
     if (!inY) return false
     const localX = worldX - pos.x - SLOT_START_X
@@ -3755,7 +3813,7 @@ export class PixiBoardAdapter {
       freeSegmentPositionsCount: freeSegmentPositions ? Object.keys(freeSegmentPositions).length : 0,
       segmentIds: drag.segmentIds,
     })
-    this.handlers.onDragSegmentEnd(targetNodeId, targetGroupId, dropX, dropY, freeSegmentPositions)
+    this.handlers.onDragSegmentEnd(effectiveTarget, targetGroupId, dropX, dropY, freeSegmentPositions)
     this.worldLayer.removeChild(drag.lineLayer)
     this.worldLayer.removeChild(drag.proxy)
     drag.lineLayer.destroy({ children: true })
@@ -3885,6 +3943,7 @@ export class PixiBoardAdapter {
     layoutCols: number,
     totalWidth: number,
     pillStripHeight: number,
+    treasuryStripHeight: number,
     totalSixths: number,
     hoveredSegmentId: string | null,
     filterCategory: string | null,
@@ -3893,12 +3952,15 @@ export class PixiBoardAdapter {
     textCompensationScale: number,
     mergedIds: Set<string>,
   ): void {
-    const pillPositions = layoutWornPills(wornPills, totalWidth, tier)
+    const pillPositions = layoutWornPills(wornPills, totalWidth, tier, treasuryStripHeight)
     node.segments.forEach((segment) => {
       const unshiftedPos = segment.isWornPill ? null : segmentPositionInNode(segment, layoutCols)
       const pos = segment.isWornPill
-        ? (pillPositions.get(segment.id) ?? { x: SLOT_START_X, y: TOP_BAND_H + WORN_PILL_STRIP_PAD_TOP })
-        : { x: unshiftedPos!.x, y: unshiftedPos!.y + pillStripHeight }
+        ? (pillPositions.get(segment.id) ?? {
+            x: SLOT_START_X,
+            y: TOP_BAND_H + treasuryStripHeight + WORN_PILL_STRIP_PAD_TOP,
+          })
+        : { x: unshiftedPos!.x, y: unshiftedPos!.y + treasuryStripHeight + pillStripHeight }
       const originator = this.originatorSegmentIds.has(segment.id)
       let segView = segmentViews.get(segment.id)
       if (!segView) {
@@ -4242,6 +4304,26 @@ export class PixiBoardAdapter {
       contentContainer.addChild(compactPasteHit)
     }
 
+    if (node.treasury) {
+      const t = node.treasury
+      const parts: string[] = []
+      if (t.cp > 0) parts.push(`cp ${t.cp}`)
+      if (t.bp > 0) parts.push(`br ${t.bp}`)
+      if (t.sp > 0) parts.push(`sp ${t.sp}`)
+      if (t.ep > 0) parts.push(`ep ${t.ep}`)
+      if (t.gp > 0) parts.push(`gp ${t.gp}`)
+      if (t.pp > 0) parts.push(`pp ${t.pp}`)
+      if (parts.length > 0) {
+        const treasuryTxt = new BitmapText({
+          text: parts.join('  '),
+          style: { fill: '#a8bdd8', fontSize: 10, fontFamily: FONT_REGULAR },
+        })
+        treasuryTxt.eventMode = 'none'
+        treasuryTxt.position.set(30, TOP_BAND_H + 4)
+        contentContainer.addChild(treasuryTxt)
+      }
+    }
+
     const slotFillLayer = new Graphics()
     redrawNodeSlotFillLayer(slotFillLayer, node, visibleSlotCount, layoutCols, slotStartY, totalSixths, slotSegments, tier)
     contentContainer.addChild(slotFillLayer)
@@ -4289,7 +4371,7 @@ export class PixiBoardAdapter {
     const segmentViews = new Map<string, SegmentView>()
     this.reconcileSegmentViews(
       node, segmentViews, segmentContainer,
-      wornPills, layoutCols, totalWidth, pillStripHeight, totalSixths,
+      wornPills, layoutCols, totalWidth, pillStripHeight, verticalLayout.treasuryStripHeight, totalSixths,
       hoveredSegmentId, filterCategory, selectedSegmentIds,
       tier, textCompensationScale, mergedIds,
     )
@@ -4464,6 +4546,7 @@ export class PixiBoardAdapter {
     const isExpanded = this.isNodeExpanded(node.id)
     const verticalLayout = computeNodeVerticalLayout(node, isExpanded, slotSegments, node.slotCount, totalWidth, tier)
     const pillStripHeight = verticalLayout.pillStripHeight
+    const treasuryStripHeight = verticalLayout.treasuryStripHeight
     const slotStartY = verticalLayout.slotStartY
     const visibleSlotCount = verticalLayout.visibleSlotCount
     const layoutTotalHeight = verticalLayout.totalHeight
@@ -4525,7 +4608,7 @@ export class PixiBoardAdapter {
     }
     this.reconcileSegmentViews(
       node, view.segmentViews, view.segmentContainer,
-      wornPills, layoutCols, view.totalWidth, pillStripHeight, totalSixths,
+      wornPills, layoutCols, view.totalWidth, pillStripHeight, treasuryStripHeight, totalSixths,
       hoveredSegmentId, filterCategory, selectedSegmentIds,
       tier, textCompensationScale, mergedIds,
     )
@@ -5618,7 +5701,8 @@ export class PixiBoardAdapter {
     const layoutCols = this.getNodeLayoutCols(node)
     const totalWidth = SLOT_START_X + meterWidthForCols(layoutCols) + 20
     const tier = getZoomTier(this.zoom)
-    return wornPillStripHeight(node.segments, totalWidth, tier)
+    const treasuryStripHeight = node.treasury ? NODE_VM_TREASURY_STRIP_H : 0
+    return wornPillStripHeight(node.segments, totalWidth, tier, treasuryStripHeight)
   }
 
   private getNodeDisplayDimensionsForExpanded(

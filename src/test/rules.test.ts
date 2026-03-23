@@ -75,6 +75,29 @@ describe('ACKS rules', () => {
     expect(encumbranceCostSixths(plate, 1)).toBe(stoneToSixths(6))
   })
 
+  it('bundled items: encumbrance steps by full bundles after minToCount', () => {
+    const spikes: ItemDefinition = {
+      id: 'spikes',
+      canonicalName: 'Iron spike',
+      kind: 'bundled',
+      bundleSize: 20,
+      minToCount: 1,
+      sixthsPerBundle: 1,
+    }
+    expect(encumbranceCostSixths(spikes, 20)).toBe(1)
+    expect(encumbranceCostSixths(spikes, 40)).toBe(2)
+  })
+
+  it('standard with coinage pool uses coin weight', () => {
+    const tradeBars: ItemDefinition = {
+      id: 'bars',
+      canonicalName: 'Trade bars',
+      kind: 'standard',
+      coinagePool: true,
+    }
+    expect(encumbranceCostSixths(tradeBars, 1000)).toBe(coinsToSixths(1000))
+  })
+
   it('iron rations: every 7, 2 pack into one slot (effective sixths = n - floor(n/7))', () => {
     expect(ironRationEffectiveSixths(5)).toBe(5)
     expect(ironRationEffectiveSixths(6)).toBe(6)

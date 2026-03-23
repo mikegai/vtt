@@ -7,6 +7,25 @@ describe('inventory text parser', () => {
     expect(clauses).toEqual(['2 sacks', '14 torches', '3 flasks of oil'])
   })
 
+  it('extracts compact coin quantities (no space required: 200gp)', () => {
+    expect(extractQuantityAndName('200gp')).toEqual({ quantity: 200, candidateName: 'gp' })
+    expect(extractQuantityAndName('200 gp')).toEqual({ quantity: 200, candidateName: 'gp' })
+    expect(extractQuantityAndName('1200sp')).toEqual({ quantity: 1200, candidateName: 'sp' })
+    expect(extractQuantityAndName('1200 sp')).toEqual({ quantity: 1200, candidateName: 'sp' })
+    expect(extractQuantityAndName('17ep')).toEqual({ quantity: 17, candidateName: 'ep' })
+    expect(extractQuantityAndName('3cp')).toEqual({ quantity: 3, candidateName: 'cp' })
+    expect(extractQuantityAndName('50PP')).toEqual({ quantity: 50, candidateName: 'pp' })
+  })
+
+  it('parseInventoryText resolves compact coin clauses to catalog ids (Fuse)', () => {
+    const parsed = parseInventoryText('200gp')
+    expect(parsed.chunks[0]?.quantity).toBe(200)
+    expect(parsed.chunks[0]?.resolvedItemId).toBe('coinGp')
+    const mixed = parseInventoryText('500gp, 1200sp')
+    expect(mixed.chunks[0]?.resolvedItemId).toBe('coinGp')
+    expect(mixed.chunks[1]?.resolvedItemId).toBe('coinSp')
+  })
+
   it('extracts quantity and normalized candidate names', () => {
     expect(extractQuantityAndName('6 rolls of Varangian silk cloth')).toEqual({
       quantity: 6,

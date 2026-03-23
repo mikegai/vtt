@@ -1,3 +1,4 @@
+import { expandSegmentIdsForCoinageMerge } from '../domain/coinage'
 import type { CanonicalState, InventoryEntry } from '../domain/types'
 import type { DropIntent } from '../worker/protocol'
 
@@ -26,14 +27,22 @@ export const applyDropIntentToState = (
 ): CanonicalState => {
   let result = state
   for (const segmentId of dropIntent.segmentIds) {
-    const entryId = segmentIdToEntryId(segmentId)
-    const entry = result.inventoryEntries[entryId]
-    if (!entry) continue
-
     const sourceNodeId = dropIntent.sourceNodeIds[segmentId]
     if (!sourceNodeId) continue
 
     const source = parseNodeId(sourceNodeId)
+    const includeDropped = source.carryGroupId != null
+    const entryIds = expandSegmentIdsForCoinageMerge(
+      result,
+      [segmentId],
+      source.actorId,
+      source.carryGroupId,
+      includeDropped,
+    )
+
+    for (const entryId of entryIds) {
+    const entry = result.inventoryEntries[entryId]
+    if (!entry) continue
     if (!dropIntent.targetNodeId) {
       // While hovering outside any node, hide the source entries from normal rows.
       // We move them into a synthetic dropped group id that has no carry-group record.
@@ -80,6 +89,7 @@ export const applyDropIntentToState = (
         ...result.inventoryEntries,
         [entryId]: movedEntry,
       },
+    }
     }
   }
   return result

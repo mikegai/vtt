@@ -264,6 +264,52 @@ export const adventuringSourceItems: readonly SourceItem[] = [
   mk('adventuring-equipment', 'Whistle', '1/6'),
 ]
 
+/** Same ids as `itemDefinitions` coin rows in sample state — prepended to Fuse index for add-items. */
+export const coinDenomSourceItems: readonly SourceItem[] = [
+  {
+    id: 'coinCp',
+    name: 'cp',
+    group: 'adventuring-equipment',
+    encumbrance: parseSourceEncumbrance('By Weight'),
+    notes: 'Copper pieces; weight uses coin pool (≈1000 units per stone).',
+  },
+  {
+    id: 'coinBp',
+    name: 'bp',
+    group: 'adventuring-equipment',
+    encumbrance: parseSourceEncumbrance('By Weight'),
+    notes: 'Brass pieces; coin pool weight.',
+  },
+  {
+    id: 'coinSp',
+    name: 'sp',
+    group: 'adventuring-equipment',
+    encumbrance: parseSourceEncumbrance('By Weight'),
+    notes: 'Silver pieces; coin pool weight.',
+  },
+  {
+    id: 'coinEp',
+    name: 'ep',
+    group: 'adventuring-equipment',
+    encumbrance: parseSourceEncumbrance('By Weight'),
+    notes: 'Electrum pieces; coin pool weight.',
+  },
+  {
+    id: 'coinGp',
+    name: 'gp',
+    group: 'adventuring-equipment',
+    encumbrance: parseSourceEncumbrance('By Weight'),
+    notes: 'Gold pieces; coin pool weight.',
+  },
+  {
+    id: 'coinPp',
+    name: 'pp',
+    group: 'adventuring-equipment',
+    encumbrance: parseSourceEncumbrance('By Weight'),
+    notes: 'Platinum pieces; coin pool weight.',
+  },
+]
+
 export const itemSourceCatalog = {
   armorAndBarding: armorAndBardingSourceItems,
   weapons: weaponsSourceItems,
@@ -271,6 +317,7 @@ export const itemSourceCatalog = {
 } as const
 
 export const allSourceItems: readonly SourceItem[] = [
+  ...coinDenomSourceItems,
   ...armorAndBardingSourceItems,
   ...weaponsSourceItems,
   ...adventuringSourceItems,

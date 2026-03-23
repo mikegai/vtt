@@ -4,11 +4,22 @@ self.addEventListener('unhandledrejection', (event: PromiseRejectionEvent) => {
   console.error('[worker] unhandled promise rejection:', event.reason)
 })
 
-import type { Actor, CanonicalState, InventoryEntry, ItemCatalogRow, ItemDefinition, ItemKind } from '../domain/types'
+import { COIN_DENOM_CATALOG_ORDER, entryIdsForSegmentMutation } from '../domain/coinage'
+import type { Actor, CanonicalState, CoinDenom, InventoryEntry, ItemCatalogRow, ItemDefinition, ItemKind } from '../domain/types'
 import { getWieldOptions, isTwoHandedOnly } from '../domain/weapon-metadata'
 import { parseNodeId, segmentIdToEntryId } from '../vm/drop-intent'
-import type { ActorRowVM } from '../vm/vm-types'
-import { buildBoardVM } from '../vm/vm'
+import { droppedGroupIdForActor, ensureDroppedGroup } from '../vm/dropped-ground'
+import { createInventoryEntryId } from '../vm/inventory-ids'
+import {
+  applyMoveNodeInGroup,
+  applyMoveNodeToGroupIndex,
+  applyMoveNodeToRoot,
+  collectActorSubtreeIds,
+  collectSceneSubtreeNodeIds,
+} from '../vm/scene-node-mutations'
+import { commitDragSegmentOntoNode, expandDragSegmentToEntryIds, removeSegmentsFromGroupPositions } from '../vm/drag-segment-commit'
+import { buildSegmentIdToSourceNodeId } from '../vm/segment-source-map'
+import { applySpawnItemInstance } from '../vm/spawn-item-instance'
 import { diffSceneVM } from './scene-diff'
 import { addInventoryNodeToState, createInventoryActorId, nextInventoryName } from './inventory-node'
 import { buildSceneVM, type WorkerLocalState } from './scene-vm'
@@ -354,114 +365,8 @@ const debugDrag = (...args: unknown[]): void => {
   post({ type: 'LOG', message: `[vm-worker drag] ${serialized}` })
 }
 
-const buildSegmentIdToNodeId = (state: CanonicalState): Record<string, string> => {
-  const board = buildBoardVM(state)
-  const sourceNodeIds: Record<string, string> = {}
-  const visit = (row: ActorRowVM): void => {
-    for (const seg of row.segments) sourceNodeIds[seg.id] = row.id
-    for (const child of row.childRows) visit(child)
-  }
-  for (const row of board.rows) visit(row)
-  return sourceNodeIds
-}
-
-const collectActorSubtreeIds = (state: CanonicalState, rootActorId: string): string[] => {
-  const byOwner = new Map<string, string[]>()
-  Object.values(state.actors).forEach((actor) => {
-    if (!actor.ownerActorId) return
-    const owned = byOwner.get(actor.ownerActorId) ?? []
-    owned.push(actor.id)
-    byOwner.set(actor.ownerActorId, owned)
-  })
-  const out: string[] = []
-  const stack: string[] = [rootActorId]
-  while (stack.length > 0) {
-    const actorId = stack.pop()
-    if (!actorId || out.includes(actorId)) continue
-    out.push(actorId)
-    const children = byOwner.get(actorId) ?? []
-    for (let i = children.length - 1; i >= 0; i -= 1) stack.push(children[i])
-  }
-  return out
-}
-
-const collectSceneSubtreeNodeIds = (scene: SceneVM, rootNodeId: string): string[] => {
-  const byParent = new Map<string, string[]>()
-  Object.values(scene.nodes).forEach((node) => {
-    if (!node.parentNodeId) return
-    const children = byParent.get(node.parentNodeId) ?? []
-    children.push(node.id)
-    byParent.set(node.parentNodeId, children)
-  })
-  const out: string[] = []
-  const stack: string[] = [rootNodeId]
-  while (stack.length > 0) {
-    const nodeId = stack.pop()
-    if (!nodeId || out.includes(nodeId)) continue
-    out.push(nodeId)
-    const children = byParent.get(nodeId) ?? []
-    for (let i = children.length - 1; i >= 0; i -= 1) stack.push(children[i])
-  }
-  return out
-}
-
-const droppedGroupIdForActor = (actorId: string): string => `${actorId}:ground`
 const SELF_WEIGHT_TOKEN_PREFIX = '__self_weight__:'
 const isSelfWeightTokenId = (segmentId: string): boolean => segmentId.startsWith(SELF_WEIGHT_TOKEN_PREFIX)
-
-const ensureDroppedGroup = (state: CanonicalState, actorId: string): CanonicalState => {
-  const droppedGroupId = droppedGroupIdForActor(actorId)
-  if (state.carryGroups[droppedGroupId]) return state
-  return {
-    ...state,
-    carryGroups: {
-      ...state.carryGroups,
-      [droppedGroupId]: {
-        id: droppedGroupId,
-        ownerActorId: actorId,
-        name: 'Ground',
-        dropped: true,
-      },
-    },
-  }
-}
-
-/**
- * Outside-node drops should resolve to an actor context that is rendered with
- * dropped rows on the board. Owned actors can be closest to the pointer but
- * their dropped rows are not surfaced as canvas free-segments, so walk to the
- * top-level owner when possible.
- */
-const resolveRenderableDropActorId = (state: CanonicalState, actorId: string): string => {
-  if (!state.actors[actorId]) return actorId
-  let currentId = actorId
-  const visited = new Set<string>()
-  while (true) {
-    if (visited.has(currentId)) return currentId
-    visited.add(currentId)
-    const current = state.actors[currentId]
-    if (!current) return actorId
-    const ownerId = current.ownerActorId
-    if (!ownerId || !state.actors[ownerId]) return currentId
-    currentId = ownerId
-  }
-}
-
-const createInventoryEntryId = (state: CanonicalState, itemDefId: string, index?: number): string => {
-  const safeDefId = itemDefId.replace(/:/g, '_')
-  const base = `spawn_${safeDefId}`
-  let attempt = 0
-  while (attempt < 1000) {
-    const suffix =
-      attempt === 0
-        ? `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}${index != null ? `_${index}` : ''}`
-        : `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}_${attempt}${index != null ? `_${index}` : ''}`
-    const nextId = `${base}_${suffix}`
-    if (!state.inventoryEntries[nextId]) return nextId
-    attempt += 1
-  }
-  return `${base}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}_fallback`
-}
 
 const INSTANCE_OVERRIDE_PREFIX = 'instance:'
 const instanceOverridePrefixForEntry = (entryId: string): string => `${INSTANCE_OVERRIDE_PREFIX}${entryId}:`
@@ -490,6 +395,11 @@ type ItemPrototypePatch = {
   readonly armorClass?: number
   readonly priceInGp?: number
   readonly isFungibleVisual?: boolean
+  readonly coinagePool?: boolean
+  readonly coinDenom?: CoinDenom | ''
+  readonly bundleSize?: number
+  readonly minToCount?: number
+  readonly sixthsPerBundle?: number
 }
 
 const applyPrototypePatch = (
@@ -501,7 +411,13 @@ const applyPrototypePatch = (
   const sixthsPerUnit = toOptionalPositiveNumber(patch.sixthsPerUnit)
   const armorClass = toOptionalPositiveNumber(patch.armorClass)
   const priceInGp = toOptionalPositiveNumber(patch.priceInGp)
-  return {
+  const bundleSize = toOptionalPositiveNumber(patch.bundleSize)
+  const minToCount =
+    patch.minToCount != null && Number.isFinite(patch.minToCount) && patch.minToCount >= 1
+      ? Math.floor(patch.minToCount)
+      : undefined
+  const sixthsPerBundle = toOptionalPositiveNumber(patch.sixthsPerBundle)
+  const common: ItemDefinition = {
     ...source,
     canonicalName: trimmedName.length > 0 ? trimmedName : source.canonicalName,
     kind,
@@ -510,22 +426,34 @@ const applyPrototypePatch = (
     ...(priceInGp != null ? { priceInGp } : { priceInGp: undefined }),
     isFungibleVisual: !!patch.isFungibleVisual,
   }
-}
-
-const removeSegmentsFromGroupPositions = (
-  groupFreeSegmentPositions: WorkerLocalState['groupFreeSegmentPositions'],
-  segmentIds: readonly string[],
-): WorkerLocalState['groupFreeSegmentPositions'] => {
-  if (segmentIds.length === 0) return groupFreeSegmentPositions
-  const removeEntryIds = new Set(segmentIds.map((id) => segmentIdToEntryId(id)))
-  const next: WorkerLocalState['groupFreeSegmentPositions'] = {}
-  for (const [groupId, positions] of Object.entries(groupFreeSegmentPositions)) {
-    const kept = Object.fromEntries(
-      Object.entries(positions).filter(([segmentId]) => !removeEntryIds.has(segmentIdToEntryId(segmentId))),
-    )
-    if (Object.keys(kept).length > 0) next[groupId] = kept
+  if (kind === 'bundled') {
+    return {
+      ...common,
+      bundleSize: bundleSize ?? 20,
+      minToCount: minToCount ?? 1,
+      sixthsPerBundle: sixthsPerBundle ?? 1,
+      coinagePool: undefined,
+      coinDenom: undefined,
+    }
   }
-  return next
+  const resolvedCoinDenom =
+    patch.coinDenom === undefined
+      ? source.coinDenom
+      : patch.coinDenom === ''
+        ? undefined
+        : patch.coinDenom
+  return {
+    ...common,
+    bundleSize: undefined,
+    minToCount: undefined,
+    sixthsPerBundle: undefined,
+    ...(kind === 'standard' || kind === 'coins'
+      ? {
+          coinagePool: patch.coinagePool !== undefined ? patch.coinagePool : source.coinagePool,
+          coinDenom: resolvedCoinDenom,
+        }
+      : { coinagePool: undefined, coinDenom: undefined }),
+  }
 }
 
 const stoneToX = (stoneIndex: number, stonesPerRow: number): number =>
@@ -754,22 +682,34 @@ const migrateWieldToActor = (state: CanonicalState): CanonicalState => {
   return { ...state, actors, inventoryEntries }
 }
 
+const defToCatalogRow = (d: ItemDefinition): ItemCatalogRow => ({
+  id: d.id,
+  canonicalName: d.canonicalName,
+  kind: d.kind,
+  ...(d.sixthsPerUnit !== undefined ? { sixthsPerUnit: d.sixthsPerUnit } : {}),
+  ...(d.armorClass !== undefined ? { armorClass: d.armorClass } : {}),
+  ...(d.priceInGp !== undefined ? { priceInGp: d.priceInGp } : {}),
+  ...(d.coinagePool !== undefined ? { coinagePool: d.coinagePool } : {}),
+  ...(d.coinDenom !== undefined ? { coinDenom: d.coinDenom } : {}),
+  ...(d.bundleSize !== undefined ? { bundleSize: d.bundleSize } : {}),
+  ...(d.minToCount !== undefined ? { minToCount: d.minToCount } : {}),
+  ...(d.sixthsPerBundle !== undefined ? { sixthsPerBundle: d.sixthsPerBundle } : {}),
+})
+
 const buildItemCatalogRows = (state: CanonicalState | null): readonly ItemCatalogRow[] => {
   if (!state) return []
-  const defs = Object.values(state.itemDefinitions)
+  const denomSet = new Set(COIN_DENOM_CATALOG_ORDER)
+  const denomRows = COIN_DENOM_CATALOG_ORDER.map((id) => state.itemDefinitions[id])
+    .filter((d): d is ItemDefinition => d != null)
+    .map(defToCatalogRow)
+  const defs = Object.values(state.itemDefinitions).filter((d) => !denomSet.has(d.id))
   defs.sort((a, b) => {
     const byName = a.canonicalName.localeCompare(b.canonicalName)
     if (byName !== 0) return byName
     return a.id.localeCompare(b.id)
   })
-  return defs.map((d) => ({
-    id: d.id,
-    canonicalName: d.canonicalName,
-    kind: d.kind,
-    ...(d.sixthsPerUnit !== undefined ? { sixthsPerUnit: d.sixthsPerUnit } : {}),
-    ...(d.armorClass !== undefined ? { armorClass: d.armorClass } : {}),
-    ...(d.priceInGp !== undefined ? { priceInGp: d.priceInGp } : {}),
-  }))
+  const restRows = defs.map(defToCatalogRow)
+  return [...denomRows, ...restRows]
 }
 
 const recompute = (sendInitIfFirst = false): void => {
@@ -1196,63 +1136,9 @@ const applyIntent = (intent: WorkerIntent): void => {
       recompute()
       return
     }
-    const scene = buildSceneVM(worldState, localState)
-    const nodeIdsToMove = collectSceneSubtreeNodeIds(scene, intent.nodeId)
-    const baseOrders: Record<string, readonly string[]> = {}
-    for (const [gid, g] of Object.entries(scene.groups ?? {})) {
-      baseOrders[gid] = [...g.nodeIds]
-    }
-    const nextOrders: Record<string, readonly string[]> = { ...baseOrders }
-    for (const [gid, order] of Object.entries(nextOrders)) {
-      nextOrders[gid] = order.filter((id) => !nodeIdsToMove.includes(id))
-    }
-    const target = [...(nextOrders[intent.groupId] ?? [])]
-    const clamped = Math.max(0, Math.min(intent.index, target.length))
-    target.splice(clamped, 0, ...nodeIdsToMove)
-    nextOrders[intent.groupId] = target
-
-    for (const nid of nodeIdsToMove) {
-      const actor: Actor | undefined = worldState.actors[nid]
-      if (actor) {
-        worldState = {
-          ...worldState,
-          actors: {
-            ...worldState.actors,
-            [nid]: {
-              ...actor,
-              movementGroupId: intent.groupId,
-              // Moving a child as the primary dragged node detaches it from its previous parent.
-              ownerActorId: nid === intent.nodeId ? undefined : actor.ownerActorId,
-            },
-          },
-        }
-      }
-    }
-
-    const overrides = { ...localState.nodeGroupOverrides }
-    const nodePositions = { ...localState.nodePositions }
-    const groupNodePositions = { ...localState.groupNodePositions }
-    const targetGroupPositionMap = { ...(groupNodePositions[intent.groupId] ?? {}) }
-    const targetGroup = scene.groups[intent.groupId]
-    const targetGroupWorld = targetGroup
-      ? { x: targetGroup.x, y: targetGroup.y }
-      : (localState.groupPositions[intent.groupId] ?? { x: 0, y: 0 })
-    for (const nid of nodeIdsToMove) overrides[nid] = intent.groupId
-    for (const nid of nodeIdsToMove) {
-      if (targetGroupPositionMap[nid]) continue
-      const sceneNode = scene.nodes[nid]
-      const worldPos = sceneNode
-        ? { x: sceneNode.x, y: sceneNode.y }
-        : nodePositions[nid]
-      if (!worldPos) continue
-      targetGroupPositionMap[nid] = {
-        x: worldPos.x - targetGroupWorld.x,
-        y: worldPos.y - targetGroupWorld.y,
-      }
-    }
-    for (const nid of nodeIdsToMove) delete nodePositions[nid]
-    groupNodePositions[intent.groupId] = targetGroupPositionMap
-    localState = { ...localState, nodeGroupOverrides: overrides, nodePositions, groupNodeOrders: nextOrders, groupNodePositions }
+    const applied = applyMoveNodeToGroupIndex(worldState, localState, intent)
+    worldState = applied.worldState
+    localState = applied.localState
     recompute()
     return
   }
@@ -1273,76 +1159,9 @@ const applyIntent = (intent: WorkerIntent): void => {
       recompute()
       return
     }
-    const scene = buildSceneVM(worldState, localState)
-    const targetGroup = scene.groups[intent.groupId]
-    if (!targetGroup) {
-      recompute()
-      return
-    }
-    const nodeIdsToMove = collectSceneSubtreeNodeIds(scene, intent.nodeId)
-    const primaryNode = scene.nodes[intent.nodeId]
-    if (!primaryNode) {
-      recompute()
-      return
-    }
-
-    const baseOrders: Record<string, readonly string[]> = {}
-    for (const [gid, g] of Object.entries(scene.groups ?? {})) {
-      baseOrders[gid] = [...g.nodeIds]
-    }
-    const nextOrders: Record<string, readonly string[]> = { ...baseOrders }
-    for (const [gid, order] of Object.entries(nextOrders)) {
-      nextOrders[gid] = order.filter((id) => !nodeIdsToMove.includes(id))
-    }
-    const targetOrder = [...(nextOrders[intent.groupId] ?? [])]
-    nodeIdsToMove.forEach((id) => {
-      if (!targetOrder.includes(id)) targetOrder.push(id)
-    })
-    nextOrders[intent.groupId] = targetOrder
-
-    for (const nid of nodeIdsToMove) {
-      const actor: Actor | undefined = worldState.actors[nid]
-      if (!actor) continue
-      worldState = {
-        ...worldState,
-        actors: {
-          ...worldState.actors,
-          [nid]: {
-            ...actor,
-            movementGroupId: intent.groupId,
-            ownerActorId: nid === intent.nodeId ? undefined : actor.ownerActorId,
-          },
-        },
-      }
-    }
-
-    const overrides = { ...localState.nodeGroupOverrides }
-    const nodePositions = { ...localState.nodePositions }
-    const groupNodePositions = { ...localState.groupNodePositions }
-    const targetGroupPositions = { ...(groupNodePositions[intent.groupId] ?? {}) }
-    const primaryOffsetX = intent.x - primaryNode.x
-    const primaryOffsetY = intent.y - primaryNode.y
-    for (const nid of nodeIdsToMove) {
-      overrides[nid] = intent.groupId
-      delete nodePositions[nid]
-      const sceneNode = scene.nodes[nid]
-      if (!sceneNode) continue
-      const worldX = sceneNode.x + primaryOffsetX
-      const worldY = sceneNode.y + primaryOffsetY
-      targetGroupPositions[nid] = {
-        x: worldX - targetGroup.x,
-        y: worldY - targetGroup.y,
-      }
-    }
-    groupNodePositions[intent.groupId] = targetGroupPositions
-
-    localState = {
-      ...localState,
-      nodeGroupOverrides: overrides,
-      nodePositions,
-      groupNodePositions,
-      groupNodeOrders: nextOrders,
-    }
+    const applied = applyMoveNodeInGroup(worldState, localState, intent)
+    worldState = applied.worldState
+    localState = applied.localState
     recompute()
     return
   }
@@ -1494,31 +1313,12 @@ const applyIntent = (intent: WorkerIntent): void => {
       return
     }
     const subtreeNodeIds = collectActorSubtreeIds(worldState, intent.nodeId)
-    worldState = {
-      ...worldState,
-      actors: {
-        ...worldState.actors,
-        [intent.nodeId]: { ...actor, ownerActorId: undefined },
-      },
-    }
-    const nextNodeGroupOverrides = { ...localState.nodeGroupOverrides }
-    const nextNodePositions = { ...localState.nodePositions }
-    subtreeNodeIds.forEach((nodeId) => {
-      nextNodeGroupOverrides[nodeId] = null
-      delete nextNodePositions[nodeId]
-    })
-    nextNodePositions[intent.nodeId] = { x: intent.x, y: intent.y }
-    localState = {
-      ...localState,
-      nodeGroupOverrides: nextNodeGroupOverrides,
-      nodePositions: nextNodePositions,
-      nodeContainment: Object.fromEntries(
-        Object.entries(localState.nodeContainment).filter(([id]) => !subtreeNodeIds.includes(id)),
-      ),
-    }
+    const applied = applyMoveNodeToRoot(worldState, localState, intent)
+    worldState = applied.worldState
+    localState = applied.localState
     debugDrag('MOVE_NODE_TO_ROOT applied', {
       nodeId: intent.nodeId,
-      persistedPosition: nextNodePositions[intent.nodeId],
+      persistedPosition: localState.nodePositions[intent.nodeId],
       subtreeNodeIds,
     })
     recompute()
@@ -1563,7 +1363,7 @@ const applyIntent = (intent: WorkerIntent): void => {
       recompute()
       return
     }
-    const segToNode = buildSegmentIdToNodeId(worldState)
+    const segToNode = buildSegmentIdToSourceNodeId(worldState)
     const firstSource = segToNode[movableSegmentIds[0]]
     const sourceNodeIds: Record<string, string> = {}
     for (const id of movableSegmentIds) {
@@ -1575,7 +1375,7 @@ const applyIntent = (intent: WorkerIntent): void => {
       dropIntent: {
         segmentIds: movableSegmentIds,
         sourceNodeIds,
-        targetNodeId: firstSource ?? movableSegmentIds[0],
+        targetNodeId: firstSource ?? null,
       },
     }
     recompute()
@@ -1610,68 +1410,14 @@ const applyIntent = (intent: WorkerIntent): void => {
       freeSegmentPositionCount: intent.freeSegmentPositions ? Object.keys(intent.freeSegmentPositions).length : 0,
       segmentIds: effectiveDropIntent?.segmentIds ?? [],
     })
-    if (effectiveDropIntent && hoverTargetNodeId) {
+    if (effectiveDropIntent && hoverTargetNodeId && worldState) {
       const { segmentIds, sourceNodeIds } = effectiveDropIntent
-      const target = parseNodeId(hoverTargetNodeId)
-      let movedAny = false
-      if (worldState) {
-        for (const segmentId of segmentIds) {
-          const sourceNodeId = sourceNodeIds[segmentId]
-          if (!sourceNodeId) continue
-          const source = parseNodeId(sourceNodeId)
-          if (source.actorId === target.actorId && source.carryGroupId === target.carryGroupId) continue
-          const entryId = segmentIdToEntryId(segmentId)
-          const entry: InventoryEntry | undefined = worldState.inventoryEntries[entryId]
-          if (entry) {
-            movedAny = true
-            const movedEntry: InventoryEntry = {
-              ...entry,
-              actorId: target.actorId,
-              carryGroupId: target.carryGroupId,
-              zone: target.carryGroupId ? 'dropped' : 'stowed',
-              state: target.carryGroupId
-                ? { ...(entry.state ?? {}), dropped: true }
-                : (() => {
-                    const next = { ...(entry.state ?? {}) }
-                    delete next.dropped
-                    return Object.keys(next).length > 0 ? next : undefined
-                  })(),
-            }
-            worldState = {
-              ...worldState,
-              inventoryEntries: {
-                ...worldState.inventoryEntries,
-                [entryId]: movedEntry,
-              },
-            }
-            const actor: Actor | undefined = worldState.actors[source.actorId]
-            if (actor && (actor.leftWieldingEntryId === entryId || actor.rightWieldingEntryId === entryId)) {
-              const nextActor: Actor = {
-                ...actor,
-                leftWieldingEntryId: actor.leftWieldingEntryId === entryId ? undefined : actor.leftWieldingEntryId,
-                rightWieldingEntryId: actor.rightWieldingEntryId === entryId ? undefined : actor.rightWieldingEntryId,
-              }
-              worldState = {
-                ...worldState,
-                actors: { ...worldState.actors, [actor.id]: nextActor },
-              }
-            }
-          }
-        }
-      }
-      if (movedAny) {
-        const freeSegmentPositions = { ...localState.freeSegmentPositions }
-        for (const segmentId of segmentIds) delete freeSegmentPositions[segmentId]
-        localState = {
-          ...localState,
-          freeSegmentPositions,
-          groupFreeSegmentPositions: removeSegmentsFromGroupPositions(localState.groupFreeSegmentPositions, segmentIds),
-        }
-      }
+      const committed = commitDragSegmentOntoNode(worldState, localState, segmentIds, sourceNodeIds, hoverTargetNodeId)
+      worldState = committed.worldState
+      localState = committed.localState
       debugDrag('handled as node drop', {
         hoverTargetNodeId,
-        movedAny,
-        clearedFreeSegmentPositionsFor: movedAny ? segmentIds : [],
+        segmentIds,
       })
     } else if (effectiveDropIntent && worldState && intent.x != null && intent.y != null) {
       const { segmentIds, sourceNodeIds } = effectiveDropIntent
@@ -1685,35 +1431,37 @@ const applyIntent = (intent: WorkerIntent): void => {
           const sourceNodeId = sourceNodeIds[segmentId]
           if (!sourceNodeId) continue
           const parsedSource = parseNodeId(sourceNodeId)
-          const entryId = segmentIdToEntryId(segmentId)
-          const entry: InventoryEntry | undefined = worldState.inventoryEntries[entryId]
-          if (!entry) continue
-          const segmentDroppedGroupId = droppedGroupIdForActor(parsedSource.actorId)
-          worldState = ensureDroppedGroup(worldState, parsedSource.actorId)
-          const movedEntry: InventoryEntry = {
-            ...entry,
-            actorId: parsedSource.actorId,
-            carryGroupId: segmentDroppedGroupId,
-            zone: 'dropped',
-            state: { ...(entry.state ?? {}), dropped: true },
-          }
-          worldState = {
-            ...worldState,
-            inventoryEntries: {
-              ...worldState.inventoryEntries,
-              [entryId]: movedEntry,
-            },
-          }
-          const actor: Actor | undefined = worldState.actors[parsedSource.actorId]
-          if (actor && (actor.leftWieldingEntryId === entryId || actor.rightWieldingEntryId === entryId)) {
-            const nextActor: Actor = {
-              ...actor,
-              leftWieldingEntryId: actor.leftWieldingEntryId === entryId ? undefined : actor.leftWieldingEntryId,
-              rightWieldingEntryId: actor.rightWieldingEntryId === entryId ? undefined : actor.rightWieldingEntryId,
+          const entryIds = expandDragSegmentToEntryIds(worldState, segmentId, sourceNodeId)
+          for (const entryId of entryIds) {
+            const entry: InventoryEntry | undefined = worldState.inventoryEntries[entryId]
+            if (!entry) continue
+            const segmentDroppedGroupId = droppedGroupIdForActor(parsedSource.actorId)
+            worldState = ensureDroppedGroup(worldState, parsedSource.actorId)
+            const movedEntry: InventoryEntry = {
+              ...entry,
+              actorId: parsedSource.actorId,
+              carryGroupId: segmentDroppedGroupId,
+              zone: 'dropped',
+              state: { ...(entry.state ?? {}), dropped: true },
             }
             worldState = {
               ...worldState,
-              actors: { ...worldState.actors, [actor.id]: nextActor },
+              inventoryEntries: {
+                ...worldState.inventoryEntries,
+                [entryId]: movedEntry,
+              },
+            }
+            const actor: Actor | undefined = worldState.actors[parsedSource.actorId]
+            if (actor && (actor.leftWieldingEntryId === entryId || actor.rightWieldingEntryId === entryId)) {
+              const nextActor: Actor = {
+                ...actor,
+                leftWieldingEntryId: actor.leftWieldingEntryId === entryId ? undefined : actor.leftWieldingEntryId,
+                rightWieldingEntryId: actor.rightWieldingEntryId === entryId ? undefined : actor.rightWieldingEntryId,
+              }
+              worldState = {
+                ...worldState,
+                actors: { ...worldState.actors, [actor.id]: nextActor },
+              }
             }
           }
         }
@@ -1807,125 +1555,13 @@ const applyIntent = (intent: WorkerIntent): void => {
   }
 
   if (intent.type === 'SPAWN_ITEM_INSTANCE') {
-    if (!worldState) return
-    let itemDef: ItemDefinition | undefined = worldState.itemDefinitions[intent.itemDefId]
-    if (!itemDef && intent.itemName) {
-      itemDef = {
-        id: intent.itemDefId,
-        canonicalName: intent.itemName,
-        kind: (intent.itemKind as ItemKind) ?? 'standard',
-        sixthsPerUnit: intent.sixthsPerUnit ?? 1,
-        armorClass: intent.armorClass,
-      }
-      worldState = {
-        ...worldState,
-        itemDefinitions: {
-          ...worldState.itemDefinitions,
-          [intent.itemDefId]: itemDef,
-        },
-      }
-    }
-    const quantity = Math.max(1, Math.floor(intent.quantity))
-    if (!itemDef || !Number.isFinite(quantity)) {
+    if (!worldState) {
       recompute()
       return
     }
-
-    let targetActorId: string | null = null
-    let targetCarryGroupId: string | undefined
-    let shouldDropToGround = false
-
-    if (intent.targetNodeId) {
-      const parsedTarget = parseNodeId(intent.targetNodeId)
-      if (parsedTarget.actorId && worldState.actors[parsedTarget.actorId]) {
-        targetActorId = parsedTarget.actorId
-        targetCarryGroupId = parsedTarget.carryGroupId
-        shouldDropToGround = !!parsedTarget.carryGroupId
-      }
-    }
-
-    if (!targetActorId && intent.x != null && intent.y != null) {
-      const dropX = intent.x
-      const dropY = intent.y
-      const sceneAtDrop = buildSceneVM(worldState, localState)
-      const nearestNode = Object.values(sceneAtDrop.nodes).reduce<SceneVM['nodes'][string] | null>((best, node) => {
-        const centerX = node.x + node.width / 2
-        const centerY = node.y + node.height / 2
-        const distSq = (centerX - dropX) ** 2 + (centerY - dropY) ** 2
-        if (!best) return node
-        const bestCenterX = best.x + best.width / 2
-        const bestCenterY = best.y + best.height / 2
-        const bestDistSq = (bestCenterX - dropX) ** 2 + (bestCenterY - dropY) ** 2
-        return distSq < bestDistSq ? node : best
-      }, null)
-      if (nearestNode && worldState.actors[nearestNode.actorId]) {
-        targetActorId = resolveRenderableDropActorId(worldState, nearestNode.actorId)
-        shouldDropToGround = true
-      }
-    }
-
-    if (!targetActorId) {
-      recompute()
-      return
-    }
-
-    if (shouldDropToGround && !targetCarryGroupId) {
-      worldState = ensureDroppedGroup(worldState, targetActorId)
-      targetCarryGroupId = droppedGroupIdForActor(targetActorId)
-    } else if (targetCarryGroupId && !worldState.carryGroups[targetCarryGroupId]) {
-      worldState = ensureDroppedGroup(worldState, targetActorId)
-      targetCarryGroupId = droppedGroupIdForActor(targetActorId)
-      shouldDropToGround = true
-    }
-
-    const preferredZone = intent.wornClothing ? 'worn' : (intent.zoneHint ?? 'stowed')
-    const preferredState = intent.wornClothing ? { worn: true as const } : undefined
-
-    const createdEntryIds: string[] = []
-    for (let i = 0; i < quantity; i++) {
-      const entryId = createInventoryEntryId(worldState, intent.itemDefId, i)
-      createdEntryIds.push(entryId)
-      const zone = shouldDropToGround ? 'dropped' : preferredZone
-      const state = shouldDropToGround ? { dropped: true } : preferredState
-      const nextEntry: InventoryEntry = {
-        id: entryId,
-        actorId: targetActorId,
-        itemDefId: intent.itemDefId,
-        quantity: 1,
-        zone,
-        carryGroupId: targetCarryGroupId,
-        state,
-      }
-      worldState = {
-        ...worldState,
-        inventoryEntries: {
-          ...worldState.inventoryEntries,
-          [entryId]: nextEntry,
-        },
-      }
-    }
-
-    if (shouldDropToGround && intent.x != null && intent.y != null) {
-      const freeSegmentPositions = { ...localState.freeSegmentPositions }
-      if (intent.freeSegmentPositions && intent.segmentIds && intent.segmentIds.length === createdEntryIds.length) {
-        for (let i = 0; i < createdEntryIds.length; i++) {
-          const pos = intent.freeSegmentPositions[intent.segmentIds[i]]
-          if (pos) {
-            freeSegmentPositions[createdEntryIds[i]] = pos
-          }
-        }
-      } else {
-        const sceneAtDrop = buildSceneVM(worldState, localState)
-        const createdEntryIdSet = new Set(createdEntryIds)
-        for (const free of Object.values(sceneAtDrop.freeSegments)) {
-          if (createdEntryIdSet.has(segmentIdToEntryId(free.id))) {
-            freeSegmentPositions[free.id] = { x: intent.x, y: intent.y }
-          }
-        }
-      }
-      localState = { ...localState, freeSegmentPositions }
-    }
-
+    const applied = applySpawnItemInstance(worldState, localState, intent)
+    worldState = applied.worldState
+    localState = applied.localState
     recompute()
     return
   }
@@ -1945,6 +1581,11 @@ const applyIntent = (intent: WorkerIntent): void => {
       armorClass: item.armorClass,
       wornClothing: item.wornClothing,
       zoneHint: item.zoneHint,
+      coinagePool: item.coinagePool,
+      coinDenom: item.coinDenom,
+      bundleSize: item.bundleSize,
+      minToCount: item.minToCount,
+      sixthsPerBundle: item.sixthsPerBundle,
     })))
     return
   }
@@ -2328,7 +1969,8 @@ const applyIntent = (intent: WorkerIntent): void => {
     const scene = buildSceneVM(worldState, localState)
     const newSegmentIds: string[] = []
     for (const segmentId of intent.segmentIds.filter((id) => !isSelfWeightTokenId(id))) {
-      const entryId = segmentIdToEntryId(segmentId)
+      const entryIds = entryIdsForSegmentMutation(worldState, segmentId)
+      for (const entryId of entryIds) {
       const entry = worldState.inventoryEntries[entryId]
       if (!entry) continue
       const itemDef = worldState.itemDefinitions[entry.itemDefId]
@@ -2381,6 +2023,7 @@ const applyIntent = (intent: WorkerIntent): void => {
           }
         }
       }
+      }
     }
     localState = {
       ...localState,
@@ -2394,8 +2037,9 @@ const applyIntent = (intent: WorkerIntent): void => {
     if (!worldState) return
     const entryIdsToRemove = new Set<string>()
     for (const segmentId of intent.segmentIds.filter((id) => !isSelfWeightTokenId(id))) {
-      const entryId = segmentIdToEntryId(segmentId)
-      if (worldState.inventoryEntries[entryId]) entryIdsToRemove.add(entryId)
+      for (const entryId of entryIdsForSegmentMutation(worldState, segmentId)) {
+        if (worldState.inventoryEntries[entryId]) entryIdsToRemove.add(entryId)
+      }
     }
     let nextEntries = worldState.inventoryEntries
     for (const entryId of entryIdsToRemove) {

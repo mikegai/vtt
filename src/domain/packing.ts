@@ -1,3 +1,4 @@
+import { COINAGE_MERGED_DEF_ID } from './coinage'
 import type { CarryZone, EquipmentState, InventoryEntry, ItemDefinition } from './types'
 import { getItemCategory } from './item-category'
 import { ACCESSIBLE_MISC_LIMIT_SIXTHS, encumbranceCostSixths } from './rules'
@@ -6,6 +7,9 @@ import { SIXTHS_PER_STONE } from './types'
 export type PackInput = {
   readonly entry: InventoryEntry
   readonly definition: ItemDefinition
+  /** When set, used instead of encumbranceCostSixths (merged coinage pool). */
+  readonly encumbranceOverrideSixths?: number
+  readonly coinageBreakdown?: readonly { entryId: string; itemDefId: string; quantity: number }[]
 }
 
 export type PackedSegment = {
@@ -19,6 +23,7 @@ export type PackedSegment = {
   readonly sizeSixths: number
   readonly isOverflow: boolean
   readonly isWornPill?: boolean
+  readonly coinageBreakdown?: readonly { entryId: string; itemDefId: string; quantity: number }[]
 }
 
 const isOneOrMoreStone = (sixths: number): boolean => sixths >= SIXTHS_PER_STONE
@@ -36,10 +41,20 @@ const categoryPriorityFullStone = (input: PackInput): number => {
 const categoryPriorityPartialStone = (input: PackInput): number =>
   getItemCategory(input.definition) === 'weapons' ? 0 : 1
 
+const packCost = (input: PackInput): number =>
+  input.encumbranceOverrideSixths ?? encumbranceCostSixths(input.definition, input.entry.quantity)
+
+const coinageSortKey = (input: PackInput): number =>
+  input.definition.id === COINAGE_MERGED_DEF_ID ? 1 : 0
+
 const sortPackInputs = (items: readonly PackInput[]): PackInput[] =>
   [...items].sort((a, b) => {
-    const costA = encumbranceCostSixths(a.definition, a.entry.quantity)
-    const costB = encumbranceCostSixths(b.definition, b.entry.quantity)
+    const ckA = coinageSortKey(a)
+    const ckB = coinageSortKey(b)
+    if (ckA !== ckB) return ckA - ckB
+
+    const costA = packCost(a)
+    const costB = packCost(b)
     const tierA = isOneOrMoreStone(costA) ? 0 : 1
     const tierB = isOneOrMoreStone(costB) ? 0 : 1
     if (tierA !== tierB) return tierA - tierB
@@ -63,7 +78,7 @@ export const packDeterministic = (items: readonly PackInput[], capacitySixths: n
   let accessibleMiscUsed = 0
 
   for (const input of sorted) {
-    const rawCost = encumbranceCostSixths(input.definition, input.entry.quantity)
+    const rawCost = packCost(input)
     // Zero-encumbrance entries are rendered as pill-strip items, never in slot meter.
     const isWornPill = rawCost <= 0
     if (isWornPill) {
@@ -113,6 +128,7 @@ export const packDeterministic = (items: readonly PackInput[], capacitySixths: n
         endSixth: end,
         sizeSixths: placeableCost,
         isOverflow: false,
+        ...(input.coinageBreakdown ? { coinageBreakdown: input.coinageBreakdown } : {}),
       })
       cursor = end
     }
@@ -129,6 +145,7 @@ export const packDeterministic = (items: readonly PackInput[], capacitySixths: n
         endSixth: capacitySixths + overflowSize,
         sizeSixths: overflowSize,
         isOverflow: true,
+        ...(input.coinageBreakdown ? { coinageBreakdown: input.coinageBreakdown } : {}),
       })
     }
   }

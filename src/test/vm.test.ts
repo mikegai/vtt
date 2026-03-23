@@ -88,6 +88,46 @@ describe('board view model', () => {
     expect(horseRow!.speed.milesPerDay).toBe(24)
   })
 
+  it('dropped coin lines stay separate segments (no merged coinage bar on canvas)', () => {
+    const groundId = 'cutthroat:ground'
+    const entries = {
+      ...sampleState.inventoryEntries,
+      dropGp: {
+        id: 'dropGp',
+        actorId: 'cutthroat',
+        itemDefId: 'coinGp',
+        quantity: 500,
+        zone: 'dropped' as const,
+        state: { dropped: true },
+        carryGroupId: groundId,
+      },
+      dropSp: {
+        id: 'dropSp',
+        actorId: 'cutthroat',
+        itemDefId: 'coinSp',
+        quantity: 1200,
+        zone: 'dropped' as const,
+        state: { dropped: true },
+        carryGroupId: groundId,
+      },
+    }
+    const state: CanonicalState = {
+      ...sampleState,
+      carryGroups: {
+        ...sampleState.carryGroups,
+        [groundId]: { id: groundId, ownerActorId: 'cutthroat', name: 'Ground', dropped: true },
+      },
+      inventoryEntries: entries,
+    }
+    const board = buildBoardVM(state)
+    const cutthroatRow = board.rows.find((r) => r.actorId === 'cutthroat')
+    const dropped = cutthroatRow!.childRows.find((r) => r.isDroppedRow)
+    expect(dropped).toBeDefined()
+    expect(dropped!.segments.filter((s) => s.isCoinageMerge).length).toBe(0)
+    expect(dropped!.segments.some((s) => s.itemDefId === 'coinGp')).toBe(true)
+    expect(dropped!.segments.some((s) => s.itemDefId === 'coinSp')).toBe(true)
+  })
+
   it('animal row uses 50% rule: orange band and halved speed over 50% capacity', () => {
     const entries = { ...sampleState.inventoryEntries }
     const horseEntryIds = Object.keys(entries).filter((id) => entries[id].actorId === 'templarHorse')

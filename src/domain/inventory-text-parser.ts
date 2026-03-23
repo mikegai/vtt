@@ -96,6 +96,14 @@ export const extractQuantityAndName = (
   chunk: string,
 ): { quantity: number; candidateName: string; stoneOverride?: number } => {
   const trimmed = chunk.trim()
+  // `\s*` allows zero spaces: `200gp` and `200 gp` both work.
+  const compactCoin = trimmed.match(/^(\d+)\s*(cp|bp|sp|ep|gp|pp)\b/i)
+  if (compactCoin) {
+    return {
+      quantity: Math.max(1, Number(compactCoin[1])),
+      candidateName: compactCoin[2].toLowerCase(),
+    }
+  }
   const match = trimmed.match(/^(?:(\d+)|a|an|one)\b\s*(.*)$/i)
   const quantity = match
     ? (match[1] ? Number(match[1]) : 1)

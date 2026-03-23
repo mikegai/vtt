@@ -1,4 +1,15 @@
-import type { ActorKind, CanonicalState, CarryZone, EquipmentState, ItemCatalogRow, ItemDefinition, ItemKind, WieldGrip } from '../domain/types'
+import type { CoinageMetalFraction, TreasuryTally } from '../domain/coinage'
+import type {
+  ActorKind,
+  CanonicalState,
+  CarryZone,
+  CoinDenom,
+  EquipmentState,
+  ItemCatalogRow,
+  ItemDefinition,
+  ItemKind,
+  WieldGrip,
+} from '../domain/types'
 import type { ItemCategory } from '../domain/item-category'
 import type { AppRoute, WorldCanvasContext } from '../spacetimedb/context'
 import type { RegistryAdjust } from '../spacetimedb/registry-reconcile'
@@ -29,6 +40,11 @@ export type SceneSegmentVM = {
     readonly armorClass?: number
     readonly priceInGp?: number
     readonly isFungibleVisual?: boolean
+    readonly coinagePool?: boolean
+    readonly coinDenom?: CoinDenom
+    readonly bundleSize?: number
+    readonly minToCount?: number
+    readonly sixthsPerBundle?: number
   }
   /** When present, this segment's entry uses an instance-level override of a base prototype id. */
   readonly overridePrototypeId?: string
@@ -48,6 +64,8 @@ export type SceneSegmentVM = {
   readonly locked?: boolean
   /** Visual-only non-encumbering worn clothing rendered as pill strip under node. */
   readonly isWornPill?: boolean
+  readonly isCoinageMerge?: boolean
+  readonly coinageVisual?: { readonly metals: CoinageMetalFraction }
 }
 
 export type SceneNodeVM = {
@@ -80,6 +98,7 @@ export type SceneNodeVM = {
   readonly usedStoneText: string
   readonly capacityStoneText: string
   readonly segments: readonly SceneSegmentVM[]
+  readonly treasury?: TreasuryTally
 }
 
 export type SceneLabelVM = {
@@ -229,6 +248,11 @@ export type WorkerIntent =
       readonly wornClothing?: boolean
       readonly segmentIds?: readonly string[]
       readonly freeSegmentPositions?: Readonly<Record<string, { x: number; y: number }>>
+      readonly coinagePool?: boolean
+      readonly coinDenom?: CoinDenom
+      readonly bundleSize?: number
+      readonly minToCount?: number
+      readonly sixthsPerBundle?: number
     }
   | {
       readonly type: 'APPLY_ADD_ITEMS_OP'
@@ -242,6 +266,11 @@ export type WorkerIntent =
         readonly armorClass?: number
         readonly wornClothing?: boolean
         readonly zoneHint?: CarryZone
+        readonly coinagePool?: boolean
+        readonly coinDenom?: CoinDenom
+        readonly bundleSize?: number
+        readonly minToCount?: number
+        readonly sixthsPerBundle?: number
       }[]
     }
   | { readonly type: 'MOVE_ENTRY_TO'; readonly segmentId: string; readonly sourceNodeId: string; readonly targetNodeId: string }

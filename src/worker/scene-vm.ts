@@ -10,6 +10,7 @@ import {
   nodeHeightForRows,
   nodeWidthForCols,
 } from '../shared/node-layout'
+import { COINAGE_MERGED_DEFINITION } from '../domain/coinage'
 import { applyDropIntentToState } from '../vm/drop-intent'
 import { buildBoardVM } from '../vm/vm'
 import type { ActorRowVM } from '../vm/vm-types'
@@ -263,7 +264,9 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
       for (const segment of row.segments) {
         const entryId = segmentIdToEntryId(segment.id)
         const entry = effectiveState.inventoryEntries[entryId]
-        const prototype = effectiveState.itemDefinitions[segment.itemDefId]
+        const prototype =
+          effectiveState.itemDefinitions[segment.itemDefId] ??
+          (segment.itemDefId === COINAGE_MERGED_DEFINITION.id ? COINAGE_MERGED_DEFINITION : undefined)
         const overridePrototypeId = parseInstanceOverrideBaseId(entryId, segment.itemDefId) ?? undefined
         const ownerGroupId = segmentGroupOwner.get(segment.id)
         const groupRelativePos = ownerGroupId ? localState.groupFreeSegmentPositions[ownerGroupId]?.[segment.id] : undefined
@@ -298,6 +301,11 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
                     armorClass: prototype.armorClass,
                     priceInGp: prototype.priceInGp,
                     isFungibleVisual: prototype.isFungibleVisual,
+                    ...(prototype.coinagePool != null && { coinagePool: prototype.coinagePool }),
+                    ...(prototype.coinDenom != null && { coinDenom: prototype.coinDenom }),
+                    ...(prototype.bundleSize != null && { bundleSize: prototype.bundleSize }),
+                    ...(prototype.minToCount != null && { minToCount: prototype.minToCount }),
+                    ...(prototype.sixthsPerBundle != null && { sixthsPerBundle: prototype.sixthsPerBundle }),
                   },
                 }
               : {}),
@@ -306,6 +314,8 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
             wield: segment.state?.wield,
             tooltip: segment.tooltip,
             ...(segment.isFungibleVisual != null && { isFungibleVisual: segment.isFungibleVisual }),
+            ...(segment.isCoinageMerge ? { isCoinageMerge: true } : {}),
+            ...(segment.coinageVisual ? { coinageVisual: segment.coinageVisual } : {}),
           },
         }
         if (ownerGroupId) {
@@ -352,7 +362,9 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
     const mappedSegments = row.segments.map((segment) => {
       const entryId = segmentIdToEntryId(segment.id)
       const entry = effectiveState.inventoryEntries[entryId]
-      const prototype = effectiveState.itemDefinitions[segment.itemDefId]
+      const prototype =
+        effectiveState.itemDefinitions[segment.itemDefId] ??
+        (segment.itemDefId === COINAGE_MERGED_DEFINITION.id ? COINAGE_MERGED_DEFINITION : undefined)
       const overridePrototypeId = parseInstanceOverrideBaseId(entryId, segment.itemDefId) ?? undefined
       return {
         id: segment.id,
@@ -378,6 +390,11 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
                 armorClass: prototype.armorClass,
                 priceInGp: prototype.priceInGp,
                 isFungibleVisual: prototype.isFungibleVisual,
+                ...(prototype.coinagePool != null && { coinagePool: prototype.coinagePool }),
+                ...(prototype.coinDenom != null && { coinDenom: prototype.coinDenom }),
+                ...(prototype.bundleSize != null && { bundleSize: prototype.bundleSize }),
+                ...(prototype.minToCount != null && { minToCount: prototype.minToCount }),
+                ...(prototype.sixthsPerBundle != null && { sixthsPerBundle: prototype.sixthsPerBundle }),
               },
             }
           : {}),
@@ -387,9 +404,12 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
         tooltip: segment.tooltip,
         ...(segment.isFungibleVisual != null && { isFungibleVisual: segment.isFungibleVisual }),
         ...(segment.isWornPill ? { isWornPill: true } : {}),
+        ...(segment.isCoinageMerge ? { isCoinageMerge: true } : {}),
+        ...(segment.coinageVisual ? { coinageVisual: segment.coinageVisual } : {}),
       }
     })
     const hasWornPills = mappedSegments.some((segment) => segment.isWornPill)
+    const hasTreasury = row.treasury != null
 
     nodes[row.id] = {
       id: row.id,
@@ -403,7 +423,7 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
       x: 0,
       y: 0,
       width: nodeWidthForCols(slotCols),
-      height: nodeHeightForRows(slotRows, hasWornPills),
+      height: nodeHeightForRows(slotRows, hasWornPills, hasTreasury),
       speedFeet: row.speed.explorationFeet,
       speedBand: row.speedBand.band,
       fixedGreenStoneSlots: clampedGreenSlots,
@@ -415,6 +435,7 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
       usedStoneText: row.summary.usedStoneText,
       capacityStoneText: row.summary.capacityStoneText,
       segments: mappedSegments,
+      ...(row.treasury ? { treasury: row.treasury } : {}),
     }
 
     if (groupId && groupTitle) {

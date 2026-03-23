@@ -110,8 +110,18 @@ export const encumbranceCostSixths = (item: ItemDefinition, quantity: number): n
       return stoneToSixths(1) * quantity
     case 'coins':
       return coinsToSixths(quantity)
-    case 'standard':
+    case 'standard': {
+      if (item.coinagePool) return coinsToSixths(quantity)
       return (item.sixthsPerUnit ?? 1) * quantity
+    }
+    case 'bundled': {
+      const bundle = Math.max(1, item.bundleSize ?? 20)
+      const minC = Math.max(1, item.minToCount ?? 1)
+      const effective = Math.max(0, quantity - (minC - 1))
+      const bundles = Math.ceil(effective / bundle)
+      const per = item.sixthsPerBundle ?? 1
+      return bundles * per
+    }
     default: {
       const _never: never = item.kind
       return _never

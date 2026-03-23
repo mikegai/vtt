@@ -1,3 +1,9 @@
+import {
+  COINAGE_MERGED_DEFINITION,
+  metalFractionsFromCoinageLines,
+  isCoinagePooledDefinition,
+  tallyTreasuryForEntries,
+} from '../domain/coinage'
 import { getItemCategory } from '../domain/item-category'
 import { buildLabelLadder } from '../domain/labels'
 import { packDeterministic, type PackInput } from '../domain/packing'
@@ -74,18 +80,64 @@ const segmentIdToBaseEntryId = (segmentId: string): string => {
   return colon >= 0 ? segmentId.slice(0, colon) : segmentId
 }
 
+/** When true, pooled coin/gem lines merge into one packed segment (carried inventory). When false, each line stays separate (e.g. dropped on canvas). */
 const normalizeEntriesForPacking = (
   entries: readonly InventoryEntry[],
   definitions: CanonicalState['itemDefinitions'],
+  mergeCoinagePool = true,
 ): PackInput[] => {
   const result: PackInput[] = []
   const rationEntries = entries.filter((e) => e.itemDefId === 'ironRationsDay')
   const nonRationEntries = entries.filter((e) => e.itemDefId !== 'ironRationsDay')
 
-  for (const entry of nonRationEntries) {
+  const coinageEntries = nonRationEntries.filter((e) => {
+    const d = definitions[e.itemDefId]
+    return d != null && isCoinagePooledDefinition(d)
+  })
+  const nonCoinageEntries = nonRationEntries.filter((e) => {
+    const d = definitions[e.itemDefId]
+    return d == null || !isCoinagePooledDefinition(d)
+  })
+
+  for (const entry of nonCoinageEntries) {
     const definition = definitions[entry.itemDefId]
     if (!definition) continue
     result.push({ entry, definition })
+  }
+
+  if (!mergeCoinagePool) {
+    for (const entry of coinageEntries) {
+      const definition = definitions[entry.itemDefId]
+      if (!definition) continue
+      result.push({ entry, definition })
+    }
+  } else if (coinageEntries.length > 0) {
+    const sortedCoinage = [...coinageEntries].sort((a, b) => a.id.localeCompare(b.id))
+    const anchor = sortedCoinage[0]!
+    const totalSixths = sortedCoinage.reduce((sum, e) => {
+      const d = definitions[e.itemDefId]
+      return sum + (d ? encumbranceCostSixths(d, e.quantity) : 0)
+    }, 0)
+    const breakdown = sortedCoinage.map((e) => ({
+      entryId: e.id,
+      itemDefId: e.itemDefId,
+      quantity: e.quantity,
+    }))
+    const anyAccessible = sortedCoinage.some((e) => e.zone === 'accessible')
+    const zone = anyAccessible ? 'accessible' : sortedCoinage[0]!.zone
+    const mergedEntry: InventoryEntry = {
+      ...anchor,
+      id: `${anchor.id}:coinageMerged`,
+      itemDefId: COINAGE_MERGED_DEFINITION.id,
+      quantity: sortedCoinage.reduce((s, e) => s + e.quantity, 0),
+      zone,
+    }
+    result.push({
+      entry: mergedEntry,
+      definition: COINAGE_MERGED_DEFINITION,
+      encumbranceOverrideSixths: totalSixths,
+      coinageBreakdown: breakdown,
+    })
   }
 
   const rationDef = definitions.ironRationsDay
@@ -142,8 +194,10 @@ const toSegmentVM = (
     readonly sizeSixths: number
     readonly isOverflow: boolean
     readonly isWornPill?: boolean
+    readonly coinageBreakdown?: readonly { entryId: string; itemDefId: string; quantity: number }[]
   },
   definition: ItemDefinition,
+  itemDefinitions: CanonicalState['itemDefinitions'],
 ): SegmentVM | SegmentVM[] => {
   const actorId = actor.id
   const canonicalName = definition.canonicalName
@@ -152,6 +206,19 @@ const toSegmentVM = (
   const baseEntryId = segmentIdToBaseEntryId(packedSegment.inventoryEntryId)
   const derivedWield = deriveWieldFromActor(actor, baseEntryId)
   const baseState = { ...(packedSegment.state ?? {}), ...derivedWield }
+
+  const breakdown = packedSegment.coinageBreakdown
+  const coinageLines =
+    breakdown?.map((b) => ({
+      definition: itemDefinitions[b.itemDefId] ?? definition,
+      quantity: b.quantity,
+    })) ?? []
+  const metals = breakdown ? metalFractionsFromCoinageLines(coinageLines) : null
+  const qtyText =
+    breakdown?.map((b) => {
+      const n = itemDefinitions[b.itemDefId]?.canonicalName ?? b.itemDefId
+      return `${b.quantity}× ${n}`
+    }).join('; ') ?? `${packedSegment.quantity}`
 
   const labels = buildLabelLadder(canonicalName)
   return {
@@ -169,12 +236,13 @@ const toSegmentVM = (
     labels,
     tooltip: {
       title: canonicalName,
-      quantityText: `${packedSegment.quantity}`,
+      quantityText: qtyText,
       encumbranceText: stoneText,
       zoneText: zoneLabel,
     },
     ...(definition.isFungibleVisual != null && { isFungibleVisual: definition.isFungibleVisual }),
     ...(packedSegment.isWornPill ? { isWornPill: true } : {}),
+    ...(breakdown ? { isCoinageMerge: true as const, coinageVisual: { metals: metals ?? { cp: 0, bp: 0, sp: 0, ep: 0, gp: 0, pp: 0 } } } : {}),
   }
 }
 
@@ -187,23 +255,33 @@ const buildRow = (
   isDroppedRow = false,
 ): ActorRowVM => {
   const capacitySixths = capacitySixthsForActor(actor)
-  const normalizedInputs = normalizeEntriesForPacking(entries, state.itemDefinitions)
+  const normalizedInputs = normalizeEntriesForPacking(entries, state.itemDefinitions, !isDroppedRow)
 
   const entryMap = new Map(entries.map((entry) => [entry.id, entry]))
   const normalizedDefById = new Map(normalizedInputs.map((input) => [input.entry.id, input.definition]))
 
   const packed = packDeterministic(normalizedInputs, capacitySixths)
-  const segments = packed.flatMap((segment) => {
-    const normalizedId = segment.inventoryEntryId.replace(':overflow', '')
-    const baseId = segmentIdToBaseEntryId(segment.inventoryEntryId)
-    const definition = normalizedDefById.get(normalizedId)
-    const baseEntry = entryMap.get(baseId)
-    if (!baseEntry || !definition) return []
-    const vm = toSegmentVM(actor, segment, definition)
-    return Array.isArray(vm) ? vm : [vm]
-  }).sort((a, b) => a.tooltip.title.localeCompare(b.tooltip.title) || a.id.localeCompare(b.id))
-  const encumbranceSixths = normalizedInputs
-    .map((input) => encumbranceCostSixths(input.definition, input.entry.quantity))
+  const segments = packed
+    .flatMap((segment) => {
+      const normalizedId = segment.inventoryEntryId.replace(/:overflow$/, '')
+      const baseId = segmentIdToBaseEntryId(segment.inventoryEntryId)
+      const definition = normalizedDefById.get(normalizedId)
+      const baseEntry = entryMap.get(baseId)
+      if (!baseEntry || !definition) return []
+      const vm = toSegmentVM(actor, segment, definition, state.itemDefinitions)
+      return Array.isArray(vm) ? vm : [vm]
+    })
+    .sort((a, b) => {
+      const ac = a.isCoinageMerge ? 1 : 0
+      const bc = b.isCoinageMerge ? 1 : 0
+      if (ac !== bc) return ac - bc
+      return a.tooltip.title.localeCompare(b.tooltip.title) || a.id.localeCompare(b.id)
+    })
+  const encumbranceSixths = entries
+    .map((e) => {
+      const def = state.itemDefinitions[e.itemDefId]
+      return def ? encumbranceCostSixths(def, e.quantity) : 0
+    })
     .reduce((sum, value) => sum + value, 0)
 
   const speed =
@@ -215,6 +293,15 @@ const buildRow = (
         )
       : speedProfileForSixths(encumbranceSixths, actor.stats.hasLoadBearing)
   const overflowSixths = segments.filter((segment) => segment.isOverflow).reduce((sum, segment) => sum + segment.sizeSixths, 0)
+
+  const treasury = tallyTreasuryForEntries(entries, state.itemDefinitions)
+  const hasTreasury =
+    treasury.cp > 0 ||
+    treasury.bp > 0 ||
+    treasury.sp > 0 ||
+    treasury.ep > 0 ||
+    treasury.gp > 0 ||
+    treasury.pp > 0
 
   return {
     id: rowId,
@@ -238,6 +325,7 @@ const buildRow = (
       capacityStoneText: formatSixthsAsStone(capacitySixths),
       overflowSixths,
     },
+    ...(hasTreasury ? { treasury } : {}),
     childRows: [],
   }
 }

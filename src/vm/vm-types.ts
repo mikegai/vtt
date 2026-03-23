@@ -1,3 +1,4 @@
+import type { CoinageMetalFraction, TreasuryTally } from '../domain/coinage'
 import type { ActorKind, CarryZone, EquipmentState } from '../domain/types'
 import type { ItemCategory } from '../domain/item-category'
 import type { LabelLadder } from '../domain/labels'
@@ -28,6 +29,10 @@ export type SegmentVM = {
   readonly isFungibleVisual?: boolean
   /** Visual-only non-encumbering worn clothing rendered as pill strip under node. */
   readonly isWornPill?: boolean
+  /** Merged coin/gem pool segment. */
+  readonly isCoinageMerge?: boolean
+  /** Metal mix for stacked coinage bar (fractions sum to ~1). */
+  readonly coinageVisual?: { readonly metals: CoinageMetalFraction }
 }
 
 export type StoneSlotVM = {
@@ -62,6 +67,8 @@ export type ActorRowVM = {
     readonly capacityStoneText: string
     readonly overflowSixths: number
   }
+  /** Coin/gem counts for treasury medallions (only when any coinage line exists). */
+  readonly treasury?: TreasuryTally
   readonly childRows: readonly ActorRowVM[]
 }
 

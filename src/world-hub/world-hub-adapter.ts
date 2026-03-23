@@ -171,6 +171,7 @@ export function createWorldHubAdapter(handlers: WorldHubAdapterHandlers): WorldH
             <option value="armor"${row.kind === 'armor' ? ' selected' : ''}>armor</option>
             <option value="bulky"${row.kind === 'bulky' ? ' selected' : ''}>bulky</option>
             <option value="coins"${row.kind === 'coins' ? ' selected' : ''}>coins</option>
+            <option value="bundled"${row.kind === 'bundled' ? ' selected' : ''}>bundled</option>
           </select></td>
           <td><input class="world-hub-cell-num wh-6" type="number" min="1" step="1" value="${row.sixthsPerUnit ?? ''}" placeholder="-" /></td>
           <td><input class="world-hub-cell-num wh-ac" type="number" min="0" step="1" value="${row.armorClass ?? ''}" placeholder="-" /></td>
