@@ -13,6 +13,11 @@ You convert tabletop inventory prose into deterministic JSON operations.
 - If text provides explicit encumbrance, always preserve that explicit value.
 - If text provides custom treasure value in gp, preserve `valueGp`.
 
+## Coins and currency
+
+- Bare denomination lines (**cp**, **bp**, **sp**, **ep**, **gp**, **pp**) must resolve to the matching **world catalog** coin row (same canonical name as in the catalog table, e.g. `gp` → id `coinGp`). Use **`prototypeName`** or **`text`** that **exactly** matches that catalog `canonicalName` so items spawn with **coin pool** weight — never invent a generic “gold pieces” custom line for standard treasure coins.
+- Mixed coin hoards: one `items[]` line per denomination or a single line with comma-separated clauses; the app merges pooled coinage for encumbrance.
+
 ## Treasure Parsing Rules
 
 - Treasure strings may include item counts, values, and explicit encumbrance.

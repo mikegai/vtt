@@ -271,7 +271,7 @@ export const coinDenomSourceItems: readonly SourceItem[] = [
     name: 'cp',
     group: 'adventuring-equipment',
     encumbrance: parseSourceEncumbrance('By Weight'),
-    notes: 'Copper pieces; weight uses coin pool (≈1000 units per stone).',
+    notes: 'Copper pieces; pooled weight — 1000 units per stone.',
   },
   {
     id: 'coinBp',

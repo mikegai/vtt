@@ -31,6 +31,19 @@ export const COIN_DENOM_CATALOG_ORDER: readonly string[] = [
   'coinPp',
 ]
 
+const CATALOG_COIN_ID_TO_DENOM: Record<string, CoinDenom> = {
+  coinCp: 'cp',
+  coinBp: 'bp',
+  coinSp: 'sp',
+  coinEp: 'ep',
+  coinGp: 'gp',
+  coinPp: 'pp',
+}
+
+/** Catalog ids such as `coinGp` → `gp`; non-coin ids → `undefined`. */
+export const coinDenomFromCatalogCoinId = (itemDefId: string): CoinDenom | undefined =>
+  CATALOG_COIN_ID_TO_DENOM[itemDefId]
+
 /** CP value of one unit of denomination (1 gp = 100 cp for tally). */
 export const coinDenomCpValue = (d: CoinDenom): number => {
   switch (d) {

@@ -28,15 +28,38 @@ export const stoneToSixths = (stone: number): number => stone * SIXTHS_PER_STONE
 /** Format sixths as "X stone" or "X Y/6 stone" (e.g. "9 4/6 stone") to avoid decimal display. */
 export const formatSixthsAsStone = (sixths: number): string => {
   const n = Math.round(sixths)
-  const whole = Math.floor(n / SIXTHS_PER_STONE)
-  const frac = n % SIXTHS_PER_STONE
-  if (frac === 0) return `${whole} stone`
-  return `${whole} ${frac}/6 stone`
+  const isIntegerSixths = Math.abs(sixths - n) < 1e-6
+  if (isIntegerSixths) {
+    const whole = Math.floor(n / SIXTHS_PER_STONE)
+    const frac = n % SIXTHS_PER_STONE
+    if (frac === 0) return `${whole} stone`
+    return `${whole} ${frac}/6 stone`
+  }
+  const stone = sixths / SIXTHS_PER_STONE
+  return `${stone.toFixed(2)} stone`
 }
 
 export const armorAcToSixths = (armorClass: number): number => stoneToSixths(armorClass)
 
-export const coinsToSixths = (coins: number): number => Math.ceil(coins / 167)
+/** Coin/gem pool: 1000 units (physical pieces or gp-equivalent) per 1 stone. */
+export const COINS_PER_STONE = 1000
+
+/**
+ * Weight of pooled coins in sixths of a stone (may be fractional).
+ * 730 gp → 0.73 stone → 4.38 sixths.
+ */
+export const coinsToSixths = (coins: number): number => {
+  if (coins <= 0 || !Number.isFinite(coins)) return 0
+  return (coins / COINS_PER_STONE) * SIXTHS_PER_STONE
+}
+
+/** For pooled lines: piece count, or gp-equivalent for gems (priceInGp × qty). */
+export const coinPoolUnitCount = (item: ItemDefinition, quantity: number): number => {
+  if (item.kind === 'standard' && item.coinagePool && item.priceInGp != null && item.coinDenom == null) {
+    return item.priceInGp * quantity
+  }
+  return quantity
+}
 
 export const capacitySixthsForStrengthMod = (strengthMod: number): number => {
   const capacity = BASE_CAPACITY_SIXTHS + stoneToSixths(strengthMod)
@@ -111,7 +134,12 @@ export const encumbranceCostSixths = (item: ItemDefinition, quantity: number): n
     case 'coins':
       return coinsToSixths(quantity)
     case 'standard': {
-      if (item.coinagePool) return coinsToSixths(quantity)
+      if (item.coinagePool) {
+        if (item.priceInGp != null && item.coinDenom == null) {
+          return coinsToSixths(item.priceInGp * quantity)
+        }
+        return coinsToSixths(quantity)
+      }
       return (item.sixthsPerUnit ?? 1) * quantity
     }
     case 'bundled': {

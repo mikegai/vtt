@@ -32,7 +32,7 @@ export type ItemDefinition = {
   readonly priceInGp?: number
   /** When true, contiguous same-type segments may be visually merged. Fallback: sizeSixths <= 1. */
   readonly isFungibleVisual?: boolean
-  /** When true with kind standard (or coins), weight uses coin pool (1000 units ≈ 1 stone). */
+  /** When true with kind standard (or coins), weight uses coin pool (1000 units per stone). */
   readonly coinagePool?: boolean
   /** Denomination for coin lines (treasury + bar color). Gems may omit and use priceInGp only. */
   readonly coinDenom?: CoinDenom

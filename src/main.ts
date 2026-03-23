@@ -7,6 +7,7 @@ import {
   type ParsedInventoryChunk,
 } from './domain/inventory-text-parser'
 import { resolveAddItemsCatalogMatch } from './domain/add-items-catalog-match'
+import { coinDenomFromCatalogCoinId } from './domain/coinage'
 import { buildInventoryLlmPrompt } from './domain/inventory-llm-prompt'
 import {
   applyPasteTargetToInventoryOpsDoc,
@@ -1516,37 +1517,42 @@ type DerivedItemFromCatalogRow = {
 }
 
 const deriveItemKindFromCatalogRow = (row: ItemCatalogRow): DerivedItemFromCatalogRow => {
-  const perUnit = row.sixthsPerUnit ?? 6
-  if (row.kind === 'armor') {
+  const denomFromId = coinDenomFromCatalogCoinId(row.id)
+  const rowEff: ItemCatalogRow =
+    denomFromId != null
+      ? { ...row, coinagePool: row.coinagePool ?? true, coinDenom: row.coinDenom ?? denomFromId }
+      : row
+  const perUnit = rowEff.sixthsPerUnit ?? 6
+  if (rowEff.kind === 'armor') {
     return {
       kind: 'armor',
       sixthsPerUnit: perUnit,
-      armorClass: row.armorClass ?? Math.max(1, Math.round(perUnit / SIXTHS_PER_STONE)),
+      armorClass: rowEff.armorClass ?? Math.max(1, Math.round(perUnit / SIXTHS_PER_STONE)),
     }
   }
-  if (row.kind === 'bulky') return { kind: 'bulky', sixthsPerUnit: perUnit }
-  if (row.kind === 'coins') {
+  if (rowEff.kind === 'bulky') return { kind: 'bulky', sixthsPerUnit: perUnit }
+  if (rowEff.kind === 'coins') {
     return {
       kind: 'coins',
       sixthsPerUnit: perUnit,
-      coinagePool: row.coinagePool,
-      coinDenom: row.coinDenom,
+      coinagePool: rowEff.coinagePool,
+      coinDenom: rowEff.coinDenom,
     }
   }
-  if (row.kind === 'bundled') {
+  if (rowEff.kind === 'bundled') {
     return {
       kind: 'bundled',
       sixthsPerUnit: perUnit,
-      bundleSize: row.bundleSize ?? 20,
-      minToCount: row.minToCount ?? 1,
-      sixthsPerBundle: row.sixthsPerBundle ?? 1,
+      bundleSize: rowEff.bundleSize ?? 20,
+      minToCount: rowEff.minToCount ?? 1,
+      sixthsPerBundle: rowEff.sixthsPerBundle ?? 1,
     }
   }
   return {
     kind: 'standard',
     sixthsPerUnit: perUnit,
-    coinagePool: row.coinagePool,
-    coinDenom: row.coinDenom,
+    coinagePool: rowEff.coinagePool,
+    coinDenom: rowEff.coinDenom,
   }
 }
 

@@ -64,9 +64,10 @@ describe('ACKS rules', () => {
     expect(capacitySixthsForActor(mule)).toBe(stoneToSixths(50))
   })
 
-  it('converts coin weight using ACKS coin thresholds', () => {
-    expect(coinsToSixths(167)).toBe(1)
+  it('converts coin weight: 1000 units per stone (fractional sixths allowed)', () => {
     expect(coinsToSixths(1000)).toBe(6)
+    expect(coinsToSixths(730)).toBeCloseTo(4.38, 5)
+    expect(coinsToSixths(500)).toBe(3)
   })
 
   it('uses armor AC as stone cost', () => {
@@ -96,6 +97,18 @@ describe('ACKS rules', () => {
       coinagePool: true,
     }
     expect(encumbranceCostSixths(tradeBars, 1000)).toBe(coinsToSixths(1000))
+  })
+
+  it('coinage pool gem (priceInGp, no coinDenom) uses gp-value coin weight', () => {
+    const gem: ItemDefinition = {
+      id: 'ruby',
+      canonicalName: 'Ruby',
+      kind: 'standard',
+      coinagePool: true,
+      priceInGp: 500,
+    }
+    expect(encumbranceCostSixths(gem, 1)).toBe(coinsToSixths(500))
+    expect(encumbranceCostSixths(gem, 2)).toBe(coinsToSixths(1000))
   })
 
   it('iron rations: every 7, 2 pack into one slot (effective sixths = n - floor(n/7))', () => {

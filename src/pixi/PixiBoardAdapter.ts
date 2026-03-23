@@ -1,6 +1,8 @@
-import { Application, Assets, BitmapText, Color, Container, Graphics, Point, Rectangle } from 'pixi.js'
+import { Application, Assets, BitmapText, Color, Container, Graphics, Point, Rectangle, type Filter } from 'pixi.js'
 import { createSpring1D, createSpring2D, setSpring1DTarget, setSpringTarget, updateSpring1D, updateSpring2D } from './spring'
 import type { CoinageMetalFraction } from '../domain/coinage'
+import { blendFillColorFromMetals, labelFillForCoinageBackground } from './coinage-colors'
+import { createCoinageMetallicFilter } from './coinage-metallic-filter'
 import type { SceneFreeSegmentVM, SceneGroupVM, SceneLabelVM, SceneNodeVM, ScenePatch, SceneVM, SceneSegmentVM } from '../worker/protocol'
 import { resolveNodeGroupDropMode } from './node-drop-mode'
 import { canShowNodeResizeHandles } from './node-resize-availability'
@@ -571,22 +573,30 @@ const drawNodeClipMask = (clip: Graphics, width: number, height: number): void =
   clip.fill({ color: 0xffffff, alpha: 0.001 })
 }
 
-/** Group sixths by stone column for blended rect drawing. */
-const groupSixthsByStone = (
-  startSixth: number,
-  sizeSixths: number,
-): { stone: number; startRow: number; count: number }[] => {
-  const groups: { stone: number; startRow: number; count: number }[] = []
-  for (let i = 0; i < sizeSixths; i += 1) {
-    const sixth = startSixth + i
-    const stone = Math.floor(sixth / 6)
-    const row = sixth % 6
+/** One contiguous vertical slice within a stone column; height in sixth-rows (1 = full row; may be fractional). */
+type SixthStoneGroup = { stone: number; startRow: number; heightSixths: number }
+
+/** Group encumbrance span [startSixth, startSixth+sizeSixths) into stone columns; supports fractional sixths (coin pool). */
+const groupSixthsByStone = (startSixth: number, sizeSixths: number): SixthStoneGroup[] => {
+  if (sizeSixths <= 0) return []
+  const groups: SixthStoneGroup[] = []
+  const end = startSixth + sizeSixths
+  const eps = 1e-9
+  let pos = startSixth
+  while (pos < end - eps) {
+    const stone = Math.floor(pos / 6)
+    const rowFloat = pos - stone * 6
+    const rowIdx = Math.floor(rowFloat)
+    const fracStart = rowFloat - rowIdx
+    const roomInRow = 1 - fracStart
+    const take = Math.min(end - pos, roomInRow)
     const last = groups[groups.length - 1]
-    if (last && last.stone === stone) {
-      last.count += 1
+    if (last && last.stone === stone && last.startRow === rowIdx) {
+      last.heightSixths += take
     } else {
-      groups.push({ stone, startRow: row, count: 1 })
+      groups.push({ stone, startRow: rowIdx, heightSixths: take })
     }
+    pos += take
   }
   return groups
 }
@@ -776,7 +786,7 @@ const segmentBoundsInNodeLocal = (segment: SceneSegmentVM, stonesPerRowOverride 
     minX = Math.min(minX, x)
     minY = Math.min(minY, y)
     maxX = Math.max(maxX, x + STONE_W)
-    maxY = Math.max(maxY, y + g.count * CELL_H)
+    maxY = Math.max(maxY, y + g.heightSixths * CELL_H)
   })
   return {
     x: SLOT_START_X + minX,
@@ -820,7 +830,7 @@ const segmentCenterInNode = (
     minX = Math.min(minX, x)
     minY = Math.min(minY, y)
     maxX = Math.max(maxX, x + STONE_W)
-    maxY = Math.max(maxY, y + g.count * CELL_H)
+    maxY = Math.max(maxY, y + g.heightSixths * CELL_H)
   })
   return {
     x: nodeX + SLOT_START_X + (minX + maxX) / 2,
@@ -973,7 +983,7 @@ const occupiedSixthsFromSegments = (
     if (segment.isOverflow) return
     const start = Math.max(0, segment.startSixth)
     const endExclusive = Math.min(totalSixths, segment.startSixth + segment.sizeSixths)
-    for (let idx = start; idx < endExclusive; idx += 1) {
+    for (let idx = Math.floor(start); idx < Math.ceil(endExclusive - 1e-9); idx += 1) {
       occupied.add(idx)
     }
   })
@@ -1107,6 +1117,8 @@ const drawBlendedSegmentRects = (
   dimmed: boolean,
   dimmedAlpha: number,
   stonesPerRowOverride = stonesPerRow,
+  coinageLabelFill = '#f0f8ff',
+  coinageMetalFilter: Filter | null = null,
 ): { hitBounds: { x: number; y: number; w: number; h: number }; groupBounds: { x: number; y: number; w: number; h: number }[] } => {
   const groups = groupSixthsByStone(segment.startSixth, segment.sizeSixths)
   const PAD = 1.2
@@ -1126,19 +1138,19 @@ const drawBlendedSegmentRects = (
     const x = baseX + stoneToX(group.stone, stonesPerRowOverride)
     const y = baseY + stoneToY(group.stone, stonesPerRowOverride) + group.startRow * CELL_H
     const w = STONE_W
-    const h = group.count * CELL_H
+    const h = group.heightSixths * CELL_H
 
     const prev = index > 0 ? groups[index - 1] : undefined
     const next = index < groups.length - 1 ? groups[index + 1] : undefined
     const continuesFromPrev =
       !!prev &&
       prev.stone + 1 === group.stone &&
-      prev.startRow + prev.count >= SIXTH_ROWS &&
+      prev.startRow + prev.heightSixths >= SIXTH_ROWS - 1e-9 &&
       group.startRow === 0
     const continuesToNext =
       !!next &&
       group.stone + 1 === next.stone &&
-      group.startRow + group.count >= SIXTH_ROWS &&
+      group.startRow + group.heightSixths >= SIXTH_ROWS - 1e-9 &&
       next.startRow === 0
     const top = !continuesFromPrev
     const bottom = !continuesToNext
@@ -1156,6 +1168,7 @@ const drawBlendedSegmentRects = (
       isDropPreview ? { width: 2, color: 0x5cadee, alpha: 0.7 } : { width: 0.5, color: strokeColor, alpha: 1 },
       { tl: top ? 4 : 0, tr: top ? 4 : 0, br: bottom ? 4 : 0, bl: bottom ? 4 : 0 },
     )
+    if (coinageMetalFilter) rect.filters = [coinageMetalFilter]
     container.addChild(rect)
 
     minX = Math.min(minX, x)
@@ -1184,7 +1197,7 @@ const drawBlendedSegmentRects = (
     )
     const txt = new BitmapText({
       text: fit.text,
-      style: { fill: '#f0f8ff', fontSize: fit.fontSize, fontFamily: FONT_SEMIBOLD, align: 'center' },
+      style: { fill: coinageLabelFill, fontSize: fit.fontSize, fontFamily: FONT_SEMIBOLD, align: 'center' },
     })
     txt.eventMode = 'none'
     txt.alpha = dimmed ? dimmedAlpha : 1
@@ -1331,19 +1344,19 @@ const drawRunVisuals = (
       const x = baseX + stoneToX(group.stone, stonesPerRowOverride)
       const y = baseY + stoneToY(group.stone, stonesPerRowOverride) + group.startRow * CELL_H
       const w = STONE_W
-      const h = group.count * CELL_H
+      const h = group.heightSixths * CELL_H
 
       const prev = idx > 0 ? groups[idx - 1] : undefined
       const next = idx < groups.length - 1 ? groups[idx + 1] : undefined
       const continuesFromPrev =
         !!prev &&
         prev.stone + 1 === group.stone &&
-        prev.startRow + prev.count >= SIXTH_ROWS &&
+        prev.startRow + prev.heightSixths >= SIXTH_ROWS - 1e-9 &&
         group.startRow === 0
       const continuesToNext =
         !!next &&
         group.stone + 1 === next.stone &&
-        group.startRow + group.count >= SIXTH_ROWS &&
+        group.startRow + group.heightSixths >= SIXTH_ROWS - 1e-9 &&
         next.startRow === 0
       const top = !continuesFromPrev
       const bottom = !continuesToNext
@@ -1387,10 +1400,10 @@ const drawRunVisuals = (
       const x = baseX + stoneToX(group.stone, stonesPerRowOverride)
       const y = baseY + stoneToY(group.stone, stonesPerRowOverride) + group.startRow * CELL_H
       const w = STONE_W
-      const h = group.count * CELL_H
+      const h = group.heightSixths * CELL_H
       const groupStartSixth = group.stone * 6 + group.startRow
-      const days = isRations ? rationDaysInGroup(run, groupStartSixth, group.count) : 0
-      const partQty = isRations && days > 0 ? days : Math.max(1, group.count)
+      const days = isRations ? rationDaysInGroup(run, groupStartSixth, group.heightSixths) : 0
+      const partQty = isRations && days > 0 ? days : Math.max(1, Math.round(group.heightSixths))
       const partName = isRations && days > 0
         ? (days === 1 ? 'daily iron ration' : 'daily iron rations')
         : (partQty === 1 ? baseName : pluralize(baseName))
@@ -1448,14 +1461,33 @@ const drawCoinageMetalStrip = (
   ]
   let total = pairs.reduce((s, [, f]) => s + f, 0)
   if (total <= 0) total = 1
+  const segments: { col: number; ww: number }[] = []
   for (const [col, frac] of pairs) {
     if (frac <= 0) continue
     const ww = Math.max(0, innerW * (frac / total))
+    segments.push({ col, ww })
+  }
+  const end = x + w - 2
+  const targetRight = end
+  let sumW = 0
+  for (const s of segments) sumW += s.ww
+  let gap = Math.max(0, targetRight - x0 - sumW)
+  if (gap > 0 && segments.length > 0) {
+    let li = -1
+    for (let i = segments.length - 1; i >= 0; i -= 1) {
+      if (segments[i]!.ww > 0) {
+        li = i
+        break
+      }
+    }
+    if (li >= 0) segments[li]!.ww += gap
+  }
+  for (const { col, ww } of segments) {
+    if (ww <= 0) continue
     g.roundRect(x0, barY, ww, barH, 1)
     g.fill({ color: col, alpha: 0.92 })
     x0 += ww
   }
-  const end = x + w - 2
   if (x0 < end) {
     g.roundRect(x0, barY, end - x0, barH, 1)
     g.fill({ color: 0x2a2a2a, alpha: 0.45 })
@@ -1493,6 +1525,16 @@ const drawSegmentBlock = (
   const { startStone, endStone } = segmentStoneSpan(segment.startSixth, segment.sizeSixths)
   const isDropPreview = segment.isDropPreview === true
   const dimmed = filterCategory != null && segment.category !== filterCategory
+  const coinageFill =
+    segment.isCoinageMerge &&
+    segment.coinageVisual?.metals &&
+    !isDropPreview &&
+    !segment.isOverflow
+      ? blendFillColorFromMetals(segment.coinageVisual.metals)
+      : null
+  const coinageMetalFilter: Filter | null =
+    coinageFill != null ? createCoinageMetallicFilter(coinageFill) : null
+  const coinageLabelFill = coinageFill != null ? labelFillForCoinageBackground(coinageFill) : '#f0f8ff'
   const color = isDropPreview
     ? 0x5cadee
     : segment.isSelfWeightToken
@@ -1501,7 +1543,7 @@ const drawSegmentBlock = (
         ? 0x932d4e
         : hovered
           ? 0x5cadee
-          : 0x3d9ac9
+          : coinageFill ?? 0x3d9ac9
   const dimmedAlpha = 0.12
   const alpha = isDropPreview ? 0.25 : segment.isOverflow ? 0.88 : dimmed ? dimmedAlpha : 0.95
   const isLocked = segment.locked === true || segment.isSelfWeightToken === true
@@ -1571,7 +1613,6 @@ const drawSegmentBlock = (
       : { width: 0.5, color: darkenColor(color), alpha: 1 }
     const fillOpt = { color, alpha }
 
-    container.addChild(block)
     const R = 5
     const multi = chunks.length > 1
     chunks.forEach((chunk, idx) => {
@@ -1598,7 +1639,11 @@ const drawSegmentBlock = (
         br: isLast ? R : 0,
         bl: isLast ? R : 0,
       }
-      drawChunkRect(block, rx, ry, rw, rh, sides, fillOpt, strokeOpt, cornerRadii)
+      const chunkG = new Graphics()
+      chunkG.eventMode = 'none'
+      drawChunkRect(chunkG, rx, ry, rw, rh, sides, fillOpt, strokeOpt, cornerRadii)
+      if (coinageMetalFilter) chunkG.filters = [coinageMetalFilter]
+      container.addChild(chunkG)
       minX = Math.min(minX, rx)
       minY = Math.min(minY, ry)
       maxX = Math.max(maxX, rx + rw)
@@ -1624,7 +1669,7 @@ const drawSegmentBlock = (
         )
         const txt = new BitmapText({
           text: fit.text,
-          style: { fill: '#f0f8ff', fontSize: fit.fontSize, fontFamily: FONT_SEMIBOLD, align: 'center' },
+          style: { fill: coinageLabelFill, fontSize: fit.fontSize, fontFamily: FONT_SEMIBOLD, align: 'center' },
         })
         txt.eventMode = 'none'
         txt.alpha = dimmed ? dimmedAlpha : 1
@@ -1646,6 +1691,7 @@ const drawSegmentBlock = (
     block.rect(blockBounds.x, blockBounds.y, blockBounds.w, blockBounds.h)
     block.fill({ color: 0xffffff, alpha: 0.001 })
     block.hitArea = new Rectangle(blockBounds.x, blockBounds.y, blockBounds.w, blockBounds.h)
+    container.addChild(block)
     drawGripIndicators(container, segment.wield, blockBounds, dimmed, dimmedAlpha)
     if (segment.coinageVisual?.metals) {
       drawCoinageMetalStrip(container, blockBounds, segment.coinageVisual.metals)
@@ -1667,6 +1713,8 @@ const drawSegmentBlock = (
       dimmed,
       dimmedAlpha,
       stonesPerRowOverride,
+      coinageLabelFill,
+      coinageMetalFilter,
     )
     block.rect(hitBounds.x, hitBounds.y, hitBounds.w, hitBounds.h)
     block.fill({ color: 0xffffff, alpha: 0.001 })
@@ -3094,7 +3142,7 @@ export class PixiBoardAdapter {
           minX = Math.min(minX, stoneToX(g.stone))
           minY = Math.min(minY, gy)
           maxX = Math.max(maxX, stoneToX(g.stone) + STONE_W)
-          maxY = Math.max(maxY, gy + g.count * CELL_H)
+          maxY = Math.max(maxY, gy + g.heightSixths * CELL_H)
         })
         result[segment.id] = { x: minX, y: minY }
         offsetY += maxY - minY + ITEM_GAP
@@ -3308,7 +3356,7 @@ export class PixiBoardAdapter {
           minX = Math.min(minX, stoneToX(g.stone))
           minY = Math.min(minY, gy)
           maxX = Math.max(maxX, stoneToX(g.stone) + STONE_W)
-          maxY = Math.max(maxY, gy + g.count * CELL_H)
+          maxY = Math.max(maxY, gy + g.heightSixths * CELL_H)
         })
         segmentBounds[segment.id] = { x: minX, y: minY, w: maxX - minX, h: maxY - minY }
         const stroke = new Graphics()
@@ -3365,7 +3413,7 @@ export class PixiBoardAdapter {
             minX = Math.min(minX, relX + stoneToX(g.stone))
             minY = Math.min(minY, gy)
             maxX = Math.max(maxX, relX + stoneToX(g.stone) + STONE_W)
-            maxY = Math.max(maxY, gy + g.count * CELL_H)
+            maxY = Math.max(maxY, gy + g.heightSixths * CELL_H)
           })
           const stroke = new Graphics()
           stroke.roundRect(minX, minY, maxX - minX, maxY - minY, 4)

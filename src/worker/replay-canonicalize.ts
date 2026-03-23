@@ -168,7 +168,7 @@ export const canonicalizeIntentForReplay = (
       ...intent,
       replay: {
         ...(intent.replay ?? {}),
-        newEntryIds,
+        newEntryIds: newEntryIds ?? undefined,
       },
     }
   }

@@ -9,6 +9,8 @@ import { buildLabelLadder } from '../domain/labels'
 import { packDeterministic, type PackInput } from '../domain/packing'
 import {
   capacitySixthsForActor,
+  coinPoolUnitCount,
+  coinsToSixths,
   defaultBaseSpeedProfile,
   encumbranceCostSixths,
   formatSixthsAsStone,
@@ -114,10 +116,11 @@ const normalizeEntriesForPacking = (
   } else if (coinageEntries.length > 0) {
     const sortedCoinage = [...coinageEntries].sort((a, b) => a.id.localeCompare(b.id))
     const anchor = sortedCoinage[0]!
-    const totalSixths = sortedCoinage.reduce((sum, e) => {
+    const totalPoolUnits = sortedCoinage.reduce((sum, e) => {
       const d = definitions[e.itemDefId]
-      return sum + (d ? encumbranceCostSixths(d, e.quantity) : 0)
+      return sum + (d ? coinPoolUnitCount(d, e.quantity) : 0)
     }, 0)
+    const totalSixths = coinsToSixths(totalPoolUnits)
     const breakdown = sortedCoinage.map((e) => ({
       entryId: e.id,
       itemDefId: e.itemDefId,
@@ -277,12 +280,24 @@ const buildRow = (
       if (ac !== bc) return ac - bc
       return a.tooltip.title.localeCompare(b.tooltip.title) || a.id.localeCompare(b.id)
     })
-  const encumbranceSixths = entries
-    .map((e) => {
+  const encumbranceSixths = (() => {
+    let sum = 0
+    const coinage: InventoryEntry[] = []
+    for (const e of entries) {
       const def = state.itemDefinitions[e.itemDefId]
-      return def ? encumbranceCostSixths(def, e.quantity) : 0
-    })
-    .reduce((sum, value) => sum + value, 0)
+      if (!def) continue
+      if (isCoinagePooledDefinition(def)) coinage.push(e)
+      else sum += encumbranceCostSixths(def, e.quantity)
+    }
+    if (coinage.length > 0) {
+      const units = coinage.reduce((s, e) => {
+        const d = state.itemDefinitions[e.itemDefId]
+        return s + (d ? coinPoolUnitCount(d, e.quantity) : 0)
+      }, 0)
+      sum += coinsToSixths(units)
+    }
+    return sum
+  })()
 
   const speed =
     (actor.kind === 'animal' || actor.kind === 'vehicle') && actor.capacityStone != null
