@@ -118,6 +118,11 @@ export const applyDuplicateNodeIntent = (
   localState: WorkerLocalState,
   intent: DupNodeIntent,
 ): { worldState: CanonicalState; localState: WorkerLocalState } => {
+  /** Sync replay applies pending on top of server state that may already include this op. */
+  if (intent.replay?.newActorId && worldState.actors[intent.replay.newActorId]) {
+    return { worldState, localState }
+  }
+
   const actorId = parseNodeId(intent.nodeId).actorId
   const actor = worldState.actors[actorId]
   if (!actor) return { worldState, localState }
@@ -269,6 +274,10 @@ export const applyDuplicateEntryIntent = (
 
       const newEntryId =
         replayIds !== undefined ? replayIds[replayIdx++]! : createInventoryEntryId(nextWorld, entry.itemDefId)
+      if (nextWorld.inventoryEntries[newEntryId]) {
+        newSegmentIds.push(newEntryId)
+        continue
+      }
       const isDropped = !!entry.carryGroupId || entry.zone === 'dropped' || !!entry.state?.dropped
       const freeSeg = scene.freeSegments?.[segmentId]
 
