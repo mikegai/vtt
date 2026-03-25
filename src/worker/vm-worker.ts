@@ -27,7 +27,7 @@ import {
 } from '../vm/drag-segment-commit'
 import { buildSegmentIdToSourceNodeId } from '../vm/segment-source-map'
 import { applySpawnItemInstance } from '../vm/spawn-item-instance'
-import { diffSceneVM } from './scene-diff'
+import { diffSceneVM, freeSegmentsLayoutKey } from './scene-diff'
 import { addInventoryNodeToState, createInventoryActorId } from './inventory-node'
 import { buildSceneVM, type WorkerLocalState } from './scene-vm'
 import { parseNodeClipboardPayload, serializeNodeClipboard } from './node-clipboard'
@@ -75,6 +75,7 @@ import {
   STONE_ROW_GAP,
   STONE_W,
 } from '../shared/node-layout'
+import { dropDebug } from '../shared/drop-debug'
 
 /** Stable key for canvas-scoped room (SpacetimeDB world + canvas). */
 const roomKeyForContext = (ctx: WorldCanvasContext): string => `${ctx.worldId}::${ctx.canvasId}`
@@ -192,6 +193,8 @@ function isSyncIntent(intent: WorkerIntent): boolean {
     case 'SELECT_LABEL':
     case 'DRAG_SEGMENT_START':
     case 'DRAG_SEGMENT_UPDATE':
+    /** Must not queue: every server/layout derive replays pending and would re-run drop N times. */
+    case 'DRAG_SEGMENT_END':
     case 'DRAG_START':
     case 'DRAG_END':
       return false
@@ -629,6 +632,30 @@ const computeDroppedFreeSegmentPositions = (
   return out
 }
 
+function normalizeFreeDropPositionKeys(
+  raw: Readonly<Record<string, { x: number; y: number }>>,
+  originalSegmentIds: readonly string[],
+  entryRemap: ReadonlyMap<string, string>,
+): Record<string, { x: number; y: number }> {
+  const out: Record<string, { x: number; y: number }> = {}
+
+  for (const sid of originalSegmentIds) {
+    const ns = remapSegmentIdAfterEntryConsolidation(sid, entryRemap)
+    let p = raw[sid] ?? raw[ns]
+    if (p == null) {
+      for (const [k, v] of Object.entries(raw)) {
+        if (remapSegmentIdAfterEntryConsolidation(k, entryRemap) === ns) {
+          p = v
+          break
+        }
+      }
+    }
+    if (p != null) out[ns] = { x: p.x, y: p.y }
+  }
+
+  return out
+}
+
 const resolveFreeDropLayoutFromIntent = (
   intent: { readonly freeSegmentPositions?: Readonly<Record<string, { x: number; y: number }>> | null },
   segmentIds: readonly string[],
@@ -648,8 +675,25 @@ const resolveFreeDropLayoutFromIntent = (
       const p = raw[id]!
       out[id] = { x: p.x, y: p.y }
     }
+    dropDebug('worker:resolve:layout', {
+      complete: true,
+      layoutSegmentIds: segmentIds,
+      missingIds: [],
+      receivedKeyCount: raw ? Object.keys(raw).length : 0,
+      receivedKeys: raw ? Object.keys(raw) : [],
+    })
     return out
   }
+  const missingIds = segmentIds.filter((id) => raw?.[id] == null)
+  dropDebug('worker:resolve:layout', {
+    complete: false,
+    layoutSegmentIds: segmentIds,
+    missingIds,
+    receivedKeyCount: raw ? Object.keys(raw).length : 0,
+    receivedKeys: raw != null ? Object.keys(raw) : [],
+    rawWasNullish: raw == null,
+    fallbackPack: true,
+  })
   debugDrag('free drop layout: missing or incomplete freeSegmentPositions from renderer; using fallback packer', {
     segmentIds,
     receivedKeys: raw != null ? Object.keys(raw) : [],
@@ -761,7 +805,14 @@ const recompute = (sendInitIfFirst = false): void => {
     if (snapNodeIds.length === 0) snapNodeIds = undefined
   }
   const hasSnap = (snapSegmentIds?.length ?? 0) > 0 || (snapNodeIds?.length ?? 0) > 0
-  if (patches.length > 0 || hasSnap) {
+  const postedPatches = patches.length > 0 || hasSnap
+  if (postedPatches) {
+    dropDebug('worker:recompute:emit', {
+      patchCount: patches.length,
+      patchTypes: patches.map((p) => p.type),
+      hasSnap,
+      freeLayoutKey: freeSegmentsLayoutKey(nextScene),
+    })
     post({
       type: 'SCENE_PATCHES',
       patches: patches.length > 0 ? patches : [],
@@ -1510,18 +1561,41 @@ const applyIntent = (intent: WorkerIntent): void => {
           remapSegmentIdAfterEntryConsolidation(sid, finDrop.entryRemapToKeeper),
         )
         const sceneAfterDrop = buildSceneVM(worldState, localState)
-        const remappedFreePositions =
-          intent.freeSegmentPositions && finDrop.entryRemapToKeeper.size > 0
-            ? Object.fromEntries(
-                segmentIds
-                  .map((sid) => {
-                    const ns = remapSegmentIdAfterEntryConsolidation(sid, finDrop.entryRemapToKeeper)
-                    const p = intent.freeSegmentPositions![sid]
-                    return p != null ? ([ns, p] as const) : null
-                  })
-                  .filter((x): x is readonly [string, { x: number; y: number }] => x != null),
-              )
-            : intent.freeSegmentPositions
+        const normalizedFreePositions =
+          intent.freeSegmentPositions != null
+            ? normalizeFreeDropPositionKeys(intent.freeSegmentPositions, segmentIds, finDrop.entryRemapToKeeper)
+            : undefined
+
+        const rawFsp = intent.freeSegmentPositions
+        const normalizeTrace = segmentIds.map((sid) => {
+          const ns = remapSegmentIdAfterEntryConsolidation(sid, finDrop.entryRemapToKeeper)
+          let sourceKey: string | null = null
+          if (rawFsp) {
+            if (rawFsp[sid]) sourceKey = sid
+            else if (rawFsp[ns]) sourceKey = ns
+            else {
+              for (const k of Object.keys(rawFsp)) {
+                if (remapSegmentIdAfterEntryConsolidation(k, finDrop.entryRemapToKeeper) === ns) {
+                  sourceKey = k
+                  break
+                }
+              }
+            }
+          }
+          return { sid, ns, sourceKey }
+        })
+        dropDebug('worker:drag_end:absolute', {
+          segmentIds,
+          layoutSegmentIds,
+          rawKeys: rawFsp ? Object.keys(rawFsp) : [],
+          normalizedKeys: normalizedFreePositions ? Object.keys(normalizedFreePositions) : [],
+          normalizeTrace,
+          entryRemapPairs: [...finDrop.entryRemapToKeeper.entries()].slice(0, 32),
+          intentXY: intent.x != null && intent.y != null ? { x: intent.x, y: intent.y } : null,
+          hoverTargetNodeId,
+          hoverTargetGroupId,
+          groupCanAcceptSegments,
+        })
 
         debugDrag('droppedLayout choice', {
           hasFreeSegmentPositions: intent.freeSegmentPositions != null,
@@ -1532,8 +1606,8 @@ const applyIntent = (intent: WorkerIntent): void => {
           dropKind: hoverTargetNodeId ? 'targeted-node' : 'absolute-free',
         })
         const layoutIntentForResolve =
-          remappedFreePositions !== intent.freeSegmentPositions
-            ? { ...intent, freeSegmentPositions: remappedFreePositions }
+          normalizedFreePositions != null
+            ? { ...intent, freeSegmentPositions: normalizedFreePositions }
             : intent
         const droppedLayout = resolveFreeDropLayoutFromIntent(
           layoutIntentForResolve,

@@ -63,7 +63,7 @@ describe('optimistic rebase helpers', () => {
     expect(merged.freeSegmentPositions.a).toEqual({ x: 1, y: 1 })
   })
 
-  it('mergeServerLayoutWithEphemeral does not copy local-only freeSegmentPositions missing from server', () => {
+  it('mergeServerLayoutWithEphemeral keeps local-only freeSegmentPositions until server echoes them', () => {
     const serverLayout = { freeSegmentPositions: { other: { x: 0, y: 0 } } }
     const ep: typeof ZERO_EPHEMERAL_LOCAL = {
       ...ZERO_EPHEMERAL_LOCAL,
@@ -74,7 +74,7 @@ describe('optimistic rebase helpers', () => {
     }
     const merged = mergeServerLayoutWithEphemeral(serverLayout, ep as WorkerLocalState)
     expect(merged.freeSegmentPositions.other).toEqual({ x: 0, y: 0 })
-    expect(merged.freeSegmentPositions.justDropped).toBeUndefined()
+    expect(merged.freeSegmentPositions.justDropped).toEqual({ x: 400, y: 300 })
   })
 
   it('mergeServerLayoutWithEphemeral uses server groupFreeSegmentPositions over stale local ephemeral', () => {

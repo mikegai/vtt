@@ -11,6 +11,7 @@ import {
   nodeWidthForCols,
 } from '../shared/node-layout'
 import { COINAGE_MERGED_DEFINITION } from '../domain/coinage'
+import { resolveFreeSegmentLayoutPosition } from './resolve-free-segment-position'
 import { applyDropIntentToState } from '../vm/drop-intent'
 import { buildBoardVM } from '../vm/vm'
 import type { ActorRowVM } from '../vm/vm-types'
@@ -270,7 +271,10 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
         const overridePrototypeId = parseInstanceOverrideBaseId(entryId, segment.itemDefId) ?? undefined
         const ownerGroupId = segmentGroupOwner.get(segment.id)
         const groupRelativePos = ownerGroupId ? localState.groupFreeSegmentPositions[ownerGroupId]?.[segment.id] : undefined
-        const pos = groupRelativePos ?? localState.freeSegmentPositions[segment.id] ?? { x: 120, y: 120 + yCursor }
+        const pos =
+          groupRelativePos ??
+          resolveFreeSegmentLayoutPosition(localState.freeSegmentPositions, segment.id) ??
+          { x: 120, y: 120 + yCursor }
         freeSegments[segment.id] = {
           id: segment.id,
           nodeId: row.id,

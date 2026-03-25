@@ -32,7 +32,9 @@ import {
   nodeHeightForRows as vmNodeHeightForRows,
   nodeWidthForCols as vmNodeWidthForCols,
 } from '../shared/node-layout'
-import { freeDropPositionsFromPointerDelta } from '../shared/free-segment-drop-geometry'
+import { freeDropPositionsFromPointerDelta, freeSegmentAnchorFromVisualTopLeft } from '../shared/free-segment-drop-geometry'
+import { dropDebug } from '../shared/drop-debug'
+import { freeSegmentsLayoutKey } from '../worker/scene-diff'
 
 /** Stored on segment blocks for context-menu hit testing. */
 type SegmentContext = { segmentId: string; nodeId: string }
@@ -3773,17 +3775,6 @@ export class PixiBoardAdapter {
     const dropVisualKind: 'canvas' | 'nodeHit' =
       targetNodeId != null ? 'nodeHit' : 'canvas'
     this.setSegmentDragHoveredGroup(null)
-    console.info('[pixi drag] endSegmentDrag start', {
-      isExternal: !!drag.isExternal,
-      hasEvent: !!event,
-      targetNodeId,
-      targetGroupId,
-      proxyMode: drag.proxyMode,
-      dropVisualKind,
-      worldX: world?.x ?? null,
-      worldY: world?.y ?? null,
-      segmentIds: drag.segmentIds,
-    })
 
     if (drag.isExternal) {
       let cancelled = !event
@@ -3804,20 +3795,43 @@ export class PixiBoardAdapter {
         const anchor = drag.dropAnchorOffset
         for (const segId of drag.segmentIds) {
           const pos = drag.initialSegmentPositions[segId]
-          if (pos) {
-            freeSegmentPositions[segId] = {
-              x: world.x - anchor.x + pos.x,
-              y: world.y - anchor.y + pos.y,
-            }
+          const seg = drag.segments.find((s) => s.id === segId)
+          if (pos && seg) {
+            const visualEnd = { x: world.x - anchor.x + pos.x, y: world.y - anchor.y + pos.y }
+            const b = segmentBoundsInNodeLocal(seg)
+            freeSegmentPositions[segId] = freeSegmentAnchorFromVisualTopLeft(visualEnd, b)
           }
         }
       }
-      console.info('[pixi drag] external drag end payload', {
-        targetNodeId,
+      const extSegDetail = drag.segmentIds.slice(0, 8).map((segId) => {
+        const pos = drag.initialSegmentPositions[segId]
+        const seg = drag.segments.find((s) => s.id === segId)
+        if (!pos || !seg || !world) return { segId, missing: true as const }
+        const visualEnd = { x: world.x - drag.dropAnchorOffset.x + pos.x, y: world.y - drag.dropAnchorOffset.y + pos.y }
+        const b = segmentBoundsInNodeLocal(seg)
+        return {
+          segId,
+          initialVisualTL: pos,
+          visualEnd,
+          boundsXY: { x: b.x, y: b.y },
+          anchorOut: freeSegmentPositions?.[segId] ?? null,
+        }
+      })
+      dropDebug('pixi:end:external', {
         cancelled,
+        targetNodeId,
+        targetGroupId,
+        dropVisualKind,
+        proxyMode: drag.proxyMode,
+        world: world ? { x: world.x, y: world.y } : null,
+        dropAnchorOffset: drag.dropAnchorOffset,
         dropX,
         dropY,
-        freeSegmentPositionsCount: freeSegmentPositions ? Object.keys(freeSegmentPositions).length : 0,
+        freeKeys: freeSegmentPositions ? Object.keys(freeSegmentPositions) : [],
+        freeCount: freeSegmentPositions ? Object.keys(freeSegmentPositions).length : 0,
+        segmentIds: drag.segmentIds,
+        extSegDetail,
+        truncatedSegDetail: drag.segmentIds.length > 8 ? drag.segmentIds.length - 8 : 0,
       })
       this.worldLayer.removeChild(drag.lineLayer)
       this.worldLayer.removeChild(drag.proxy)
@@ -3842,25 +3856,74 @@ export class PixiBoardAdapter {
         dropX = world.x - drag.dropAnchorOffset.x
         dropY = world.y - drag.dropAnchorOffset.y
       } else {
-        freeSegmentPositions = freeDropPositionsFromPointerDelta(
+        const visualFree = freeDropPositionsFromPointerDelta(
           drag.segmentIds,
           drag.initialSegmentPositions,
           drag.pointerWorldAtStart,
           world,
         )
+        freeSegmentPositions = {}
+        for (const segId of drag.segmentIds) {
+          const v = visualFree[segId]
+          const seg = drag.segments.find((s) => s.id === segId)
+          if (v && seg) {
+            const b = segmentBoundsInNodeLocal(seg)
+            freeSegmentPositions[segId] = freeSegmentAnchorFromVisualTopLeft(v, b)
+          }
+        }
+        const fspCanvas = freeSegmentPositions
         dropX = world.x - drag.dropAnchorOffset.x
         dropY = world.y - drag.dropAnchorOffset.y
+        const canvasSegDetail = drag.segmentIds.slice(0, 8).map((segId) => {
+          const init = drag.initialSegmentPositions[segId]
+          const seg = drag.segments.find((s) => s.id === segId)
+          const v = visualFree[segId]
+          if (!init || !seg || !v) return { segId, missing: true as const }
+          const b = segmentBoundsInNodeLocal(seg)
+          return {
+            segId,
+            pointerDelta: {
+              dx: world.x - drag.pointerWorldAtStart.x,
+              dy: world.y - drag.pointerWorldAtStart.y,
+            },
+            initialVisualTL: init,
+            visualEnd: v,
+            boundsXY: { x: b.x, y: b.y },
+            anchorOut: fspCanvas[segId] ?? null,
+          }
+        })
+        dropDebug('pixi:end:internal_canvas', {
+          targetNodeId,
+          targetGroupId,
+          effectiveTarget,
+          dropVisualKind,
+          proxyMode: drag.proxyMode,
+          pointerWorldAtStart: drag.pointerWorldAtStart,
+          pointerWorldAtEnd: { x: world.x, y: world.y },
+          dropAnchorOffset: drag.dropAnchorOffset,
+          dropX,
+          dropY,
+          freeKeys: Object.keys(fspCanvas),
+          freeCount: Object.keys(fspCanvas).length,
+          segmentIds: drag.segmentIds,
+          initialKeys: Object.keys(drag.initialSegmentPositions),
+          canvasSegDetail,
+          truncatedCanvasDetail: drag.segmentIds.length > 8 ? drag.segmentIds.length - 8 : 0,
+        })
       }
     }
-    console.info('[pixi drag] internal drag end payload', {
-      targetNodeId,
-      effectiveTarget,
-      dropVisualKind,
-      dropX,
-      dropY,
-      freeSegmentPositionsCount: freeSegmentPositions ? Object.keys(freeSegmentPositions).length : 0,
-      segmentIds: drag.segmentIds,
-    })
+    if (world && effectiveTarget) {
+      dropDebug('pixi:end:internal_node', {
+        targetNodeId,
+        targetGroupId,
+        effectiveTarget,
+        dropVisualKind,
+        proxyMode: drag.proxyMode,
+        dropX,
+        dropY,
+        segmentIds: drag.segmentIds,
+      })
+    }
     this.handlers.onDragSegmentEnd(effectiveTarget, targetGroupId, dropX, dropY, freeSegmentPositions)
     this.worldLayer.removeChild(drag.lineLayer)
     this.worldLayer.removeChild(drag.proxy)
@@ -5540,6 +5603,51 @@ export class PixiBoardAdapter {
     })
   }
 
+  /**
+   * When applyPatches updates `currentScene` but defers rebuildAllNodes (active drag / pending rebuild),
+   * free-segment containers can stay at stale positions. Resync or rebuild from authoritative scene.
+   */
+  private ensureFreeSegmentViewsSynced(scene: SceneVM): void {
+    const freeMap = scene.freeSegments ?? {}
+    const sceneIds = Object.keys(freeMap)
+    if (sceneIds.length !== this.freeSegmentViews.size) {
+      this.rebuildFreeSegments(scene)
+      return
+    }
+    for (const id of sceneIds) {
+      if (!this.freeSegmentViews.has(id)) {
+        this.rebuildFreeSegments(scene)
+        return
+      }
+    }
+    for (const id of this.freeSegmentViews.keys()) {
+      if (!freeMap[id]) {
+        this.rebuildFreeSegments(scene)
+        return
+      }
+    }
+    const EPS = 0.5
+    for (const free of Object.values(freeMap)) {
+      const view = this.freeSegmentViews.get(free.id)
+      if (!view) {
+        this.rebuildFreeSegments(scene)
+        return
+      }
+      const desiredParent = free.groupId
+        ? this.groupViews.get(free.groupId)?.root ?? this.worldLayer
+        : this.worldLayer
+      if (view.root.parent !== desiredParent) {
+        this.rebuildFreeSegments(scene)
+        return
+      }
+      const ex = free.x - SLOT_START_X
+      const ey = free.y - TOP_BAND_H
+      if (Math.abs(view.root.position.x - ex) > EPS || Math.abs(view.root.position.y - ey) > EPS) {
+        view.root.position.set(ex, ey)
+      }
+    }
+  }
+
   applyInit(scene: SceneVM): void {
     const prevGroups = this.currentScene?.groups ?? {}
     const moved = new Set<string>()
@@ -6109,6 +6217,13 @@ export class PixiBoardAdapter {
         requestAnimationFrame(() => this.flushPendingSnapSegmentReveal())
       })
     }
+    this.ensureFreeSegmentViewsSynced(scene)
+    dropDebug('pixi:applyPatches:free_sync', {
+      sceneFreeKey: freeSegmentsLayoutKey(scene),
+      viewCount: this.freeSegmentViews.size,
+      deferredFullRebuild: this.pendingRebuild,
+      activeDrag: this.activeDrag.type,
+    })
   }
 
   /** Show pasted/spawned segments after layout; retries if rebuild was deferred. */

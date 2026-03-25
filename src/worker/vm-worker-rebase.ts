@@ -40,6 +40,26 @@ export const ZERO_EPHEMERAL_LOCAL: WorkerLocalState = {
   selectedLabelId: null,
 }
 
+/** Server wins on key collision; keys only present locally (optimistic drops) stay until server echoes. */
+function mergeFreeSegmentPositionMaps(
+  server: Readonly<Record<string, { x: number; y: number }>> | undefined,
+  local: Readonly<Record<string, { x: number; y: number }>>,
+): Record<string, { x: number; y: number }> {
+  return { ...local, ...(server ?? {}) }
+}
+
+function mergeGroupFreeSegmentPositionMaps(
+  server: WorkerLocalState['groupFreeSegmentPositions'] | undefined,
+  local: WorkerLocalState['groupFreeSegmentPositions'],
+): WorkerLocalState['groupFreeSegmentPositions'] {
+  const s = server ?? {}
+  const out: WorkerLocalState['groupFreeSegmentPositions'] = { ...local }
+  for (const [gid, serverInner] of Object.entries(s)) {
+    out[gid] = { ...(local[gid] ?? {}), ...serverInner }
+  }
+  return out
+}
+
 export function stripEphemeralLocalState(state: WorkerLocalState): PersistedLocalState {
   const {
     hoveredSegmentId: _1,
@@ -79,8 +99,11 @@ export function mergeServerLayoutWithEphemeral(
     layoutExpanded: layout.layoutExpanded ?? {},
     nodeGroupOverrides: layout.nodeGroupOverrides ?? {},
     groupNodePositions: layout.groupNodePositions ?? {},
-    freeSegmentPositions: layout.freeSegmentPositions ?? {},
-    groupFreeSegmentPositions: layout.groupFreeSegmentPositions ?? {},
+    freeSegmentPositions: mergeFreeSegmentPositionMaps(layout.freeSegmentPositions, ephemeralSource.freeSegmentPositions),
+    groupFreeSegmentPositions: mergeGroupFreeSegmentPositionMaps(
+      layout.groupFreeSegmentPositions,
+      ephemeralSource.groupFreeSegmentPositions,
+    ),
     groupNodeOrders: layout.groupNodeOrders ?? {},
     customGroups: layout.customGroups ?? {},
     groupTitleOverrides: layout.groupTitleOverrides ?? {},

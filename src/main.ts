@@ -44,6 +44,7 @@ import { logCameraDebug, readRoomIdDebugFromStorage } from './spacetimedb/debug-
 import { createWorldHubAdapter } from './world-hub/world-hub-adapter'
 import type { WorldHubAdapter } from './world-hub/world-hub-adapter'
 import { attachTooltip } from './tooltip'
+import { dropDebug } from './shared/drop-debug'
 
 const app = document.querySelector<HTMLDivElement>('#app')
 if (!app) throw new Error('App root missing')
@@ -1873,6 +1874,19 @@ const pixiAdapter = new PixiBoardAdapter(canvasHost, {
     postToWorker({ type: 'INTENT', intent: { type: 'DRAG_SEGMENT_UPDATE', targetNodeId } })
   },
   onDragSegmentEnd(targetNodeId, targetGroupId, x, y, freeSegmentPositions) {
+    const fsp = freeSegmentPositions ?? null
+    const freePreview =
+      fsp && Object.keys(fsp).length > 0
+        ? Object.fromEntries(Object.entries(fsp).slice(0, 6))
+        : null
+    dropDebug('main:intent:DRAG_SEGMENT_END', {
+      targetNodeId,
+      targetGroupId,
+      intentDrop: x != null && y != null ? { x, y } : null,
+      freeKeyCount: fsp ? Object.keys(fsp).length : 0,
+      freeKeys: fsp ? Object.keys(fsp) : [],
+      freePreview,
+    })
     postToWorker({
       type: 'INTENT',
       intent: {
@@ -1881,7 +1895,7 @@ const pixiAdapter = new PixiBoardAdapter(canvasHost, {
         targetGroupId,
         x,
         y,
-        freeSegmentPositions: freeSegmentPositions ?? null,
+        freeSegmentPositions: fsp,
       },
     })
   },

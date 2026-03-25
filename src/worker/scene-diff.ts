@@ -2,23 +2,30 @@ import type { ScenePatch, SceneVM } from './protocol'
 
 const stableNode = (node: SceneVM['nodes'][string]): string => JSON.stringify(node)
 
+/** Stable layout signature (ids + anchor + group); avoids JSON.stringify blind spots on free moves. */
+export const freeSegmentsLayoutKey = (scene: SceneVM): string =>
+  Object.values(scene.freeSegments ?? {})
+    .slice()
+    .sort((a, b) => a.id.localeCompare(b.id))
+    .map((f) => `${f.id}:${f.x}:${f.y}:${f.groupId ?? ''}`)
+    .join('|')
+
+export const buildUpdateMetaPatch = (scene: SceneVM): Extract<ScenePatch, { type: 'UPDATE_META' }> => ({
+  type: 'UPDATE_META',
+  partyPaceText: scene.partyPaceText,
+  hoveredSegmentId: scene.hoveredSegmentId,
+  filterCategory: scene.filterCategory ?? null,
+  selectedSegmentIds: scene.selectedSegmentIds ?? [],
+  pasteTargetNodeId: scene.pasteTargetNodeId ?? null,
+  groups: scene.groups,
+  freeSegments: scene.freeSegments,
+  labels: scene.labels,
+  selectedLabelId: scene.selectedLabelId,
+})
+
 export const diffSceneVM = (prev: SceneVM | null, next: SceneVM): ScenePatch[] => {
   if (!prev) {
-    return [
-      ...Object.values(next.nodes).map((node) => ({ type: 'ADD_NODE', node }) as const),
-      {
-        type: 'UPDATE_META',
-        partyPaceText: next.partyPaceText,
-        hoveredSegmentId: next.hoveredSegmentId,
-        filterCategory: next.filterCategory ?? null,
-        selectedSegmentIds: next.selectedSegmentIds ?? [],
-        pasteTargetNodeId: next.pasteTargetNodeId ?? null,
-        groups: next.groups,
-        freeSegments: next.freeSegments,
-        labels: next.labels,
-        selectedLabelId: next.selectedLabelId,
-      },
-    ]
+    return [...Object.values(next.nodes).map((node) => ({ type: 'ADD_NODE', node }) as const), buildUpdateMetaPatch(next)]
   }
 
   const patches: ScenePatch[] = []
@@ -56,18 +63,12 @@ export const diffSceneVM = (prev: SceneVM | null, next: SceneVM): ScenePatch[] =
     (prev.selectedSegmentIds?.length ?? 0) !== (next.selectedSegmentIds?.length ?? 0) ||
     (prev.selectedSegmentIds ?? []).some((id, i) => (next.selectedSegmentIds ?? [])[i] !== id)
   ) {
-    patches.push({
-      type: 'UPDATE_META',
-      partyPaceText: next.partyPaceText,
-      hoveredSegmentId: next.hoveredSegmentId,
-      filterCategory: next.filterCategory,
-      selectedSegmentIds: next.selectedSegmentIds,
-      pasteTargetNodeId: next.pasteTargetNodeId ?? null,
-      groups: next.groups,
-      freeSegments: next.freeSegments,
-      labels: next.labels,
-      selectedLabelId: next.selectedLabelId,
-    })
+    patches.push(buildUpdateMetaPatch(next))
+  }
+
+  const hasMetaPatch = patches.some((p) => p.type === 'UPDATE_META')
+  if (!hasMetaPatch && freeSegmentsLayoutKey(prev) !== freeSegmentsLayoutKey(next)) {
+    patches.push(buildUpdateMetaPatch(next))
   }
 
   return patches
