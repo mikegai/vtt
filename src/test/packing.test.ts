@@ -14,7 +14,7 @@ const defs: Record<string, ItemDefinition> = {
   fiveSixths: { id: 'fiveSixths', canonicalName: '5/6 item', kind: 'standard', sixthsPerUnit: 5 },
   ironRationsDay: { id: 'ironRationsDay', canonicalName: 'Daily iron rations', kind: 'standard', sixthsPerUnit: 1 },
   tunic: { id: 'tunic', canonicalName: 'Tunic and pants', kind: 'standard', sixthsPerUnit: 0 },
-  coinageMerged: { id: COINAGE_MERGED_DEF_ID, canonicalName: 'Coinage & gems', kind: 'coins' },
+  coinageMerged: { id: COINAGE_MERGED_DEF_ID, canonicalName: 'Coinage', kind: 'coins' },
 }
 
 const mkEntry = (id: string, itemDefId: string, zone: InventoryEntry['zone'], quantity = 1): InventoryEntry => ({

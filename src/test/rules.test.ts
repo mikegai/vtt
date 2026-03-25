@@ -99,7 +99,7 @@ describe('ACKS rules', () => {
     expect(encumbranceCostSixths(tradeBars, 1000)).toBe(coinsToSixths(1000))
   })
 
-  it('coinage pool gem (priceInGp, no coinDenom) uses gp-value coin weight', () => {
+  it('coinage pool gem (priceInGp, no coinDenom) is zero encumbrance on its own row (weight in merged coin bar)', () => {
     const gem: ItemDefinition = {
       id: 'ruby',
       canonicalName: 'Ruby',
@@ -107,8 +107,8 @@ describe('ACKS rules', () => {
       coinagePool: true,
       priceInGp: 500,
     }
-    expect(encumbranceCostSixths(gem, 1)).toBe(coinsToSixths(500))
-    expect(encumbranceCostSixths(gem, 2)).toBe(coinsToSixths(1000))
+    expect(encumbranceCostSixths(gem, 1)).toBe(0)
+    expect(encumbranceCostSixths(gem, 2)).toBe(0)
   })
 
   it('iron rations: every 7, 2 pack into one slot (effective sixths = n - floor(n/7))', () => {

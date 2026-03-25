@@ -1,6 +1,12 @@
 import { Application, Assets, BitmapText, Color, Container, Graphics, Point, Rectangle, type Filter } from 'pixi.js'
 import { createSpring1D, createSpring2D, setSpring1DTarget, setSpringTarget, updateSpring1D, updateSpring2D } from './spring'
 import type { CoinageMetalFraction } from '../domain/coinage'
+import {
+  computeBlendedSegmentCornerRadii,
+  groupSixthsByStone,
+  SEGMENT_BLENDED_CORNER_R,
+  usesStoneChunkSlotLayout,
+} from '../domain/segment-sixths-layout'
 import { blendFillColorFromMetals, labelFillForCoinageBackground } from './coinage-colors'
 import { createCoinageMetallicFilter } from './coinage-metallic-filter'
 import type { SceneFreeSegmentVM, SceneGroupVM, SceneLabelVM, SceneNodeVM, ScenePatch, SceneVM, SceneSegmentVM } from '../worker/protocol'
@@ -552,9 +558,6 @@ const selectLabelFitForSteps = (
   return fallback
 }
 
-const isMultiStone = (segment: SceneSegmentVM): boolean =>
-  segment.sizeSixths >= 6 && segment.sizeSixths % 6 === 0
-
 const stoneToX = (stoneIndex: number, stonesPerRowOverride = stonesPerRow): number =>
   (stoneIndex % stonesPerRowOverride) * (STONE_W + STONE_GAP)
 const stoneToY = (stoneIndex: number, stonesPerRowOverride = stonesPerRow): number =>
@@ -575,34 +578,6 @@ const drawNodeClipMask = (clip: Graphics, width: number, height: number): void =
   clip.fill({ color: 0xffffff, alpha: 0.001 })
 }
 
-/** One contiguous vertical slice within a stone column; height in sixth-rows (1 = full row; may be fractional). */
-type SixthStoneGroup = { stone: number; startRow: number; heightSixths: number }
-
-/** Group encumbrance span [startSixth, startSixth+sizeSixths) into stone columns; supports fractional sixths (coin pool). */
-const groupSixthsByStone = (startSixth: number, sizeSixths: number): SixthStoneGroup[] => {
-  if (sizeSixths <= 0) return []
-  const groups: SixthStoneGroup[] = []
-  const end = startSixth + sizeSixths
-  const eps = 1e-9
-  let pos = startSixth
-  while (pos < end - eps) {
-    const stone = Math.floor(pos / 6)
-    const rowFloat = pos - stone * 6
-    const rowIdx = Math.floor(rowFloat)
-    const fracStart = rowFloat - rowIdx
-    const roomInRow = 1 - fracStart
-    const take = Math.min(end - pos, roomInRow)
-    const last = groups[groups.length - 1]
-    if (last && last.stone === stone && last.startRow === rowIdx) {
-      last.heightSixths += take
-    } else {
-      groups.push({ stone, startRow: rowIdx, heightSixths: take })
-    }
-    pos += take
-  }
-  return groups
-}
-
 const segmentStoneSpan = (startSixth: number, sizeSixths: number): { startStone: number; endStone: number } => {
   const startStone = Math.floor(startSixth / 6)
   const endStone = Math.max(startStone + 1, Math.ceil((startSixth + sizeSixths) / 6))
@@ -612,7 +587,7 @@ const segmentStoneSpan = (startSixth: number, sizeSixths: number): { startStone:
 /** Position (top-left) of segment in node's local space (relative to node root). */
 const segmentPositionInNode = (segment: SceneSegmentVM, stonesPerRowOverride = stonesPerRow): { x: number; y: number } => {
   const { startStone } = segmentStoneSpan(segment.startSixth, segment.sizeSixths)
-  const isMulti = segment.sizeSixths >= 6 && segment.sizeSixths % 6 === 0
+  const isMulti = usesStoneChunkSlotLayout(segment)
   if (isMulti) {
     return {
       x: SLOT_START_X + stoneToX(startStone, stonesPerRowOverride),
@@ -765,7 +740,7 @@ const redrawNodeSlotFillLayer = (
 const segmentBoundsInNodeLocal = (segment: SceneSegmentVM, stonesPerRowOverride = stonesPerRow, pillStripHeight = 0): { x: number; y: number; w: number; h: number } => {
   const slotStartY = TOP_BAND_H + pillStripHeight
   const { startStone, endStone } = segmentStoneSpan(segment.startSixth, segment.sizeSixths)
-  const isMulti = isMultiStone(segment)
+  const isMulti = usesStoneChunkSlotLayout(segment)
   if (isMulti) {
     const chunks = splitStonesAtWrap(startStone, endStone, stonesPerRowOverride)
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
@@ -808,7 +783,7 @@ const segmentCenterInNode = (
 ): { x: number; y: number } => {
   const slotStartY = TOP_BAND_H + pillStripHeight
   const { startStone, endStone } = segmentStoneSpan(segment.startSixth, segment.sizeSixths)
-  const isMulti = segment.sizeSixths >= 6 && segment.sizeSixths % 6 === 0
+  const isMulti = usesStoneChunkSlotLayout(segment)
   if (isMulti) {
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
     for (let s = startStone; s < endStone; s += 1) {
@@ -1102,7 +1077,7 @@ type DragProxyLayout = {
   readonly segmentBounds: Record<string, { x: number; y: number; w: number; h: number }>
 }
 
-/** Draw blended rectangles: one per stone column, with (cont.) label for continuations. */
+/** Draw blended rectangles: one per contiguous slice of the stone grid, with wrapping across stones/rows. */
 const drawBlendedSegmentRects = (
   container: Container,
   segment: SceneSegmentVM,
@@ -1135,27 +1110,19 @@ const drawBlendedSegmentRects = (
   const visualScale = textCompensationScale * zoomReadableScale
 
   const isDropPreview = segment.isDropPreview === true
+  const oneBlobLabel = segment.isCoinageMerge === true
 
+  const groupCount = groups.length
   groups.forEach((group, index) => {
     const x = baseX + stoneToX(group.stone, stonesPerRowOverride)
     const y = baseY + stoneToY(group.stone, stonesPerRowOverride) + group.startRow * CELL_H
     const w = STONE_W
     const h = group.heightSixths * CELL_H
 
-    const prev = index > 0 ? groups[index - 1] : undefined
-    const next = index < groups.length - 1 ? groups[index + 1] : undefined
-    const continuesFromPrev =
-      !!prev &&
-      prev.stone + 1 === group.stone &&
-      prev.startRow + prev.heightSixths >= SIXTH_ROWS - 1e-9 &&
-      group.startRow === 0
-    const continuesToNext =
-      !!next &&
-      group.stone + 1 === next.stone &&
-      group.startRow + group.heightSixths >= SIXTH_ROWS - 1e-9 &&
-      next.startRow === 0
-    const top = !continuesFromPrev
-    const bottom = !continuesToNext
+    // Groups are in sixth-tape order; stroke on outer top/bottom only (flat seams between slices).
+    const top = index === 0
+    const bottom = index === groupCount - 1
+    const cornerRadii = computeBlendedSegmentCornerRadii(index, groupCount, SEGMENT_BLENDED_CORNER_R)
 
     const rect = new Graphics()
     rect.eventMode = 'none'
@@ -1168,7 +1135,7 @@ const drawBlendedSegmentRects = (
       { left: true, top, right: true, bottom },
       { color, alpha },
       isDropPreview ? { width: 2, color: 0x5cadee, alpha: 0.7 } : { width: 0.5, color: strokeColor, alpha: 1 },
-      { tl: top ? 4 : 0, tr: top ? 4 : 0, br: bottom ? 4 : 0, bl: bottom ? 4 : 0 },
+      cornerRadii,
     )
     if (coinageMetalFilter) rect.filters = [coinageMetalFilter]
     container.addChild(rect)
@@ -1178,6 +1145,8 @@ const drawBlendedSegmentRects = (
     maxX = Math.max(maxX, x + w)
     maxY = Math.max(maxY, y + h)
     groupBounds.push({ x, y, w, h })
+
+    if (oneBlobLabel) return
 
     const availableWorldWidth = Math.max(8, w - 6)
     const availableWorldHeight = Math.max(8, h - 6)
@@ -1215,6 +1184,52 @@ const drawBlendedSegmentRects = (
     txt.mask = clip
     container.addChild(txt)
   })
+
+  if (oneBlobLabel && groups.length > 0 && maxX > minX && maxY > minY) {
+    const metals = segment.coinageVisual?.metals
+    if (metals) {
+      for (const b of groupBounds) {
+        drawCoinageMetalStrip(container, b, metals)
+      }
+    }
+
+    const labelSlice = groupBounds.reduce((best, r) =>
+      r.w * r.h > best.w * best.h ? r : best,
+    )
+    const lh = labelSlice.h
+    const bw = labelSlice.w
+    const stripRes = metals ? Math.max(4, Math.floor(lh * 0.28)) + 3 : 0
+    const availableWorldWidth = Math.max(8, bw - 8)
+    const availableWorldHeight = Math.max(8, lh - stripRes - 6)
+    const centerX = labelSlice.x + bw / 2
+    const centerY = labelSlice.y + (lh - stripRes) / 2 - 1
+    const fit = selectLabelFitForSteps(
+      uniqueTextSteps(segment),
+      tier,
+      availableWorldWidth,
+      availableWorldHeight,
+      visualScale,
+      zoom,
+      minVisibleLabelPx,
+      maxVisibleLabelPx,
+    )
+    const txt = new BitmapText({
+      text: fit.text,
+      style: { fill: coinageLabelFill, fontSize: fit.fontSize, fontFamily: FONT_SEMIBOLD, align: 'center' },
+    })
+    txt.eventMode = 'none'
+    txt.alpha = dimmed ? dimmedAlpha : 1
+    txt.scale.set(visualScale)
+    txt.anchor.set(0.5, 0.5)
+    txt.position.set(centerX, centerY)
+    const clip = new Graphics()
+    clip.eventMode = 'none'
+    clip.rect(centerX - availableWorldWidth / 2, centerY - availableWorldHeight / 2, availableWorldWidth, availableWorldHeight)
+    clip.fill({ color: 0xffffff, alpha: 0.001 })
+    container.addChild(clip)
+    txt.mask = clip
+    container.addChild(txt)
+  }
 
   return {
     hitBounds: {
@@ -1460,6 +1475,7 @@ const drawCoinageMetalStrip = (
     [0x9acd32, metals.ep],
     [0xffd700, metals.gp],
     [0xe5e4e2, metals.pp],
+    [0xb366ff, metals.gems ?? 0],
   ]
   let total = pairs.reduce((s, [, f]) => s + f, 0)
   if (total <= 0) total = 1
@@ -1607,7 +1623,7 @@ const drawSegmentBlock = (
     return
   }
 
-  if (isMultiStone(segment)) {
+  if (usesStoneChunkSlotLayout(segment)) {
     const chunks = splitStonesAtWrap(startStone, endStone, stonesPerRowOverride)
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
     const strokeOpt = isDropPreview
@@ -1726,7 +1742,7 @@ const drawSegmentBlock = (
     }
     container.addChild(block)
     drawGripIndicators(container, segment.wield, hitBounds, dimmed, dimmedAlpha)
-    if (segment.coinageVisual?.metals) {
+    if (segment.coinageVisual?.metals && !segment.isCoinageMerge) {
       drawCoinageMetalStrip(container, hitBounds, segment.coinageVisual.metals)
     }
   }
@@ -3133,7 +3149,7 @@ export class PixiBoardAdapter {
     const result: Record<string, { x: number; y: number }> = {}
     let offsetY = 0
     for (const segment of segments) {
-      if (isMultiStone(segment)) {
+      if (usesStoneChunkSlotLayout(segment)) {
         result[segment.id] = { x: 0, y: offsetY }
         offsetY += STONE_H + ITEM_GAP
       } else {
@@ -3257,7 +3273,7 @@ export class PixiBoardAdapter {
     if (localX < -STONE_W || localX > nodeMeterWidth + STONE_W) return { nodeId: targetNodeId, startSixth: 0 }
 
     let startSixth = localToSixth(localX, localY, visibleSlotCount, layoutCols)
-    if (isMultiStone(segment)) {
+    if (usesStoneChunkSlotLayout(segment)) {
       startSixth = Math.floor(startSixth / 6) * 6
     }
     const totalSixths = totalSixthsForSlots(visibleSlotCount)
@@ -3337,10 +3353,10 @@ export class PixiBoardAdapter {
     const segmentBounds: Record<string, { x: number; y: number; w: number; h: number }> = {}
 
     for (const segment of segments) {
-      const color = segment.isOverflow ? 0xa83f62 : isMultiStone(segment) ? 0x61b5ff : 0x7bd7cf
+      const color = segment.isOverflow ? 0xa83f62 : usesStoneChunkSlotLayout(segment) ? 0x61b5ff : 0x7bd7cf
       const alpha = 0.75
 
-      if (isMultiStone(segment)) {
+      if (usesStoneChunkSlotLayout(segment)) {
         const w = (segment.sizeSixths / 6) * (STONE_W + STONE_GAP) - STONE_GAP
         segmentBounds[segment.id] = { x: 0, y: offsetY, w, h: STONE_H }
         const rect = new Graphics()
@@ -3397,9 +3413,9 @@ export class PixiBoardAdapter {
         pill.stroke({ width: 1, color: 0x8ed8ff, alpha: 0.9 })
         proxy.addChild(pill)
       } else {
-        const color = segment.isOverflow ? 0xa83f62 : isMultiStone(segment) ? 0x61b5ff : 0x7bd7cf
+        const color = segment.isOverflow ? 0xa83f62 : usesStoneChunkSlotLayout(segment) ? 0x61b5ff : 0x7bd7cf
         const alpha = 0.75
-        if (isMultiStone(segment)) {
+        if (usesStoneChunkSlotLayout(segment)) {
           const w = (segment.sizeSixths / 6) * (STONE_W + STONE_GAP) - STONE_GAP
           const rect = new Graphics()
           rect.roundRect(relX, relY, w, STONE_H, 6)

@@ -1,5 +1,6 @@
 import {
   COINAGE_MERGED_DEFINITION,
+  isGemCoinageDefinition,
   metalFractionsFromCoinageLines,
   isCoinagePooledDefinition,
   tallyTreasuryForEntries,
@@ -111,7 +112,13 @@ const normalizeEntriesForPacking = (
     for (const entry of coinageEntries) {
       const definition = definitions[entry.itemDefId]
       if (!definition) continue
-      result.push({ entry, definition })
+      result.push({
+        entry,
+        definition,
+        ...(isGemCoinageDefinition(definition)
+          ? { encumbranceOverrideSixths: coinsToSixths(coinPoolUnitCount(definition, entry.quantity)) }
+          : {}),
+      })
     }
   } else if (coinageEntries.length > 0) {
     const sortedCoinage = [...coinageEntries].sort((a, b) => a.id.localeCompare(b.id))
@@ -141,6 +148,20 @@ const normalizeEntriesForPacking = (
       encumbranceOverrideSixths: totalSixths,
       coinageBreakdown: breakdown,
     })
+
+    const gemStacks = sortedCoinage.filter((e) => {
+      const d = definitions[e.itemDefId]
+      return d != null && isGemCoinageDefinition(d)
+    })
+    for (const gemEntry of gemStacks) {
+      const def = definitions[gemEntry.itemDefId]
+      if (!def) continue
+      result.push({
+        entry: gemEntry,
+        definition: def,
+        encumbranceOverrideSixths: 0,
+      })
+    }
   }
 
   const rationDef = definitions.ironRationsDay
@@ -219,8 +240,10 @@ const toSegmentVM = (
   const metals = breakdown ? metalFractionsFromCoinageLines(coinageLines) : null
   const qtyText =
     breakdown?.map((b) => {
-      const n = itemDefinitions[b.itemDefId]?.canonicalName ?? b.itemDefId
-      return `${b.quantity}× ${n}`
+      const def = itemDefinitions[b.itemDefId]
+      const n = def?.canonicalName ?? b.itemDefId
+      const tag = def && isGemCoinageDefinition(def) ? ' (gems)' : ''
+      return `${b.quantity}× ${n}${tag}`
     }).join('; ') ?? `${packedSegment.quantity}`
 
   const labels = buildLabelLadder(canonicalName)
@@ -245,7 +268,12 @@ const toSegmentVM = (
     },
     ...(definition.isFungibleVisual != null && { isFungibleVisual: definition.isFungibleVisual }),
     ...(packedSegment.isWornPill ? { isWornPill: true } : {}),
-    ...(breakdown ? { isCoinageMerge: true as const, coinageVisual: { metals: metals ?? { cp: 0, bp: 0, sp: 0, ep: 0, gp: 0, pp: 0 } } } : {}),
+    ...(breakdown
+      ? {
+          isCoinageMerge: true as const,
+          coinageVisual: { metals: metals ?? { cp: 0, bp: 0, sp: 0, ep: 0, gp: 0, pp: 0, gems: 0 } },
+        }
+      : {}),
   }
 }
 

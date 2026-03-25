@@ -8,6 +8,7 @@ export const COINAGE_METAL_FILL_HEX: readonly { readonly key: keyof CoinageMetal
   { key: 'ep', hex: 0x9acd32 },
   { key: 'gp', hex: 0xffd700 },
   { key: 'pp', hex: 0xe5e4e2 },
+  { key: 'gems', hex: 0xb366ff },
 ]
 
 const hexToRgb = (hex: number): { r: number; g: number; b: number } => ({
@@ -36,7 +37,7 @@ export const blendFillColorFromMetals = (metals: CoinageMetalFraction): number =
   let b = 0
   let w = 0
   for (const { key, hex } of COINAGE_METAL_FILL_HEX) {
-    const f = metals[key]
+    const f = metals[key] ?? 0
     if (f <= 0) continue
     const { r: rr, g: gg, b: bb } = hexToRgb(hex)
     r += rr * f

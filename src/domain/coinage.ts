@@ -1,4 +1,4 @@
-import { encumbranceCostSixths } from './rules'
+import { coinPoolUnitCount, coinsToSixths, encumbranceCostSixths } from './rules'
 import type { CanonicalState, CoinDenom, InventoryEntry, ItemDefinition } from './types'
 
 const entryIdFromSegmentId = (segmentId: string): string => {
@@ -10,11 +10,15 @@ const entryIdFromSegmentId = (segmentId: string): string => {
 export const isCoinagePooledDefinition = (def: ItemDefinition): boolean =>
   def.kind === 'coins' || (def.kind === 'standard' && def.coinagePool === true)
 
+/** Pooled gems (gp value, no coin denom): weight in the merged coin bar; shown separately as zero-enc rows. */
+export const isGemCoinageDefinition = (def: ItemDefinition): boolean =>
+  def.kind === 'standard' && def.coinagePool === true && def.priceInGp != null && def.coinDenom == null
+
 export const COINAGE_MERGED_DEF_ID = '__coinageMerged__'
 
 export const COINAGE_MERGED_DEFINITION: ItemDefinition = {
   id: COINAGE_MERGED_DEF_ID,
-  canonicalName: 'Coinage & gems',
+  canonicalName: 'Coinage',
   kind: 'coins',
 }
 
@@ -110,8 +114,11 @@ export type CoinageMetalFraction = {
   readonly bp: number
   readonly sp: number
   readonly ep: number
+  /** Gold coin pieces (denom gp), not gem value. */
   readonly gp: number
   readonly pp: number
+  /** Gem pool (gp-value weight), distinct strip from gp coins. */
+  readonly gems: number
 }
 
 /** Fraction of total encumbrance sixths contributed by each metal (for stacked bar). */
@@ -122,15 +129,18 @@ export const metalFractionsFromCoinageLines = (
   let wb = 0
   let ws = 0
   let we = 0
-  let wg = 0
+  let wgCoins = 0
   let wp = 0
+  let wGems = 0
   let total = 0
   for (const { definition, quantity } of lines) {
-    const w = encumbranceCostSixths(definition, quantity)
+    const w = isGemCoinageDefinition(definition)
+      ? coinsToSixths(coinPoolUnitCount(definition, quantity))
+      : encumbranceCostSixths(definition, quantity)
     if (w <= 0) continue
     total += w
-    if (definition.kind === 'standard' && definition.coinagePool && definition.priceInGp != null && !definition.coinDenom) {
-      wg += w
+    if (isGemCoinageDefinition(definition)) {
+      wGems += w
       continue
     }
     const denom = definition.coinDenom
@@ -138,19 +148,20 @@ export const metalFractionsFromCoinageLines = (
     else if (denom === 'bp') wb += w
     else if (denom === 'sp') ws += w
     else if (denom === 'ep') we += w
-    else if (denom === 'gp') wg += w
+    else if (denom === 'gp') wgCoins += w
     else if (denom === 'pp') wp += w
   }
   if (total <= 0) {
-    return { cp: 0, bp: 0, sp: 0, ep: 0, gp: 0, pp: 0 }
+    return { cp: 0, bp: 0, sp: 0, ep: 0, gp: 0, pp: 0, gems: 0 }
   }
   return {
     cp: wc / total,
     bp: wb / total,
     sp: ws / total,
     ep: we / total,
-    gp: wg / total,
+    gp: wgCoins / total,
     pp: wp / total,
+    gems: wGems / total,
   }
 }
 

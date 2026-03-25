@@ -11,6 +11,7 @@ import {
   nodeWidthForCols,
 } from '../shared/node-layout'
 import { COINAGE_MERGED_DEFINITION } from '../domain/coinage'
+import { groupSixthsByStone } from '../domain/segment-sixths-layout'
 import { resolveFreeSegmentLayoutPosition } from './resolve-free-segment-position'
 import { applyDropIntentToState } from '../vm/drop-intent'
 import { buildBoardVM } from '../vm/vm'
@@ -89,24 +90,6 @@ const segmentStoneSpan = (startSixth: number, sizeSixths: number): { startStone:
   return { startStone, endStone }
 }
 const isMultiStone = (sizeSixths: number): boolean => sizeSixths >= 6 && sizeSixths % 6 === 0
-const groupSixthsByStone = (
-  startSixth: number,
-  sizeSixths: number,
-): { stone: number; startRow: number; count: number }[] => {
-  const groups: { stone: number; startRow: number; count: number }[] = []
-  for (let i = 0; i < sizeSixths; i += 1) {
-    const sixth = startSixth + i
-    const stone = Math.floor(sixth / 6)
-    const row = sixth % 6
-    const last = groups[groups.length - 1]
-    if (last && last.stone === stone) {
-      last.count += 1
-    } else {
-      groups.push({ stone, startRow: row, count: 1 })
-    }
-  }
-  return groups
-}
 const splitStonesAtWrap = (
   startStone: number,
   endStone: number,
@@ -125,11 +108,11 @@ const splitStonesAtWrap = (
 }
 
 const segmentBoundsInNodeLocal = (
-  segment: { startSixth: number; sizeSixths: number },
+  segment: { startSixth: number; sizeSixths: number; isCoinageMerge?: boolean },
   stonesPerRow: number,
 ): { x: number; y: number; w: number; h: number } => {
   const { startStone, endStone } = segmentStoneSpan(segment.startSixth, segment.sizeSixths)
-  if (isMultiStone(segment.sizeSixths)) {
+  if (isMultiStone(segment.sizeSixths) && !segment.isCoinageMerge) {
     const chunks = splitStonesAtWrap(startStone, endStone, stonesPerRow)
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
     chunks.forEach((chunk) => {
@@ -151,7 +134,7 @@ const segmentBoundsInNodeLocal = (
     minX = Math.min(minX, x)
     minY = Math.min(minY, y)
     maxX = Math.max(maxX, x + STONE_W)
-    maxY = Math.max(maxY, y + g.count * CELL_H)
+    maxY = Math.max(maxY, y + g.heightSixths * CELL_H)
   })
   return {
     x: SLOT_START_X + minX,

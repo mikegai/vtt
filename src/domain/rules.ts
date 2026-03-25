@@ -135,8 +135,9 @@ export const encumbranceCostSixths = (item: ItemDefinition, quantity: number): n
       return coinsToSixths(quantity)
     case 'standard': {
       if (item.coinagePool) {
+        // Gems use the merged coinage bar for weight; individual rows are zero-enc worn pills.
         if (item.priceInGp != null && item.coinDenom == null) {
-          return coinsToSixths(item.priceInGp * quantity)
+          return 0
         }
         return coinsToSixths(quantity)
       }
