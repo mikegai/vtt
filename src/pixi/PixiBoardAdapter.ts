@@ -1122,6 +1122,8 @@ const drawBlendedSegmentRects = (
     // Groups are in sixth-tape order; stroke on outer top/bottom only (flat seams between slices).
     const top = index === 0
     const bottom = index === groupCount - 1
+    const left = index === 0
+    const right = index === groupCount - 1
     const cornerRadii = computeBlendedSegmentCornerRadii(index, groupCount, SEGMENT_BLENDED_CORNER_R)
 
     const rect = new Graphics()
@@ -1132,7 +1134,7 @@ const drawBlendedSegmentRects = (
       y + PAD,
       w - PAD * 2,
       h - PAD * 2,
-      { left: true, top, right: true, bottom },
+      { left, top, right, bottom },
       { color, alpha },
       isDropPreview ? { width: 2, color: 0x5cadee, alpha: 0.7 } : { width: 0.5, color: strokeColor, alpha: 1 },
       cornerRadii,
@@ -1377,6 +1379,8 @@ const drawRunVisuals = (
         next.startRow === 0
       const top = !continuesFromPrev
       const bottom = !continuesToNext
+      const left = idx === 0
+      const right = idx === groups.length - 1
 
       const rect = new Graphics()
       rect.eventMode = 'none'
@@ -1386,7 +1390,7 @@ const drawRunVisuals = (
         y + PAD,
         w - PAD * 2,
         h - PAD * 2,
-        { left: true, top, right: true, bottom },
+        { left, top, right, bottom },
         { color, alpha },
         { width: 0.5, color: strokeColor, alpha: 1 },
         { tl: top ? 4 : 0, tr: top ? 4 : 0, br: bottom ? 4 : 0, bl: bottom ? 4 : 0 },
@@ -1616,8 +1620,6 @@ const drawSegmentBlock = (
 
   if (visuallyMerged) {
     const b = segmentBoundsInNodeLocal(segment, stonesPerRowOverride)
-    block.rect(b.x - o.x, b.y - o.y, b.w, b.h)
-    block.fill({ color: 0xffffff, alpha: 0.001 })
     block.hitArea = new Rectangle(b.x - o.x, b.y - o.y, b.w, b.h)
     container.addChild(block)
     return
@@ -1706,8 +1708,6 @@ const drawSegmentBlock = (
     })
 
     const blockBounds = { x: minX, y: minY, w: maxX - minX, h: maxY - minY }
-    block.rect(blockBounds.x, blockBounds.y, blockBounds.w, blockBounds.h)
-    block.fill({ color: 0xffffff, alpha: 0.001 })
     block.hitArea = new Rectangle(blockBounds.x, blockBounds.y, blockBounds.w, blockBounds.h)
     container.addChild(block)
     drawGripIndicators(container, segment.wield, blockBounds, dimmed, dimmedAlpha)
@@ -1734,8 +1734,6 @@ const drawSegmentBlock = (
       coinageLabelFill,
       coinageMetalFilter,
     )
-    block.rect(hitBounds.x, hitBounds.y, hitBounds.w, hitBounds.h)
-    block.fill({ color: 0xffffff, alpha: 0.001 })
     block.hitArea = {
       contains: (x: number, y: number) =>
         groupBounds.some((b) => x >= b.x && x < b.x + b.w && y >= b.y && y < b.y + b.h),
