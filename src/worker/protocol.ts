@@ -429,6 +429,8 @@ export type MainToWorkerMessage =
       readonly appRoute: AppRoute
       /** When true, worker logs `[vtt:room]` traces (mirrors localStorage vtt:debugRoomIds). */
       readonly debugRoomIds?: boolean
+      /** When true, worker logs `[drop-debug]` traces (mirrors localStorage vtt:debugDrop). */
+      readonly debugDrop?: boolean
     }
   | { readonly type: 'RESET'; readonly worldState: CanonicalState; readonly stonesPerRow?: number }
   | {
@@ -436,6 +438,8 @@ export type MainToWorkerMessage =
       readonly appRoute: AppRoute
       readonly context: WorldCanvasContext
       readonly debugRoomIds?: boolean
+      /** When true, worker logs `[drop-debug]` traces (mirrors localStorage vtt:debugDrop). */
+      readonly debugDrop?: boolean
     }
   | { readonly type: 'SET_STONES_PER_ROW'; readonly stonesPerRow: number }
   | { readonly type: 'INTENT'; readonly intent: WorkerIntent }

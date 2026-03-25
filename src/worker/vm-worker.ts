@@ -75,7 +75,7 @@ import {
   STONE_ROW_GAP,
   STONE_W,
 } from '../shared/node-layout'
-import { dropDebug } from '../shared/drop-debug'
+import { dropDebug, setDropDebugFromWorker } from '../shared/drop-debug'
 
 /** Stable key for canvas-scoped room (SpacetimeDB world + canvas). */
 const roomKeyForContext = (ctx: WorldCanvasContext): string => `${ctx.worldId}::${ctx.canvasId}`
@@ -2489,6 +2489,7 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
   const message = event.data
   if (message.type === 'INIT') {
     setRoomIdDebugFromWorker(message.debugRoomIds ?? false)
+    setDropDebugFromWorker(message.debugDrop ?? false)
     appRoute = message.appRoute
     currentContext = message.context
     logRoomDebug('worker INIT (context before SpacetimeDB)', {
@@ -2501,6 +2502,7 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
   }
   if (message.type === 'SET_APP_ROUTE') {
     if (message.debugRoomIds != null) setRoomIdDebugFromWorker(message.debugRoomIds)
+    if (message.debugDrop != null) setDropDebugFromWorker(message.debugDrop)
     const previousContext = currentContext
     appRoute = message.appRoute
     currentContext = message.context

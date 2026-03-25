@@ -44,7 +44,7 @@ import { logCameraDebug, readRoomIdDebugFromStorage } from './spacetimedb/debug-
 import { createWorldHubAdapter } from './world-hub/world-hub-adapter'
 import type { WorldHubAdapter } from './world-hub/world-hub-adapter'
 import { attachTooltip } from './tooltip'
-import { dropDebug } from './shared/drop-debug'
+import { dropDebug, readDropDebugFromStorage } from './shared/drop-debug'
 
 const app = document.querySelector<HTMLDivElement>('#app')
 if (!app) throw new Error('App root missing')
@@ -1072,6 +1072,7 @@ const applyAppRoute = (route: AppRoute, pushHistory: boolean): void => {
     appRoute: route,
     context: worldCanvasContext,
     debugRoomIds: readRoomIdDebugFromStorage(),
+    debugDrop: readDropDebugFromStorage(),
   })
   syncHubCanvasShell()
 }
@@ -1088,6 +1089,7 @@ const applyRegistryAdjust = (adjust: RegistryAdjust): void => {
     appRoute: adjust.route,
     context: worldCanvasContext,
     debugRoomIds: readRoomIdDebugFromStorage(),
+    debugDrop: readDropDebugFromStorage(),
   })
   syncHubCanvasShell()
 }
@@ -2150,6 +2152,7 @@ postToWorker({
   context: worldCanvasContext,
   appRoute,
   debugRoomIds: readRoomIdDebugFromStorage(),
+  debugDrop: readDropDebugFromStorage(),
 })
 syncHubCanvasShell()
 
