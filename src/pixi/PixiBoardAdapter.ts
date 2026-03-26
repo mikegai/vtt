@@ -3176,9 +3176,13 @@ export class PixiBoardAdapter {
     if (this.activeDrag.type !== 'idle') return
     if (segments.length === 0) return
     const pointerWorld = this.screenToWorld(clientX, clientY)
+    const positions = initialSegmentPositions ?? {}
     const { proxy: compactProxy, pivot, segmentBounds: _segmentBounds } = this.buildDragProxy(segments)
+    const absoluteProxy = this.buildDragProxyAbsolute(segments, positions, segments[0].id)
+    absoluteProxy.visible = false
     const proxy = new Container()
     proxy.addChild(compactProxy)
+    proxy.addChild(absoluteProxy)
     const lineLayer = new Container()
     this.worldLayer.addChild(lineLayer)
     this.worldLayer.addChild(proxy)
@@ -3193,7 +3197,7 @@ export class PixiBoardAdapter {
         lineLayer,
         proxyAnchorOffset,
         dropAnchorOffset: { x: pivot.x, y: pivot.y },
-        initialSegmentPositions: initialSegmentPositions ?? {},
+        initialSegmentPositions: positions,
         pointerWorldAtStart: pointerWorld,
         grabbedSegmentId: segments[0].id,
         snap: null,
@@ -3404,12 +3408,22 @@ export class PixiBoardAdapter {
       const relX = pos.x - grabbed.x
       const relY = pos.y - grabbed.y
       if (segment.isWornPill) {
-        const w = pillLabelWidth(segment.fullLabel)
+        const label = segment.fullLabel
+        const w = pillLabelWidth(label)
         const pill = new Graphics()
         pill.roundRect(relX, relY, w, WORN_PILL_H, WORN_PILL_H / 2)
         pill.fill({ color: 0x3d9ac9, alpha: 0.75 })
         pill.stroke({ width: 1, color: 0x8ed8ff, alpha: 0.9 })
         proxy.addChild(pill)
+        const pillFit = selectLabelFitForSteps(uniqueTextSteps(segment), 'close', Math.max(4, w - WORN_PILL_HPAD * 2), WORN_PILL_H, 1, 1, 5, 12)
+        const txt = new BitmapText({
+          text: pillFit.text,
+          style: { fill: '#e8f0ff', fontSize: pillFit.fontSize, fontFamily: FONT_SEMIBOLD },
+        })
+        txt.eventMode = 'none'
+        txt.anchor.set(0, 0.5)
+        txt.position.set(relX + WORN_PILL_HPAD, relY + WORN_PILL_H / 2)
+        proxy.addChild(txt)
       } else {
         const color = segment.isOverflow ? 0xa83f62 : usesStoneChunkSlotLayout(segment) ? 0x61b5ff : 0x7bd7cf
         const alpha = 0.75
@@ -3420,6 +3434,15 @@ export class PixiBoardAdapter {
           rect.fill({ color, alpha })
           rect.stroke({ width: 1.5, color: 0xd3ebff, alpha: 0.9 })
           proxy.addChild(rect)
+          const chunkFit = selectLabelFitForSteps(uniqueTextSteps(segment), 'close', Math.max(8, w - 6), Math.max(8, STONE_H - 6), 1, 1, 5, 14)
+          const txt = new BitmapText({
+            text: chunkFit.text,
+            style: { fill: '#f0f8ff', fontSize: chunkFit.fontSize, fontFamily: FONT_SEMIBOLD, align: 'center' },
+          })
+          txt.eventMode = 'none'
+          txt.anchor.set(0.5, 0.5)
+          txt.position.set(relX + w / 2, relY + STONE_H / 2)
+          proxy.addChild(txt)
         } else {
           drawGhostCells(proxy, 0, relX, relY, segment.sizeSixths, color, alpha)
           const groups = groupSixthsByStone(0, segment.sizeSixths)
@@ -3435,6 +3458,17 @@ export class PixiBoardAdapter {
           stroke.roundRect(minX, minY, maxX - minX, maxY - minY, 4)
           stroke.stroke({ width: 1.5, color: 0xd3ebff, alpha: 0.85 })
           proxy.addChild(stroke)
+          const bw = maxX - minX
+          const bh = maxY - minY
+          const cellFit = selectLabelFitForSteps(uniqueTextSteps(segment), 'close', Math.max(8, bw - 6), Math.max(8, bh - 6), 1, 1, 5, 14)
+          const txt = new BitmapText({
+            text: cellFit.text,
+            style: { fill: '#f0f8ff', fontSize: cellFit.fontSize, fontFamily: FONT_SEMIBOLD, align: 'center' },
+          })
+          txt.eventMode = 'none'
+          txt.anchor.set(0.5, 0.5)
+          txt.position.set((minX + maxX) / 2, (minY + maxY) / 2)
+          proxy.addChild(txt)
         }
       }
     }
@@ -3739,7 +3773,7 @@ export class PixiBoardAdapter {
     const snap = this.findSnapTarget(world.x, world.y, drag.segments[0])
     drag.snap = snap
 
-    const useAbsolute = (!!targetGroupId || !targetNodeId) && !drag.isExternal
+    const useAbsolute = !!targetGroupId || !targetNodeId
     if (useAbsolute && drag.proxyMode !== 'absolute') {
       drag.proxyMode = 'absolute'
       const compact = drag.proxy.getChildAt(0) as Container
@@ -3806,23 +3840,32 @@ export class PixiBoardAdapter {
       let freeSegmentPositions: Record<string, { x: number; y: number }> | undefined
       if (!cancelled && !targetNodeId && world && Object.keys(drag.initialSegmentPositions).length > 0) {
         freeSegmentPositions = {}
-        const anchor = drag.dropAnchorOffset
+        const grabbed = drag.initialSegmentPositions[drag.grabbedSegmentId] ?? { x: 0, y: 0 }
+        const anchorOff = drag.absoluteProxyAnchorOffset
         for (const segId of drag.segmentIds) {
           const pos = drag.initialSegmentPositions[segId]
           const seg = drag.segments.find((s) => s.id === segId)
           if (pos && seg) {
-            const visualEnd = { x: world.x - anchor.x + pos.x, y: world.y - anchor.y + pos.y }
-            const b = segmentBoundsInNodeLocal(seg)
+            const visualEnd = {
+              x: world.x - anchorOff.x + (pos.x - grabbed.x),
+              y: world.y - anchorOff.y + (pos.y - grabbed.y),
+            }
+            const b = segmentBoundsInNodeLocal({ ...seg, startSixth: 0 })
             freeSegmentPositions[segId] = freeSegmentAnchorFromVisualTopLeft(visualEnd, b)
           }
         }
       }
+      const grabbedDbg = drag.initialSegmentPositions[drag.grabbedSegmentId] ?? { x: 0, y: 0 }
+      const anchorOffDbg = drag.absoluteProxyAnchorOffset
       const extSegDetail = drag.segmentIds.slice(0, 8).map((segId) => {
         const pos = drag.initialSegmentPositions[segId]
         const seg = drag.segments.find((s) => s.id === segId)
         if (!pos || !seg || !world) return { segId, missing: true as const }
-        const visualEnd = { x: world.x - drag.dropAnchorOffset.x + pos.x, y: world.y - drag.dropAnchorOffset.y + pos.y }
-        const b = segmentBoundsInNodeLocal(seg)
+        const visualEnd = {
+          x: world.x - anchorOffDbg.x + (pos.x - grabbedDbg.x),
+          y: world.y - anchorOffDbg.y + (pos.y - grabbedDbg.y),
+        }
+        const b = segmentBoundsInNodeLocal({ ...seg, startSixth: 0 })
         return {
           segId,
           initialVisualTL: pos,
@@ -3881,7 +3924,7 @@ export class PixiBoardAdapter {
           const v = visualFree[segId]
           const seg = drag.segments.find((s) => s.id === segId)
           if (v && seg) {
-            const b = segmentBoundsInNodeLocal(seg)
+            const b = segmentBoundsInNodeLocal({ ...seg, startSixth: 0 })
             freeSegmentPositions[segId] = freeSegmentAnchorFromVisualTopLeft(v, b)
           }
         }
@@ -3893,7 +3936,7 @@ export class PixiBoardAdapter {
           const seg = drag.segments.find((s) => s.id === segId)
           const v = visualFree[segId]
           if (!init || !seg || !v) return { segId, missing: true as const }
-          const b = segmentBoundsInNodeLocal(seg)
+          const b = segmentBoundsInNodeLocal({ ...seg, startSixth: 0 })
           return {
             segId,
             pointerDelta: {
