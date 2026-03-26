@@ -20,7 +20,6 @@ import {
 } from '../vm/scene-node-mutations'
 import { applyDuplicateEntryIntent, applyDuplicateNodeIntent } from '../vm/duplicate-intents'
 import {
-  commitDragSegmentOntoNode,
   expandDragSegmentToEntryIds,
   finalizePooledCoinageStacks,
   remapSegmentIdAfterEntryConsolidation,
@@ -35,6 +34,8 @@ import { parseNodeClipboardPayload, serializeNodeClipboard } from './node-clipbo
 import { canonicalizeIntentForReplay } from './replay-canonicalize'
 import {
   effectiveDropIntentForDragSegmentEnd,
+  type DropIntent,
+  type DragSegmentEndIntent,
   type MainToWorkerMessage,
   type SceneVM,
   type WorkerIntent,
@@ -194,7 +195,7 @@ function isSyncIntent(intent: WorkerIntent): boolean {
     case 'SELECT_LABEL':
     case 'DRAG_SEGMENT_START':
     case 'DRAG_SEGMENT_UPDATE':
-    /** Must not queue: every server/layout derive replays pending and would re-run drop N times. */
+    /** Not a sync intent itself — emits APPLY_DROP_RESULT (which IS sync) after computing the drop. */
     case 'DRAG_SEGMENT_END':
     case 'DRAG_START':
     case 'DRAG_END':
@@ -255,7 +256,6 @@ function tryAckPendingSyncIntents(): void {
 }
 
 let dragActive = false
-let deferredServerState: { world: CanonicalState; layout: Partial<PersistedLocalState> } | null = null
 let initialWorldTemplate: CanonicalState | null = null
 let hasBootstrappedCurrentContext = false
 
@@ -325,18 +325,13 @@ function onServerState(
   newLayoutState: Partial<PersistedLocalState>,
 ): void {
   if (dragActive) {
-    deferredServerState = { world: newWorldState, layout: newLayoutState }
+    // Drop server echoes that arrive mid-drag; they predate local drag changes
+    // and would cause snap-back.  The next echo after the drag will be applied normally.
     return
   }
   applyServerState(newWorldState, newLayoutState)
 }
 
-function flushDeferredServerState(): void {
-  if (!deferredServerState) return
-  const { world, layout } = deferredServerState
-  deferredServerState = null
-  applyServerState(world, layout)
-}
 
 function onPresenceUpdate(
   users: ConnectedUser[],
@@ -838,6 +833,222 @@ const withReplayBaseState = <T>(fn: (state: CanonicalState, ls: WorkerLocalState
     localState = savedL
     inReplay = false
     recomputeSuppressDepth -= 1
+  }
+}
+
+/**
+ * Compute the APPLY_DROP_RESULT payload from a DRAG_SEGMENT_END.
+ *
+ * Runs the complex drop logic (source resolution, entry moves, coinage
+ * consolidation, layout computation) on a temporary copy of worldState,
+ * then extracts the minimal idempotent result.  The caller emits this
+ * as a sync intent so the mutations survive replay.
+ */
+function computeDropResult(
+  ws: CanonicalState,
+  ls: WorkerLocalState,
+  dropIntent: DropIntent,
+  hoverTargetNodeId: string | null,
+  hoverTargetGroupId: string | null,
+  intent: DragSegmentEndIntent,
+): Extract<WorkerIntent, { type: 'APPLY_DROP_RESULT' }> | null {
+  const { segmentIds, sourceNodeIds } = dropIntent
+
+  // Payload accumulators
+  const entryUpdates: Record<string, { actorId: string; carryGroupId?: string; zone: import('../domain/types').CarryZone; state?: import('../domain/types').EquipmentState }> = {}
+  const deleteEntryIds: string[] = []
+  const quantityUpdates: Record<string, number> = {}
+  const clearWields: { actorId: string; entryId: string }[] = []
+  const ensureGroups: { id: string; ownerActorId: string }[] = []
+  let freeSegmentPositions: Record<string, { x: number; y: number }> = {}
+  let groupFreeSegmentPositions: Record<string, Record<string, { x: number; y: number }>> = {}
+
+  // ── Node drop path ───────────────────────────────────────────────
+  if (hoverTargetNodeId) {
+    const target = parseNodeId(hoverTargetNodeId)
+    let tmpWs = ws
+    for (const segmentId of segmentIds) {
+      const sourceNodeId = sourceNodeIds[segmentId]
+      if (!sourceNodeId) continue
+      const source = parseNodeId(sourceNodeId)
+      if (source.actorId === target.actorId && source.carryGroupId === target.carryGroupId) continue
+      const entryIds = expandDragSegmentToEntryIds(tmpWs, segmentId, sourceNodeId)
+      for (const entryId of entryIds) {
+        const entry: InventoryEntry | undefined = tmpWs.inventoryEntries[entryId]
+        if (!entry) continue
+        const zone = target.carryGroupId ? 'dropped' as const : 'stowed' as const
+        const state = target.carryGroupId
+          ? { ...(entry.state ?? {}), dropped: true }
+          : (() => {
+              const next = { ...(entry.state ?? {}) }
+              delete next.dropped
+              return Object.keys(next).length > 0 ? next : undefined
+            })()
+        if (target.carryGroupId) {
+          const gid = target.carryGroupId
+          if (!tmpWs.carryGroups[gid]) {
+            ensureGroups.push({ id: gid, ownerActorId: target.actorId })
+            tmpWs = { ...tmpWs, carryGroups: { ...tmpWs.carryGroups, [gid]: { id: gid, ownerActorId: target.actorId, name: 'Ground', dropped: true } } }
+          }
+        }
+        entryUpdates[entryId] = { actorId: target.actorId, carryGroupId: target.carryGroupId, zone, state }
+        tmpWs = { ...tmpWs, inventoryEntries: { ...tmpWs.inventoryEntries, [entryId]: { ...entry, actorId: target.actorId, carryGroupId: target.carryGroupId, zone, state } } }
+        // Clear wield if entry was wielded
+        const actor: Actor | undefined = tmpWs.actors[source.actorId]
+        if (actor && (actor.leftWieldingEntryId === entryId || actor.rightWieldingEntryId === entryId)) {
+          clearWields.push({ actorId: source.actorId, entryId })
+        }
+      }
+    }
+    // Coinage consolidation after node drop
+    const finDrop = finalizePooledCoinageStacks(tmpWs, ls)
+    collectCoinageConsolidation(ws, finDrop.worldState, finDrop.entryRemapToKeeper, deleteEntryIds, quantityUpdates)
+    debugDrag('handled as node drop → APPLY_DROP_RESULT', { hoverTargetNodeId, segmentIds })
+    return {
+      type: 'APPLY_DROP_RESULT',
+      entryUpdates,
+      deleteEntryIds,
+      quantityUpdates,
+      clearWields,
+      ensureGroups,
+      freeSegmentPositions,
+      groupFreeSegmentPositions,
+      removeFromFreePositions: [...segmentIds],
+    }
+  }
+
+  // ── Canvas / absolute drop path ──────────────────────────────────
+  if (intent.x == null || intent.y == null) return null
+
+  const firstSourceNodeId = segmentIds[0] ? sourceNodeIds[segmentIds[0]] : null
+  const source = firstSourceNodeId ? parseNodeId(firstSourceNodeId) : null
+
+  if (source) {
+    let tmpWs = ws
+    for (const segmentId of segmentIds) {
+      const sourceNodeId = sourceNodeIds[segmentId]
+      if (!sourceNodeId) continue
+      const parsedSource = parseNodeId(sourceNodeId)
+      const entryIds = expandDragSegmentToEntryIds(tmpWs, segmentId, sourceNodeId)
+      for (const entryId of entryIds) {
+        const entry: InventoryEntry | undefined = tmpWs.inventoryEntries[entryId]
+        if (!entry) continue
+        const gid = droppedGroupIdForActor(parsedSource.actorId)
+        if (!tmpWs.carryGroups[gid]) {
+          ensureGroups.push({ id: gid, ownerActorId: parsedSource.actorId })
+          tmpWs = ensureDroppedGroup(tmpWs, parsedSource.actorId)
+        }
+        const movedState = { ...(entry.state ?? {}), dropped: true }
+        entryUpdates[entryId] = { actorId: parsedSource.actorId, carryGroupId: gid, zone: 'dropped', state: movedState }
+        tmpWs = { ...tmpWs, inventoryEntries: { ...tmpWs.inventoryEntries, [entryId]: { ...entry, actorId: parsedSource.actorId, carryGroupId: gid, zone: 'dropped', state: movedState } } }
+        const actor: Actor | undefined = tmpWs.actors[parsedSource.actorId]
+        if (actor && (actor.leftWieldingEntryId === entryId || actor.rightWieldingEntryId === entryId)) {
+          clearWields.push({ actorId: parsedSource.actorId, entryId })
+        }
+      }
+    }
+
+    // Coinage consolidation
+    const finDrop = finalizePooledCoinageStacks(tmpWs, ls)
+    collectCoinageConsolidation(ws, finDrop.worldState, finDrop.entryRemapToKeeper, deleteEntryIds, quantityUpdates)
+    tmpWs = finDrop.worldState
+    const tmpLs = finDrop.localState
+    const layoutSegmentIds = segmentIds.map((sid) =>
+      remapSegmentIdAfterEntryConsolidation(sid, finDrop.entryRemapToKeeper),
+    )
+
+    // Compute layout positions
+    const sceneAfterDrop = buildSceneVM(tmpWs, tmpLs)
+    const normalizedFreePositions =
+      intent.freeSegmentPositions != null
+        ? normalizeFreeDropPositionKeys(intent.freeSegmentPositions, segmentIds, finDrop.entryRemapToKeeper)
+        : undefined
+
+    const sceneAtDrop = buildSceneVM(ws, ls)
+    const targetGroup = hoverTargetGroupId ? sceneAtDrop.groups[hoverTargetGroupId] : null
+    const groupCanAcceptSegments = !!targetGroup
+
+    dropDebug('worker:drag_end:absolute', {
+      segmentIds,
+      layoutSegmentIds,
+      intentXY: { x: intent.x, y: intent.y },
+      hoverTargetGroupId,
+      groupCanAcceptSegments,
+    })
+
+    const layoutIntentForResolve =
+      normalizedFreePositions != null
+        ? { ...intent, freeSegmentPositions: normalizedFreePositions }
+        : intent
+    const droppedLayout = resolveFreeDropLayoutFromIntent(
+      layoutIntentForResolve,
+      layoutSegmentIds,
+      sceneAfterDrop,
+      intent.x,
+      intent.y,
+      ls.stonesPerRow,
+    )
+
+    if (groupCanAcceptSegments && targetGroup && hoverTargetGroupId) {
+      const gfsp: Record<string, { x: number; y: number }> = {}
+      for (const segmentId of layoutSegmentIds) {
+        const nextPos = droppedLayout[segmentId] ?? { x: intent.x, y: intent.y }
+        gfsp[segmentId] = { x: nextPos.x - targetGroup.x, y: nextPos.y - targetGroup.y }
+      }
+      groupFreeSegmentPositions = { [hoverTargetGroupId]: gfsp }
+    } else {
+      for (const segmentId of layoutSegmentIds) {
+        const nextPos = droppedLayout[segmentId] ?? { x: intent.x, y: intent.y }
+        freeSegmentPositions[segmentId] = nextPos
+      }
+    }
+
+    debugDrag('handled as absolute drop → APPLY_DROP_RESULT', {
+      sourceActorId: source.actorId,
+      segmentIds,
+    })
+  } else if (intent.freeSegmentPositions) {
+    // Source unresolved (free segment already in absolute space) — just persist positions
+    for (const segmentId of segmentIds) {
+      const nextPos = intent.freeSegmentPositions[segmentId]
+      if (nextPos) freeSegmentPositions[segmentId] = nextPos
+    }
+    debugDrag('handled as absolute drop with source fallback → APPLY_DROP_RESULT', { segmentIds })
+  } else {
+    debugDrag('absolute drop path reached but nothing persisted', { segmentIds })
+    return null
+  }
+
+  return {
+    type: 'APPLY_DROP_RESULT',
+    entryUpdates,
+    deleteEntryIds,
+    quantityUpdates,
+    clearWields,
+    ensureGroups,
+    freeSegmentPositions,
+    groupFreeSegmentPositions,
+    removeFromFreePositions: [...segmentIds],
+  }
+}
+
+/** Extract coinage consolidation diffs (deleted entries, quantity changes). */
+function collectCoinageConsolidation(
+  wsBefore: CanonicalState,
+  wsAfter: CanonicalState,
+  entryRemap: ReadonlyMap<string, string>,
+  deleteEntryIds: string[],
+  quantityUpdates: Record<string, number>,
+): void {
+  for (const [removedId, keeperId] of entryRemap) {
+    if (!wsAfter.inventoryEntries[removedId] && wsBefore.inventoryEntries[removedId]) {
+      deleteEntryIds.push(removedId)
+    }
+    const keeper = wsAfter.inventoryEntries[keeperId]
+    const keeperBefore = wsBefore.inventoryEntries[keeperId]
+    if (keeper && keeperBefore && keeper.quantity !== keeperBefore.quantity) {
+      quantityUpdates[keeperId] = keeper.quantity
+    }
   }
 }
 
@@ -1465,6 +1676,14 @@ const applyIntent = (intent: WorkerIntent): void => {
     return
   }
 
+  // ── DRAG_SEGMENT_END ──────────────────────────────────────────────
+  // Complex, non-idempotent: resolves drop context, computes layout, then
+  // emits an APPLY_DROP_RESULT sync intent that captures the minimal,
+  // idempotent result.  This way the worldState mutations survive replay.
+  //
+  // TODO: long-term the renderer should send a high-level "move items to
+  // location" intent instead of DRAG_SEGMENT_END.  This intermediate
+  // APPLY_DROP_RESULT bridges the gap.
   if (intent.type === 'DRAG_SEGMENT_END') {
     const effectiveDropIntent = effectiveDropIntentForDragSegmentEnd(localState.dropIntent, intent)
     const hoverTargetNodeId = effectiveDropIntent ? intent.targetNodeId : null
@@ -1480,194 +1699,118 @@ const applyIntent = (intent: WorkerIntent): void => {
       freeSegmentPositionCount: intent.freeSegmentPositions ? Object.keys(intent.freeSegmentPositions).length : 0,
       segmentIds: effectiveDropIntent?.segmentIds ?? [],
     })
-    if (effectiveDropIntent && hoverTargetNodeId && worldState) {
-      const { segmentIds, sourceNodeIds } = effectiveDropIntent
-      const committed = commitDragSegmentOntoNode(worldState, localState, segmentIds, sourceNodeIds, hoverTargetNodeId)
-      worldState = committed.worldState
-      localState = committed.localState
-      debugDrag('handled as node drop', {
-        hoverTargetNodeId,
-        segmentIds,
-      })
-    } else if (effectiveDropIntent && worldState && intent.x != null && intent.y != null) {
-      const { segmentIds, sourceNodeIds } = effectiveDropIntent
-      const firstSourceNodeId = segmentIds[0] ? sourceNodeIds[segmentIds[0]] : null
-      const source = firstSourceNodeId ? parseNodeId(firstSourceNodeId) : null
-      const sceneAtDrop = buildSceneVM(worldState, localState)
-      const targetGroup = hoverTargetGroupId ? sceneAtDrop.groups[hoverTargetGroupId] : null
-      const groupCanAcceptSegments = !!targetGroup
-      if (source) {
-        for (const segmentId of segmentIds) {
-          const sourceNodeId = sourceNodeIds[segmentId]
-          if (!sourceNodeId) continue
-          const parsedSource = parseNodeId(sourceNodeId)
-          const entryIds = expandDragSegmentToEntryIds(worldState, segmentId, sourceNodeId)
-          for (const entryId of entryIds) {
-            const entry: InventoryEntry | undefined = worldState.inventoryEntries[entryId]
-            if (!entry) continue
-            const segmentDroppedGroupId = droppedGroupIdForActor(parsedSource.actorId)
-            worldState = ensureDroppedGroup(worldState, parsedSource.actorId)
-            const movedEntry: InventoryEntry = {
-              ...entry,
-              actorId: parsedSource.actorId,
-              carryGroupId: segmentDroppedGroupId,
-              zone: 'dropped',
-              state: { ...(entry.state ?? {}), dropped: true },
-            }
-            worldState = {
-              ...worldState,
-              inventoryEntries: {
-                ...worldState.inventoryEntries,
-                [entryId]: movedEntry,
-              },
-            }
-            const actor: Actor | undefined = worldState.actors[parsedSource.actorId]
-            if (actor && (actor.leftWieldingEntryId === entryId || actor.rightWieldingEntryId === entryId)) {
-              const nextActor: Actor = {
-                ...actor,
-                leftWieldingEntryId: actor.leftWieldingEntryId === entryId ? undefined : actor.leftWieldingEntryId,
-                rightWieldingEntryId: actor.rightWieldingEntryId === entryId ? undefined : actor.rightWieldingEntryId,
-              }
-              worldState = {
-                ...worldState,
-                actors: { ...worldState.actors, [actor.id]: nextActor },
-              }
-            }
-          }
-        }
 
-        const finDrop = finalizePooledCoinageStacks(worldState, localState)
-        worldState = finDrop.worldState
-        localState = finDrop.localState
-        const layoutSegmentIds = segmentIds.map((sid) =>
-          remapSegmentIdAfterEntryConsolidation(sid, finDrop.entryRemapToKeeper),
-        )
-        const sceneAfterDrop = buildSceneVM(worldState, localState)
-        const normalizedFreePositions =
-          intent.freeSegmentPositions != null
-            ? normalizeFreeDropPositionKeys(intent.freeSegmentPositions, segmentIds, finDrop.entryRemapToKeeper)
-            : undefined
+    // Compute drop result on a temporary copy of worldState so we can
+    // extract the APPLY_DROP_RESULT payload without relying on inline
+    // mutations that would be lost after derive.
+    const dropResult = effectiveDropIntent && worldState
+      ? computeDropResult(worldState, localState, effectiveDropIntent, hoverTargetNodeId, hoverTargetGroupId, intent)
+      : null
 
-        const rawFsp = intent.freeSegmentPositions
-        const normalizeTrace = segmentIds.map((sid) => {
-          const ns = remapSegmentIdAfterEntryConsolidation(sid, finDrop.entryRemapToKeeper)
-          let sourceKey: string | null = null
-          if (rawFsp) {
-            if (rawFsp[sid]) sourceKey = sid
-            else if (rawFsp[ns]) sourceKey = ns
-            else {
-              for (const k of Object.keys(rawFsp)) {
-                if (remapSegmentIdAfterEntryConsolidation(k, finDrop.entryRemapToKeeper) === ns) {
-                  sourceKey = k
-                  break
-                }
-              }
-            }
-          }
-          return { sid, ns, sourceKey }
-        })
-        dropDebug('worker:drag_end:absolute', {
-          segmentIds,
-          layoutSegmentIds,
-          rawKeys: rawFsp ? Object.keys(rawFsp) : [],
-          normalizedKeys: normalizedFreePositions ? Object.keys(normalizedFreePositions) : [],
-          normalizeTrace,
-          entryRemapPairs: [...finDrop.entryRemapToKeeper.entries()].slice(0, 32),
-          intentXY: intent.x != null && intent.y != null ? { x: intent.x, y: intent.y } : null,
-          hoverTargetNodeId,
-          hoverTargetGroupId,
-          groupCanAcceptSegments,
-        })
-
-        debugDrag('droppedLayout choice', {
-          hasFreeSegmentPositions: intent.freeSegmentPositions != null,
-          freeSegmentPositionKeyCount:
-            intent.freeSegmentPositions != null ? Object.keys(intent.freeSegmentPositions).length : 0,
-          targetNodeId: intent.targetNodeId,
-          segmentCount: segmentIds.length,
-          dropKind: hoverTargetNodeId ? 'targeted-node' : 'absolute-free',
-        })
-        const layoutIntentForResolve =
-          normalizedFreePositions != null
-            ? { ...intent, freeSegmentPositions: normalizedFreePositions }
-            : intent
-        const droppedLayout = resolveFreeDropLayoutFromIntent(
-          layoutIntentForResolve,
-          layoutSegmentIds,
-          sceneAfterDrop,
-          intent.x,
-          intent.y,
-          localState.stonesPerRow,
-        )
-        const cleanedGroups = removeSegmentsFromGroupPositions(localState.groupFreeSegmentPositions, segmentIds)
-
-        if (groupCanAcceptSegments && targetGroup && hoverTargetGroupId) {
-          const nextGroupPositions = {
-            ...cleanedGroups,
-            [hoverTargetGroupId]: {
-              ...(cleanedGroups[hoverTargetGroupId] ?? {}),
-            },
-          }
-          const freeSegmentPositions = { ...localState.freeSegmentPositions }
-          for (const segmentId of segmentIds) delete freeSegmentPositions[segmentId]
-          for (const segmentId of layoutSegmentIds) {
-            const nextPos = droppedLayout[segmentId] ?? { x: intent.x, y: intent.y }
-            nextGroupPositions[hoverTargetGroupId]![segmentId] = {
-              x: nextPos.x - targetGroup.x,
-              y: nextPos.y - targetGroup.y,
-            }
-          }
-          localState = {
-            ...localState,
-            freeSegmentPositions,
-            groupFreeSegmentPositions: nextGroupPositions,
-          }
-        } else {
-          const freeSegmentPositions = { ...localState.freeSegmentPositions }
-          for (const segmentId of segmentIds) delete freeSegmentPositions[segmentId]
-          for (const segmentId of layoutSegmentIds) {
-            const nextPos = droppedLayout[segmentId] ?? { x: intent.x, y: intent.y }
-            freeSegmentPositions[segmentId] = nextPos
-          }
-          localState = {
-            ...localState,
-            freeSegmentPositions,
-            groupFreeSegmentPositions: cleanedGroups,
-          }
-        }
-        debugDrag('handled as absolute drop with resolved source', {
-          sourceActorId: source.actorId,
-          sourceCarryGroupId: source.carryGroupId ?? null,
-          persistedCount: segmentIds.length,
-          segmentIds,
-          targetGroupId: groupCanAcceptSegments ? hoverTargetGroupId : null,
-        })
-      } else if (intent.freeSegmentPositions) {
-        // If source resolution fails (e.g. free segment already in absolute space),
-        // still persist explicit absolute drop coordinates from the renderer.
-        const freeSegmentPositions = { ...localState.freeSegmentPositions }
-        for (const segmentId of segmentIds) {
-          const nextPos = intent.freeSegmentPositions[segmentId]
-          if (nextPos) freeSegmentPositions[segmentId] = nextPos
-        }
-        localState = {
-          ...localState,
-          freeSegmentPositions,
-          groupFreeSegmentPositions: removeSegmentsFromGroupPositions(localState.groupFreeSegmentPositions, segmentIds),
-        }
-        debugDrag('handled as absolute drop with source fallback', {
-          persistedCount: Object.keys(intent.freeSegmentPositions).length,
-          segmentIds,
-        })
-      } else {
-        debugDrag('absolute drop path reached but nothing persisted', {
-          reason: 'source unresolved and freeSegmentPositions missing',
-          segmentIds,
-        })
-      }
-    }
+    // Clear ephemeral drop state before emitting the sync intent
     localState = { ...localState, dropIntent: null }
     debugDrag('dropIntent cleared after drag end')
+
+    if (dropResult) {
+      // Emit the replayable sync intent — applyIntent handles derive + recompute
+      applyIntent(dropResult)
+    } else {
+      recompute()
+    }
+    return
+  }
+
+  // ── APPLY_DROP_RESULT ────────────────────────────────────────────
+  // Idempotent sync intent: applies the resolved entry moves, wield
+  // clears, coinage consolidation, and free-segment positions that were
+  // computed by DRAG_SEGMENT_END.  Safe to replay N times.
+  if (intent.type === 'APPLY_DROP_RESULT') {
+    if (!worldState) { recompute(); return }
+
+    // 1. Ensure dropped carry groups exist
+    for (const g of intent.ensureGroups) {
+      if (!worldState.carryGroups[g.id]) {
+        worldState = {
+          ...worldState,
+          carryGroups: {
+            ...worldState.carryGroups,
+            [g.id]: { id: g.id, ownerActorId: g.ownerActorId, name: 'Ground', dropped: true },
+          },
+        }
+      }
+    }
+
+    // 2. Apply entry zone/actor/group moves
+    let entries = worldState.inventoryEntries
+    for (const [entryId, update] of Object.entries(intent.entryUpdates)) {
+      const entry = entries[entryId]
+      if (!entry) continue
+      entries = {
+        ...entries,
+        [entryId]: {
+          ...entry,
+          actorId: update.actorId,
+          carryGroupId: update.carryGroupId,
+          zone: update.zone,
+          state: update.state,
+        },
+      }
+    }
+
+    // 3. Apply quantity updates (coinage keeper entries after consolidation)
+    for (const [entryId, qty] of Object.entries(intent.quantityUpdates)) {
+      const entry = entries[entryId]
+      if (entry) entries = { ...entries, [entryId]: { ...entry, quantity: qty } }
+    }
+
+    // 4. Delete entries removed by coinage consolidation
+    for (const entryId of intent.deleteEntryIds) {
+      if (entries[entryId]) {
+        const { [entryId]: _, ...rest } = entries
+        entries = rest
+      }
+    }
+    worldState = { ...worldState, inventoryEntries: entries }
+
+    // 5. Clear wield slots
+    for (const { actorId, entryId } of intent.clearWields) {
+      const actor: Actor | undefined = worldState.actors[actorId]
+      if (!actor) continue
+      if (actor.leftWieldingEntryId === entryId || actor.rightWieldingEntryId === entryId) {
+        worldState = {
+          ...worldState,
+          actors: {
+            ...worldState.actors,
+            [actorId]: {
+              ...actor,
+              leftWieldingEntryId: actor.leftWieldingEntryId === entryId ? undefined : actor.leftWieldingEntryId,
+              rightWieldingEntryId: actor.rightWieldingEntryId === entryId ? undefined : actor.rightWieldingEntryId,
+            },
+          },
+        }
+      }
+    }
+
+    // 6. Update localState free-segment positions
+    const freePos = { ...localState.freeSegmentPositions }
+    const groupFreePos: Record<string, Record<string, { x: number; y: number }>> = {
+      ...localState.groupFreeSegmentPositions,
+    }
+    for (const segId of intent.removeFromFreePositions) {
+      delete freePos[segId]
+      for (const gid of Object.keys(groupFreePos)) {
+        if (groupFreePos[gid]?.[segId]) {
+          const { [segId]: _, ...rest } = groupFreePos[gid]!
+          groupFreePos[gid] = rest
+        }
+      }
+    }
+    Object.assign(freePos, intent.freeSegmentPositions)
+    for (const [gid, inner] of Object.entries(intent.groupFreeSegmentPositions)) {
+      groupFreePos[gid] = { ...(groupFreePos[gid] ?? {}), ...inner }
+    }
+    localState = { ...localState, freeSegmentPositions: freePos, groupFreeSegmentPositions: groupFreePos }
+
     recompute()
     return
   }
@@ -2421,7 +2564,6 @@ const applyIntent = (intent: WorkerIntent): void => {
       pendingSyncSnapshot = null
       doSync(oldWorld, oldLocal)
     }
-    flushDeferredServerState()
     return
   }
 }

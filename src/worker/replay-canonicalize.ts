@@ -106,16 +106,8 @@ export const canonicalizeIntentForReplay = (
   const now = options.now ?? Date.now
   const random = options.random ?? Math.random
 
-  if (intent.type === 'DRAG_SEGMENT_END' && options.localDropIntent) {
-    return {
-      ...intent,
-      replay: {
-        ...(intent.replay ?? {}),
-        segmentIds: options.localDropIntent.segmentIds,
-        sourceNodeIds: options.localDropIntent.sourceNodeIds,
-      },
-    }
-  }
+  // NOTE: DRAG_SEGMENT_END is not a sync intent — it emits APPLY_DROP_RESULT
+  // instead.  APPLY_DROP_RESULT carries all data inline, no canonicalization needed.
 
   if (intent.type === 'ADD_INVENTORY_NODE') {
     if ((intent.replay?.actorId ?? intent.replayActorId) && (intent.replay?.actorName ?? intent.replayActorName)) {

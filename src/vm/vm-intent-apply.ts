@@ -1,4 +1,4 @@
-import type { CanonicalState } from '../domain/types'
+import type { Actor, CanonicalState } from '../domain/types'
 import type { WorkerIntent } from '../worker/protocol'
 import { effectiveDropIntentForDragSegmentEnd } from '../worker/protocol'
 import { addInventoryNodeToState } from '../worker/inventory-node'
@@ -104,6 +104,51 @@ export const applyVmIntent = (
       return applyDuplicateNodeIntent(worldState, localState, intent)
     case 'DUPLICATE_ENTRY':
       return applyDuplicateEntryIntent(worldState, localState, intent)
+    case 'APPLY_DROP_RESULT': {
+      let ws = worldState
+      // Ensure carry groups
+      for (const g of intent.ensureGroups) {
+        if (!ws.carryGroups[g.id]) {
+          ws = { ...ws, carryGroups: { ...ws.carryGroups, [g.id]: { id: g.id, ownerActorId: g.ownerActorId, name: 'Ground', dropped: true } } }
+        }
+      }
+      // Apply entry moves
+      let entries = ws.inventoryEntries
+      for (const [entryId, update] of Object.entries(intent.entryUpdates)) {
+        const entry = entries[entryId]
+        if (!entry) continue
+        entries = { ...entries, [entryId]: { ...entry, actorId: update.actorId, carryGroupId: update.carryGroupId, zone: update.zone, state: update.state } }
+      }
+      for (const [entryId, qty] of Object.entries(intent.quantityUpdates)) {
+        const entry = entries[entryId]
+        if (entry) entries = { ...entries, [entryId]: { ...entry, quantity: qty } }
+      }
+      for (const entryId of intent.deleteEntryIds) {
+        if (entries[entryId]) { const { [entryId]: _, ...rest } = entries; entries = rest }
+      }
+      ws = { ...ws, inventoryEntries: entries }
+      // Clear wields
+      for (const { actorId, entryId } of intent.clearWields) {
+        const actor: Actor | undefined = ws.actors[actorId]
+        if (actor && (actor.leftWieldingEntryId === entryId || actor.rightWieldingEntryId === entryId)) {
+          ws = { ...ws, actors: { ...ws.actors, [actorId]: { ...actor, leftWieldingEntryId: actor.leftWieldingEntryId === entryId ? undefined : actor.leftWieldingEntryId, rightWieldingEntryId: actor.rightWieldingEntryId === entryId ? undefined : actor.rightWieldingEntryId } } }
+        }
+      }
+      // Update free positions
+      const freePos = { ...localState.freeSegmentPositions }
+      const groupFreePos: Record<string, Record<string, { x: number; y: number }>> = { ...localState.groupFreeSegmentPositions }
+      for (const segId of intent.removeFromFreePositions) {
+        delete freePos[segId]
+        for (const gid of Object.keys(groupFreePos)) {
+          if (groupFreePos[gid]?.[segId]) { const { [segId]: _, ...rest } = groupFreePos[gid]!; groupFreePos[gid] = rest }
+        }
+      }
+      Object.assign(freePos, intent.freeSegmentPositions)
+      for (const [gid, inner] of Object.entries(intent.groupFreeSegmentPositions)) {
+        groupFreePos[gid] = { ...(groupFreePos[gid] ?? {}), ...inner }
+      }
+      return { worldState: ws, localState: { ...localState, freeSegmentPositions: freePos, groupFreeSegmentPositions: groupFreePos } }
+    }
     default:
       return { worldState, localState }
   }

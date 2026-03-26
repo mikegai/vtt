@@ -385,6 +385,49 @@ export type WorkerIntent =
   | { readonly type: 'CATALOG_REMOVE_DEFINITION'; readonly id: string }
   | { readonly type: 'DRAG_START' }
   | { readonly type: 'DRAG_END' }
+  | {
+      /**
+       * Replayable sync intent emitted by DRAG_SEGMENT_END after resolving the
+       * complex drop logic.  Captures the minimal, idempotent worldState +
+       * localState mutations so they survive `deriveWorkingFromServerAndPending`.
+       *
+       * TODO: long-term, the renderer should emit a high-level "move items to
+       * location" intent directly, rather than DRAG_SEGMENT_END.  This intermediate
+       * intent bridges the gap until that refactor.
+       */
+      readonly type: 'APPLY_DROP_RESULT'
+      /** Entry mutations: zone, actorId, carryGroupId changes. */
+      readonly entryUpdates: Readonly<
+        Record<
+          string,
+          {
+            readonly actorId: string
+            readonly carryGroupId?: string
+            readonly zone: CarryZone
+            readonly state?: EquipmentState
+          }
+        >
+      >
+      /** Entry IDs removed by coinage consolidation. */
+      readonly deleteEntryIds: readonly string[]
+      /** Quantity overrides for coinage keeper entries after consolidation. */
+      readonly quantityUpdates: Readonly<Record<string, number>>
+      /** Wield slots to clear (entry was wielded before the drop). */
+      readonly clearWields: readonly { readonly actorId: string; readonly entryId: string }[]
+      /** Dropped carry groups to ensure exist. */
+      readonly ensureGroups: readonly {
+        readonly id: string
+        readonly ownerActorId: string
+      }[]
+      /** Free segment positions to set (canvas drops). */
+      readonly freeSegmentPositions: Readonly<Record<string, { x: number; y: number }>>
+      /** Group-scoped free segment positions to set. */
+      readonly groupFreeSegmentPositions: Readonly<
+        Record<string, Record<string, { x: number; y: number }>>
+      >
+      /** Segment IDs to remove from old free/group positions. */
+      readonly removeFromFreePositions: readonly string[]
+    }
 
 export type DragSegmentEndIntent = Extract<WorkerIntent, { type: 'DRAG_SEGMENT_END' }>
 
