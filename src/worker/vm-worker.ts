@@ -78,6 +78,14 @@ import {
   STONE_W,
 } from '../shared/node-layout'
 import { dropDebug, setDropDebugFromWorker } from '../shared/drop-debug'
+import {
+  createUndoStack,
+  pushUndo,
+  popUndo,
+  popRedo,
+  clearUndoStack,
+  applyUndoEntry,
+} from './undo-stack'
 
 /** Stable key for canvas-scoped room (SpacetimeDB world + canvas). */
 const roomKeyForContext = (ctx: WorldCanvasContext): string => `${ctx.worldId}::${ctx.canvasId}`
@@ -134,6 +142,9 @@ let pendingRecomputeAfterBatch = false
 let pendingSnapFromInventoryBeforeIntent: Set<string> | null = null
 /** When set, next `recompute` that posts patches will attach snap ids for nodes pasted from node clipboard. */
 let pendingSnapNodeIdsAfterPaste: string[] | null = null
+
+let undoStack = createUndoStack(50)
+let suppressUndoCapture = false
 
 const collectSnapSegmentIdsForNewEntries = (scene: SceneVM, newEntryIds: Set<string>): string[] => {
   const snap: string[] = []
@@ -199,6 +210,18 @@ function isSyncIntent(intent: WorkerIntent): boolean {
     case 'DRAG_SEGMENT_END':
     case 'DRAG_START':
     case 'DRAG_END':
+      return false
+    default:
+      return true
+  }
+}
+
+function isUndoableIntent(intent: WorkerIntent): boolean {
+  if (!isSyncIntent(intent)) return false
+  switch (intent.type) {
+    case 'SET_WORLD_STATE':
+    case 'CATALOG_UPSERT_DEFINITION':
+    case 'CATALOG_REMOVE_DEFINITION':
       return false
     default:
       return true
@@ -1054,8 +1077,13 @@ function collectCoinageConsolidation(
 
 const applyIntent = (intent: WorkerIntent): void => {
   if (!inReplay && isSyncIntent(intent)) {
+    const shouldCaptureUndo = !suppressUndoCapture && isUndoableIntent(intent) && worldState
+    const beforeWorld = shouldCaptureUndo ? cloneCanonicalState(worldState!) : null
+    const beforeLocal = shouldCaptureUndo ? stripEphemeralLocalState(localState) : null
+
     if (intent.type === 'SET_WORLD_STATE') {
       pendingSyncIntents = []
+      clearUndoStack(undoStack)
     }
     const stored: WorkerIntent = canonicalizeIntentForReplay(intent, {
       localDropIntent: localState.dropIntent,
@@ -1067,6 +1095,17 @@ const applyIntent = (intent: WorkerIntent): void => {
     })
     pendingSyncIntents.push(stored)
     deriveWorkingFromServerAndPending()
+
+    if (shouldCaptureUndo && beforeWorld && beforeLocal && worldState) {
+      pushUndo(undoStack, {
+        beforeWorld,
+        beforeLocal,
+        afterWorld: cloneCanonicalState(worldState),
+        afterLocal: stripEphemeralLocalState(localState),
+        label: intent.type,
+      })
+    }
+
     recompute()
     return
   }
@@ -1685,6 +1724,10 @@ const applyIntent = (intent: WorkerIntent): void => {
   // location" intent instead of DRAG_SEGMENT_END.  This intermediate
   // APPLY_DROP_RESULT bridges the gap.
   if (intent.type === 'DRAG_SEGMENT_END') {
+    // Capture before-snapshot for undo (wraps entire drop flow as single entry)
+    const beforeWorld = worldState ? cloneCanonicalState(worldState) : null
+    const beforeLocal = stripEphemeralLocalState(localState)
+
     const effectiveDropIntent = effectiveDropIntentForDragSegmentEnd(localState.dropIntent, intent)
     const hoverTargetNodeId = effectiveDropIntent ? intent.targetNodeId : null
     const hoverTargetGroupId = effectiveDropIntent ? intent.targetGroupId ?? null : null
@@ -1711,11 +1754,24 @@ const applyIntent = (intent: WorkerIntent): void => {
     localState = { ...localState, dropIntent: null }
     debugDrag('dropIntent cleared after drag end')
 
+    suppressUndoCapture = true
     if (dropResult) {
       // Emit the replayable sync intent — applyIntent handles derive + recompute
       applyIntent(dropResult)
     } else {
       recompute()
+    }
+    suppressUndoCapture = false
+
+    // Push single undo entry for the entire drag-drop
+    if (dropResult && beforeWorld && worldState) {
+      pushUndo(undoStack, {
+        beforeWorld,
+        beforeLocal,
+        afterWorld: cloneCanonicalState(worldState),
+        afterLocal: stripEphemeralLocalState(localState),
+        label: 'DRAG_SEGMENT_END',
+      })
     }
     return
   }
@@ -2688,6 +2744,7 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
     return
   }
   if (message.type === 'RESET') {
+    clearUndoStack(undoStack)
     persistence.clear().catch((err) => console.warn('[persistence] clear failed', err))
     const oldWorld = worldState
     const oldLocal = localState
@@ -2766,6 +2823,22 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
     const scene = buildSceneVM(worldState, localState)
     const payload = serializeNodeClipboard(worldState, localState, scene, localState.selectedNodeIds)
     post({ type: 'CLIPBOARD_EXPORT_RESULT', requestId: message.requestId, payload: payload ?? '' })
+    return
+  }
+  if (message.type === 'UNDO' || message.type === 'REDO') {
+    if (!worldState) return
+    const oldWorld = worldState
+    const oldLocal = localState
+    const entry = message.type === 'UNDO' ? popUndo(undoStack) : popRedo(undoStack)
+    if (!entry) return
+    const result = applyUndoEntry(worldState, localState, entry, message.type === 'UNDO' ? 'undo' : 'redo')
+    worldState = result.worldState
+    localState = result.localState
+    serverWorldState = cloneCanonicalState(worldState)
+    serverPersistedLayout = stripEphemeralLocalState(localState)
+    pendingSyncIntents = []
+    recompute()
+    syncToSpacetimeDB(oldWorld, oldLocal)
     return
   }
   if (message.type === 'INTENT') {

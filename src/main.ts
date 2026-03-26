@@ -3084,6 +3084,22 @@ toolTextBtnEl?.addEventListener('click', () => {
 
 window.addEventListener('keydown', (event) => {
   const mod = event.metaKey || event.ctrlKey
+  if (mod && event.key === 'z' && !event.shiftKey) {
+    const active = document.activeElement
+    if (active?.tagName === 'INPUT' || active?.tagName === 'TEXTAREA' || (active as HTMLElement).isContentEditable) return
+    if (appRoute.mode !== 'canvas') return
+    event.preventDefault()
+    postToWorker({ type: 'UNDO' })
+    return
+  }
+  if (mod && event.key === 'z' && event.shiftKey) {
+    const active = document.activeElement
+    if (active?.tagName === 'INPUT' || active?.tagName === 'TEXTAREA' || (active as HTMLElement).isContentEditable) return
+    if (appRoute.mode !== 'canvas') return
+    event.preventDefault()
+    postToWorker({ type: 'REDO' })
+    return
+  }
   if (mod && (event.key === 'c' || event.key === 'C')) {
     const active = document.activeElement
     if (active?.tagName === 'INPUT' || active?.tagName === 'TEXTAREA' || (active as HTMLElement).isContentEditable) return

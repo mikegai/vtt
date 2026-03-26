@@ -494,6 +494,8 @@ export type MainToWorkerMessage =
   | { readonly type: 'GET_ITEM_CATALOG'; readonly requestId: string }
   | { readonly type: 'GET_WORLD_HUB'; readonly requestId: string }
   | { readonly type: 'CLIPBOARD_EXPORT'; readonly requestId: string }
+  | { readonly type: 'UNDO' }
+  | { readonly type: 'REDO' }
 
 export type WorkerToMainMessage =
   | { readonly type: 'REGISTRY_RECONCILE'; readonly adjust: RegistryAdjust }
