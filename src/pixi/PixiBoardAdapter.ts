@@ -1,4 +1,4 @@
-import { Application, Assets, BitmapText, Color, Container, Graphics, Point, Rectangle, type Filter } from 'pixi.js'
+import { Application, Assets, BitmapText, Color, Container, Graphics, Point, Rectangle, Sprite, Texture, type Filter } from 'pixi.js'
 import { createSpring1D, createSpring2D, setSpring1DTarget, setSpringTarget, updateSpring1D, updateSpring2D } from './spring'
 import type { CoinageMetalFraction } from '../domain/coinage'
 import {
@@ -9,7 +9,7 @@ import {
 } from '../domain/segment-sixths-layout'
 import { blendFillColorFromMetals, labelFillForCoinageBackground } from './coinage-colors'
 import { createCoinageMetallicFilter } from './coinage-metallic-filter'
-import type { SceneFreeSegmentVM, SceneGroupVM, SceneLabelVM, SceneNodeVM, ScenePatch, SceneVM, SceneSegmentVM } from '../worker/protocol'
+import type { SceneCanvasObjectVM, SceneFreeSegmentVM, SceneGroupVM, SceneLabelVM, SceneNodeVM, ScenePatch, SceneVM, SceneSegmentVM } from '../worker/protocol'
 import { resolveNodeGroupDropMode } from './node-drop-mode'
 import { canShowNodeResizeHandles } from './node-resize-availability'
 
@@ -104,6 +104,29 @@ type LabelDragData = {
   readonly offset: { x: number; y: number }
 }
 
+type CanvasObjectView = {
+  readonly root: Container
+  readonly sprite?: Sprite
+  readonly lockIcon?: Graphics
+  readonly resizeHandle?: Graphics
+}
+
+type CanvasObjectDragData = {
+  readonly objectId: string
+  readonly offset: { x: number; y: number }
+  /** All selected canvas object ids being moved together. */
+  readonly allObjectIds: string[]
+  readonly startPositions: Record<string, { x: number; y: number }>
+}
+
+type CanvasObjectResizeDragData = {
+  readonly objectId: string
+  readonly startWidth: number
+  readonly startHeight: number
+  readonly startPointerWorld: { x: number; y: number }
+  readonly aspectRatio: number
+}
+
 type ConnectorDragData = {
   readonly nodeId: string
   readonly fromX: number
@@ -116,6 +139,7 @@ type MarqueeSelection = {
   readonly nodeIds: string[]
   readonly groupIds: string[]
   readonly labelIds: string[]
+  readonly canvasObjectIds: string[]
 }
 
 type MarqueeOriginScope =
@@ -134,6 +158,8 @@ type ActiveDrag =
   | { type: 'nodeReorder'; state: NodeReorderDragData }
   | { type: 'connector'; state: ConnectorDragData }
   | { type: 'label'; state: LabelDragData }
+  | { type: 'canvasObject'; state: CanvasObjectDragData }
+  | { type: 'canvasObjectResize'; state: CanvasObjectResizeDragData }
   | { type: 'marquee'; startWorldX: number; startWorldY: number; endX: number; endY: number; origin: MarqueeOriginScope }
 
 type AdapterHandlers = {
@@ -196,6 +222,10 @@ type AdapterHandlers = {
   onDragEnd?(): void
   /** Set keyboard paste target (Cmd+V). */
   onSetPasteTargetNode?(nodeId: string | null): void
+  onMoveCanvasObjects?(moves: { objectId: string; x: number; y: number }[]): void
+  onResizeCanvasObject?(objectId: string, width: number, height: number): void
+  onCanvasObjectContextMenu?(objectId: string, clientX: number, clientY: number): void
+  onImageFileDrop?(file: File, worldX: number, worldY: number): void
 }
 
 type SegmentView = {
@@ -1761,6 +1791,8 @@ export class PixiBoardAdapter {
   private readonly freeSegmentViews = new Map<string, FreeSegmentView>()
   private readonly groupViews = new Map<string, GroupView>()
   private readonly labelViews = new Map<string, LabelView>()
+  private readonly canvasObjectViews = new Map<string, CanvasObjectView>()
+  private canvasObjectLayer: Container
   private readonly handlers: AdapterHandlers
   private zoom = 0.85
   private pan = { x: 60, y: 60 }
@@ -1800,6 +1832,7 @@ export class PixiBoardAdapter {
     nodeIds: Set<string>
     groupIds: Set<string>
     labelIds: Set<string>
+    canvasObjectIds: Set<string>
   } | null = null
   /** During marquee drag: whether add-to-selection modifier is held (for preview merge). */
   private marqueePreviewAddToSelection = false
@@ -1848,6 +1881,8 @@ export class PixiBoardAdapter {
     this.nestConnectorGraphics.eventMode = 'none'
     this.connectorDragLine = new Graphics()
     this.connectorDragLine.eventMode = 'none'
+    this.canvasObjectLayer = new Container()
+    this.canvasObjectLayer.sortableChildren = true
     this.worldLayer = new Container()
     this.labelLayer = new Container()
     this.selectionOverlayLayer = new Container()
@@ -1893,6 +1928,11 @@ export class PixiBoardAdapter {
         this.handlers.onNodeContextMenu?.(nodeId, event.clientX, event.clientY)
         return
       }
+      const canvasObjectId = this.hitTestCanvasObjectContext(event.clientX, event.clientY)
+      if (canvasObjectId) {
+        this.handlers.onCanvasObjectContextMenu?.(canvasObjectId, event.clientX, event.clientY)
+        return
+      }
       const groupId = this.hitTestGroupContext(event.clientX, event.clientY)
       if (groupId && groupId.startsWith('custom-group:')) {
         this.handlers.onGroupContextMenu?.(groupId, event.clientX, event.clientY)
@@ -1902,8 +1942,23 @@ export class PixiBoardAdapter {
       this.handlers.onCanvasContextMenu?.(world.x, world.y, event.clientX, event.clientY)
     })
 
+    this.app.canvas.addEventListener('dragover', (e: DragEvent) => {
+      e.preventDefault()
+      if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'
+    })
+    this.app.canvas.addEventListener('drop', (e: DragEvent) => {
+      e.preventDefault()
+      const files = e.dataTransfer?.files
+      if (!files || files.length === 0) return
+      const file = files[0]
+      if (!file.type.startsWith('image/')) return
+      const world = this.screenToWorld(e.clientX, e.clientY)
+      this.handlers.onImageFileDrop?.(file, world.x, world.y)
+    })
+
     this.sceneRoot.addChild(this.groupLayer)
     this.groupLayer.addChild(this.groupDropIndicator)
+    this.sceneRoot.addChild(this.canvasObjectLayer)
     this.worldLayer.addChild(this.nestConnectorGraphics)
     this.sceneRoot.addChild(this.worldLayer)
     this.sceneRoot.addChild(this.labelLayer)
@@ -2030,6 +2085,12 @@ export class PixiBoardAdapter {
           case 'label':
             this.endDrag()
             return
+          case 'canvasObject':
+            this.finishCanvasObjectDrag()
+            return
+          case 'canvasObjectResize':
+            this.finishCanvasObjectResizeDrag()
+            return
           case 'group':
           case 'groupResize':
           case 'nodeResize':
@@ -2096,6 +2157,12 @@ export class PixiBoardAdapter {
           return
         case 'label':
           this.updateLabelDrag(event.clientX, event.clientY)
+          return
+        case 'canvasObject':
+          this.updateCanvasObjectDrag(event.clientX, event.clientY)
+          return
+        case 'canvasObjectResize':
+          this.updateCanvasObjectResizeDrag(event.clientX, event.clientY)
           return
         case 'group':
           this.updateGroupDrag(event.clientX, event.clientY)
@@ -2208,7 +2275,8 @@ export class PixiBoardAdapter {
     const groups = Object.values(this.currentScene.groups ?? {})
     const labels = Object.values(this.currentScene.labels ?? {})
     const freeSegs = Object.values(this.currentScene.freeSegments ?? {})
-    if (nodes.length === 0 && groups.length === 0 && labels.length === 0 && freeSegs.length === 0) return
+    const canvasObjs = Object.values(this.currentScene.canvasObjects ?? {})
+    if (nodes.length === 0 && groups.length === 0 && labels.length === 0 && freeSegs.length === 0 && canvasObjs.length === 0) return
 
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
     for (const n of nodes) {
@@ -2234,6 +2302,12 @@ export class PixiBoardAdapter {
       minY = Math.min(minY, f.y)
       maxX = Math.max(maxX, f.x + 40)
       maxY = Math.max(maxY, f.y + 20)
+    }
+    for (const co of canvasObjs) {
+      minX = Math.min(minX, co.x)
+      minY = Math.min(minY, co.y)
+      maxX = Math.max(maxX, co.x + co.width)
+      maxY = Math.max(maxY, co.y + co.height)
     }
 
     if (!isFinite(minX)) return
@@ -2320,6 +2394,12 @@ export class PixiBoardAdapter {
           case 'label':
             this.updateLabelDrag(pos.clientX, pos.clientY)
             break
+          case 'canvasObject':
+            this.updateCanvasObjectDrag(pos.clientX, pos.clientY)
+            break
+          case 'canvasObjectResize':
+            this.updateCanvasObjectResizeDrag(pos.clientX, pos.clientY)
+            break
           case 'nodeResize':
             this.updateNodeResizeDrag(pos.clientX, pos.clientY)
             break
@@ -2359,20 +2439,23 @@ export class PixiBoardAdapter {
     let selectedNodeIds = new Set(this.currentScene.selectedNodeIds ?? [])
     let selectedGroupIds = new Set(this.currentScene.selectedGroupIds ?? [])
     let selectedLabelIds = new Set(this.currentScene.selectedLabelIds ?? [])
+    let selectedCanvasObjectIds = new Set(this.currentScene.selectedCanvasObjectIds ?? [])
     if (this.marqueePreviewSelection) {
       if (this.marqueePreviewAddToSelection) {
         this.marqueePreviewSelection.segmentIds.forEach((id) => selectedIds.add(id))
         this.marqueePreviewSelection.nodeIds.forEach((id) => selectedNodeIds.add(id))
         this.marqueePreviewSelection.groupIds.forEach((id) => selectedGroupIds.add(id))
         this.marqueePreviewSelection.labelIds.forEach((id) => selectedLabelIds.add(id))
+        this.marqueePreviewSelection.canvasObjectIds.forEach((id) => selectedCanvasObjectIds.add(id))
       } else {
         selectedIds = new Set(this.marqueePreviewSelection.segmentIds)
         selectedNodeIds = new Set(this.marqueePreviewSelection.nodeIds)
         selectedGroupIds = new Set(this.marqueePreviewSelection.groupIds)
         selectedLabelIds = new Set(this.marqueePreviewSelection.labelIds)
+        selectedCanvasObjectIds = new Set(this.marqueePreviewSelection.canvasObjectIds)
       }
     }
-    if (selectedIds.size === 0 && selectedNodeIds.size === 0 && selectedGroupIds.size === 0 && selectedLabelIds.size === 0) return
+    if (selectedIds.size === 0 && selectedNodeIds.size === 0 && selectedGroupIds.size === 0 && selectedLabelIds.size === 0 && selectedCanvasObjectIds.size === 0) return
     const PAD = 0.2
     const STROKE = 0.8
     const RADIUS = 2
@@ -2476,7 +2559,21 @@ export class PixiBoardAdapter {
       this.selectionOverlayLayer.addChild(g)
       boxBounds.push({ left: label.x - 8, top: label.y, right: label.x - 8 + w, bottom: label.y + h })
     }
-    const selectedCount = selectedIds.size + selectedNodeIds.size + selectedGroupIds.size + selectedLabelIds.size
+    for (const objId of selectedCanvasObjectIds) {
+      const obj = this.currentScene.canvasObjects?.[objId]
+      if (!obj) continue
+      const view = this.canvasObjectViews.get(objId)
+      const livePos = view?.root.position
+      const ox = livePos?.x ?? obj.x
+      const oy = livePos?.y ?? obj.y
+      const g = new Graphics()
+      g.eventMode = 'none'
+      g.roundRect(ox, oy, obj.width, obj.height, 4)
+      g.stroke({ width: 2, color: 0x8fc0ff, alpha: 0.72 })
+      this.selectionOverlayLayer.addChild(g)
+      boxBounds.push({ left: ox, top: oy, right: ox + obj.width, bottom: oy + obj.height })
+    }
+    const selectedCount = selectedIds.size + selectedNodeIds.size + selectedGroupIds.size + selectedLabelIds.size + selectedCanvasObjectIds.size
     if (selectedCount > 1 && boxBounds.length > 0) {
       const minX = Math.min(...boxBounds.map((bb) => bb.left))
       const minY = Math.min(...boxBounds.map((bb) => bb.top))
@@ -2536,14 +2633,14 @@ export class PixiBoardAdapter {
     x2: number,
     y2: number,
   ): MarqueeSelection {
-    if (!this.currentScene) return { segmentIds: [], nodeIds: [], groupIds: [], labelIds: [] }
+    if (!this.currentScene) return { segmentIds: [], nodeIds: [], groupIds: [], labelIds: [], canvasObjectIds: [] }
     const minW = (Math.min(x1, x2) - this.pan.x) / this.zoom
     const maxW = (Math.max(x1, x2) - this.pan.x) / this.zoom
     const minH = (Math.min(y1, y2) - this.pan.y) / this.zoom
     const maxH = (Math.max(y1, y2) - this.pan.y) / this.zoom
     const intersects = (x: number, y: number, w: number, h: number): boolean =>
       x < maxW && x + w > minW && y < maxH && y + h > minH
-    const selection: MarqueeSelection = { segmentIds: [], nodeIds: [], groupIds: [], labelIds: [] }
+    const selection: MarqueeSelection = { segmentIds: [], nodeIds: [], groupIds: [], labelIds: [], canvasObjectIds: [] }
 
     if (origin.type === 'world') {
       const groups = Object.values(this.currentScene.groups ?? {})
@@ -2574,6 +2671,10 @@ export class PixiBoardAdapter {
         const w = b ? Math.max(40, b.width) : 120
         const h = b ? Math.max(20, b.height) : 28
         if (intersects(label.x - 8, label.y, w, h)) selection.labelIds.push(label.id)
+      }
+      for (const obj of Object.values(this.currentScene.canvasObjects ?? {})) {
+        if (obj.locked) continue
+        if (intersects(obj.x, obj.y, obj.width, obj.height)) selection.canvasObjectIds.push(obj.id)
       }
       return selection
     }
@@ -2646,6 +2747,7 @@ export class PixiBoardAdapter {
         nodeIds: new Set(selection.nodeIds),
         groupIds: new Set(selection.groupIds),
         labelIds: new Set(selection.labelIds),
+        canvasObjectIds: new Set(selection.canvasObjectIds),
       }
       this.marqueePreviewAddToSelection = addToSelection
     }
@@ -4826,7 +4928,7 @@ export class PixiBoardAdapter {
     const { nodeId } = this.activeDrag.state
     this.activeDrag = { type: 'idle' }
     this.handlers.onMarqueeSelect?.(
-      { segmentIds: [], nodeIds: [nodeId], groupIds: [], labelIds: [] },
+      { segmentIds: [], nodeIds: [nodeId], groupIds: [], labelIds: [], canvasObjectIds: [] },
       shiftKey,
     )
   }
@@ -5164,6 +5266,229 @@ export class PixiBoardAdapter {
     const y = world.y - drag.offset.y
     view.root.position.set(x, y)
     this.handlers.onMoveLabel?.(drag.labelId, x, y)
+  }
+
+  // ─── Canvas Object Methods ────────────────────────────────────────────────────
+
+  private createCanvasObject(obj: SceneCanvasObjectVM, selected: boolean): CanvasObjectView {
+    const root = new Container()
+    root.position.set(obj.x, obj.y)
+    root.zIndex = obj.zIndex
+    ;(root as Container & { __canvasObjectId?: string }).__canvasObjectId = obj.id
+    root.eventMode = 'static'
+    root.cursor = obj.locked ? 'default' : 'move'
+
+    let sprite: Sprite | undefined
+    let lockIcon: Graphics | undefined
+    let resizeHandle: Graphics | undefined
+
+    if (obj.data.type === 'image') {
+      // Placeholder rect while loading
+      const placeholder = new Graphics()
+      placeholder.rect(0, 0, obj.width, obj.height)
+      placeholder.fill({ color: 0x1a2a44, alpha: 0.5 })
+      placeholder.stroke({ width: 1, color: 0x3a5a84, alpha: 0.6 })
+      root.addChild(placeholder)
+
+      Assets.load(obj.data.url).then((texture: Texture) => {
+        if (root.destroyed) return
+        sprite = new Sprite(texture)
+        sprite.width = obj.width
+        sprite.height = obj.height
+        sprite.eventMode = 'none'
+        root.removeChild(placeholder)
+        placeholder.destroy()
+        root.addChildAt(sprite, 0)
+        // Store sprite ref on view for resize
+        const view = this.canvasObjectViews.get(obj.id)
+        if (view && !view.sprite) {
+          this.canvasObjectViews.set(obj.id, { ...view, sprite })
+        }
+      }).catch(() => {
+        // Keep placeholder on load failure
+      })
+    }
+
+    if (obj.locked) {
+      // Lock icon overlay
+      lockIcon = new Graphics()
+      lockIcon.eventMode = 'none'
+      const iconSize = Math.min(24, obj.width * 0.15, obj.height * 0.15)
+      const ix = obj.width - iconSize - 4
+      const iy = 4
+      lockIcon.roundRect(ix, iy, iconSize, iconSize, 3)
+      lockIcon.fill({ color: 0x000000, alpha: 0.5 })
+      // Simple padlock shape
+      lockIcon.rect(ix + iconSize * 0.2, iy + iconSize * 0.45, iconSize * 0.6, iconSize * 0.45)
+      lockIcon.fill({ color: 0xffc040 })
+      lockIcon.roundRect(ix + iconSize * 0.3, iy + iconSize * 0.15, iconSize * 0.4, iconSize * 0.4, iconSize * 0.2)
+      lockIcon.stroke({ width: 1.5, color: 0xffc040 })
+      root.addChild(lockIcon)
+    }
+
+    if (!obj.locked) {
+      // Drag handling
+      root.on('pointerdown', (event: any) => {
+        if (event.button !== 0 || this.activeDrag.type !== 'idle') return
+        event.stopPropagation()
+        const canvasRect = this.app.canvas.getBoundingClientRect()
+        const clientX = typeof event.clientX === 'number' ? event.clientX : event.global.x + canvasRect.left
+        const clientY = typeof event.clientY === 'number' ? event.clientY : event.global.y + canvasRect.top
+        const world = this.screenToWorld(clientX, clientY)
+
+        // Collect all selected canvas objects for multi-move
+        const selectedObjIds = new Set(this.currentScene?.selectedCanvasObjectIds ?? [])
+        if (!selectedObjIds.has(obj.id)) selectedObjIds.clear()
+        selectedObjIds.add(obj.id)
+        const allObjectIds = [...selectedObjIds]
+        const startPositions: Record<string, { x: number; y: number }> = {}
+        for (const oid of allObjectIds) {
+          const v = this.canvasObjectViews.get(oid)
+          if (v) startPositions[oid] = { x: v.root.position.x, y: v.root.position.y }
+        }
+
+        this.activeDrag = {
+          type: 'canvasObject',
+          state: {
+            objectId: obj.id,
+            offset: { x: world.x - root.position.x, y: world.y - root.position.y },
+            allObjectIds,
+            startPositions,
+          },
+        }
+        this.lastPointerPosition = { clientX, clientY }
+        this.startAutoPanLoop()
+      })
+
+      // Resize handle (SE corner)
+      resizeHandle = new Graphics()
+      resizeHandle.eventMode = 'static'
+      resizeHandle.cursor = 'nwse-resize'
+      const handleSize = 12
+      resizeHandle.moveTo(obj.width, obj.height - handleSize)
+      resizeHandle.lineTo(obj.width, obj.height)
+      resizeHandle.lineTo(obj.width - handleSize, obj.height)
+      resizeHandle.stroke({ width: 2.5, color: 0xffffff, alpha: 0.8 })
+      resizeHandle.on('pointerdown', (event: any) => {
+        if (event.button !== 0 || this.activeDrag.type !== 'idle') return
+        event.stopPropagation()
+        const canvasRect = this.app.canvas.getBoundingClientRect()
+        const clientX = typeof event.clientX === 'number' ? event.clientX : event.global.x + canvasRect.left
+        const clientY = typeof event.clientY === 'number' ? event.clientY : event.global.y + canvasRect.top
+        const world = this.screenToWorld(clientX, clientY)
+        this.activeDrag = {
+          type: 'canvasObjectResize',
+          state: {
+            objectId: obj.id,
+            startWidth: obj.width,
+            startHeight: obj.height,
+            startPointerWorld: world,
+            aspectRatio: obj.width / obj.height,
+          },
+        }
+        this.lastPointerPosition = { clientX, clientY }
+        this.startAutoPanLoop()
+      })
+      root.addChild(resizeHandle)
+    }
+
+    // Selection border
+    if (selected) {
+      const selBorder = new Graphics()
+      selBorder.eventMode = 'none'
+      selBorder.roundRect(-1, -1, obj.width + 2, obj.height + 2, 3)
+      selBorder.stroke({ width: 2, color: 0x8fc0ff, alpha: 0.85 })
+      root.addChild(selBorder)
+    }
+
+    this.canvasObjectLayer.addChild(root)
+    return { root, sprite, lockIcon, resizeHandle }
+  }
+
+  private updateCanvasObjectDrag(clientX: number, clientY: number): void {
+    if (this.activeDrag.type !== 'canvasObject') return
+    const drag = this.activeDrag.state
+    const world = this.screenToWorld(clientX, clientY)
+    const primaryX = world.x - drag.offset.x
+    const primaryY = world.y - drag.offset.y
+    const primaryStart = drag.startPositions[drag.objectId]
+    if (!primaryStart) return
+    const dx = primaryX - primaryStart.x
+    const dy = primaryY - primaryStart.y
+    for (const oid of drag.allObjectIds) {
+      const view = this.canvasObjectViews.get(oid)
+      const start = drag.startPositions[oid]
+      if (!view || !start) continue
+      view.root.position.set(start.x + dx, start.y + dy)
+    }
+  }
+
+  private finishCanvasObjectDrag(): void {
+    if (this.activeDrag.type !== 'canvasObject') return
+    const drag = this.activeDrag.state
+    const moves: { objectId: string; x: number; y: number }[] = []
+    for (const oid of drag.allObjectIds) {
+      const view = this.canvasObjectViews.get(oid)
+      if (!view) continue
+      moves.push({ objectId: oid, x: view.root.position.x, y: view.root.position.y })
+    }
+    this.stopAutoPanLoop()
+    this.activeDrag = { type: 'idle' }
+    if (moves.length > 0) this.handlers.onMoveCanvasObjects?.(moves)
+  }
+
+  private updateCanvasObjectResizeDrag(clientX: number, clientY: number): void {
+    if (this.activeDrag.type !== 'canvasObjectResize') return
+    const drag = this.activeDrag.state
+    const view = this.canvasObjectViews.get(drag.objectId)
+    if (!view) return
+    const world = this.screenToWorld(clientX, clientY)
+    const dx = world.x - drag.startPointerWorld.x
+    // Maintain aspect ratio: use horizontal delta only
+    const newWidth = Math.max(20, drag.startWidth + dx)
+    const newHeight = newWidth / drag.aspectRatio
+    // Update sprite visually
+    if (view.sprite) {
+      view.sprite.width = newWidth
+      view.sprite.height = newHeight
+    }
+    // Update resize handle position
+    if (view.resizeHandle) {
+      view.resizeHandle.clear()
+      const handleSize = 12
+      view.resizeHandle.moveTo(newWidth, newHeight - handleSize)
+      view.resizeHandle.lineTo(newWidth, newHeight)
+      view.resizeHandle.lineTo(newWidth - handleSize, newHeight)
+      view.resizeHandle.stroke({ width: 2.5, color: 0xffffff, alpha: 0.8 })
+    }
+  }
+
+  private finishCanvasObjectResizeDrag(): void {
+    if (this.activeDrag.type !== 'canvasObjectResize') return
+    const drag = this.activeDrag.state
+    const view = this.canvasObjectViews.get(drag.objectId)
+    this.stopAutoPanLoop()
+    this.activeDrag = { type: 'idle' }
+    if (!view) return
+    const width = view.sprite?.width ?? drag.startWidth
+    const height = view.sprite?.height ?? drag.startHeight
+    this.handlers.onResizeCanvasObject?.(drag.objectId, width, height)
+  }
+
+  private hitTestCanvasObjectContext(clientX: number, clientY: number): string | null {
+    const events = this.app.renderer?.events
+    if (!events?.rootBoundary) return null
+    const pt = new Point()
+    events.mapPositionToPoint(pt, clientX, clientY)
+    const hit = events.rootBoundary.hitTest(pt.x, pt.y)
+    if (!hit) return null
+    let cur: Container | null = hit
+    while (cur) {
+      const c = cur as Container & { __canvasObjectId?: string }
+      if (typeof c.__canvasObjectId === 'string' && c.__canvasObjectId.length > 0) return c.__canvasObjectId
+      cur = cur.parent
+    }
+    return null
   }
 
   private findNodeDropTarget(
@@ -5545,6 +5870,11 @@ export class PixiBoardAdapter {
       view.root.destroy({ children: true })
     }
     this.labelViews.clear()
+    for (const [, view] of this.canvasObjectViews) {
+      this.canvasObjectLayer.removeChild(view.root)
+      view.root.destroy({ children: true })
+    }
+    this.canvasObjectViews.clear()
     const liveNodeIds = new Set(Object.keys(scene.nodes))
     const liveGroupIds = new Set(Object.keys(scene.groups ?? {}))
     for (const id of this.layoutExpandedState.keys()) {
@@ -5625,6 +5955,10 @@ export class PixiBoardAdapter {
     })
     Object.values(scene.labels ?? {}).forEach((label) => {
       this.labelViews.set(label.id, this.createLabel(label, scene.selectedLabelId === label.id))
+    })
+    const selectedCanvasObjIds = new Set(scene.selectedCanvasObjectIds ?? [])
+    Object.values(scene.canvasObjects ?? {}).forEach((obj) => {
+      this.canvasObjectViews.set(obj.id, this.createCanvasObject(obj, selectedCanvasObjIds.has(obj.id)))
     })
     this.updateSelectionOverlay()
   }

@@ -11,6 +11,7 @@ export type PersistedLocalState = Omit<
   | 'selectedGroupIds'
   | 'selectedLabelIds'
   | 'pasteTargetNodeId'
+  | 'selectedCanvasObjectIds'
   | 'selectedLabelId'
 >
 

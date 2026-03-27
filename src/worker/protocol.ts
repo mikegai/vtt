@@ -108,6 +108,22 @@ export type SceneLabelVM = {
   readonly y: number
 }
 
+/** Type-specific payload for canvas objects, discriminated by type. */
+export type CanvasObjectData =
+  | { readonly type: 'image'; readonly url: string }
+
+export type SceneCanvasObjectVM = {
+  readonly id: string
+  readonly objectType: string
+  readonly x: number
+  readonly y: number
+  readonly width: number
+  readonly height: number
+  readonly zIndex: number
+  readonly locked: boolean
+  readonly data: CanvasObjectData
+}
+
 export type SceneFreeSegmentVM = {
   readonly id: string
   readonly nodeId: string
@@ -146,6 +162,8 @@ export type SceneVM = {
   readonly freeSegments: Record<string, SceneFreeSegmentVM>
   readonly groups: Record<string, SceneGroupVM>
   readonly labels: Record<string, SceneLabelVM>
+  readonly canvasObjects: Record<string, SceneCanvasObjectVM>
+  readonly selectedCanvasObjectIds: readonly string[]
   readonly selectedLabelId: string | null
 }
 
@@ -163,6 +181,8 @@ export type ScenePatch =
       readonly groups: Record<string, SceneGroupVM>
       readonly freeSegments: Record<string, SceneFreeSegmentVM>
       readonly labels: Record<string, SceneLabelVM>
+      readonly canvasObjects: Record<string, SceneCanvasObjectVM>
+      readonly selectedCanvasObjectIds: readonly string[]
       readonly selectedLabelId: string | null
     }
 
@@ -185,6 +205,7 @@ export type WorkerIntent =
         readonly nodeIds: readonly string[]
         readonly groupIds: readonly string[]
         readonly labelIds: readonly string[]
+        readonly canvasObjectIds: readonly string[]
       }
       readonly addToSelection: boolean
     }
@@ -362,6 +383,37 @@ export type WorkerIntent =
   | { readonly type: 'MOVE_LABEL'; readonly labelId: string; readonly x: number; readonly y: number }
   | { readonly type: 'DELETE_LABEL'; readonly labelId: string }
   | { readonly type: 'SELECT_LABEL'; readonly labelId: string | null }
+  | {
+      readonly type: 'ADD_CANVAS_OBJECT'
+      readonly objectType: string
+      readonly x: number
+      readonly y: number
+      readonly width: number
+      readonly height: number
+      readonly data: CanvasObjectData
+      readonly replay?: { readonly objectId?: string }
+    }
+  | {
+      readonly type: 'MOVE_CANVAS_OBJECTS'
+      readonly moves: readonly { readonly objectId: string; readonly x: number; readonly y: number }[]
+    }
+  | {
+      readonly type: 'RESIZE_CANVAS_OBJECTS'
+      readonly resizes: readonly { readonly objectId: string; readonly width: number; readonly height: number }[]
+    }
+  | {
+      readonly type: 'REORDER_CANVAS_OBJECTS'
+      readonly orders: readonly { readonly objectId: string; readonly zIndex: number }[]
+    }
+  | {
+      readonly type: 'LOCK_CANVAS_OBJECTS'
+      readonly objectIds: readonly string[]
+      readonly locked: boolean
+    }
+  | {
+      readonly type: 'DELETE_CANVAS_OBJECTS'
+      readonly objectIds: readonly string[]
+    }
   | {
       readonly type: 'SAVE_ITEM_EDITOR'
       readonly segmentId: string

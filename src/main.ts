@@ -27,6 +27,7 @@ import { createSourceItemSearchIndex } from './domain/item-source-search'
 import { getWieldOptions } from './domain/weapon-metadata'
 import { PixiBoardAdapter } from './pixi/PixiBoardAdapter'
 import { emptyBoardState, sampleState } from './sample-data'
+import { IMAGE_WORKER_URL, IMAGE_API_KEY } from './config'
 import type { ActorKind, CarryZone, CoinDenom, ItemCatalogRow, ItemKind } from './domain/types'
 import type { ConnectedUser, MainToWorkerMessage, RemoteCursor, SceneSegmentVM, SceneVM, WorkerToMainMessage } from './worker/protocol'
 import type { ItemCategory } from './domain/item-category'
@@ -1387,6 +1388,88 @@ const showNodeContextMenu = (nodeId: string, clientX: number, clientY: number): 
   }, 0)
 }
 
+const showCanvasObjectContextMenu = (objectId: string, clientX: number, clientY: number): void => {
+  closeContextMenu()
+  const obj = currentScene?.canvasObjects?.[objectId]
+  if (!obj) return
+
+  const items: string[] = []
+  if (obj.locked) {
+    items.push(`<button class="context-menu-item" data-action="unlock" type="button">Unlock</button>`)
+  } else {
+    items.push(`<button class="context-menu-item" data-action="lock" type="button">Lock</button>`)
+    items.push(`<button class="context-menu-item context-menu-submenu" data-action="arrange" type="button">Arrange ▸</button>`)
+    items.push(`<button class="context-menu-item" data-action="delete" type="button">Delete</button>`)
+  }
+  contextMenuEl.innerHTML = items.join('')
+  contextMenuEl.hidden = false
+
+  const padding = 8
+  const maxX = window.innerWidth - contextMenuEl.offsetWidth - padding
+  const maxY = window.innerHeight - contextMenuEl.offsetHeight - padding
+  contextMenuEl.style.left = `${Math.min(clientX, maxX)}px`
+  contextMenuEl.style.top = `${Math.min(clientY, maxY)}px`
+
+  contextMenuEl.querySelectorAll('.context-menu-item').forEach((btn) => {
+    const b = btn as HTMLButtonElement
+    b.addEventListener('click', (e) => {
+      e.stopPropagation()
+      const action = b.dataset.action
+      if (action === 'lock' || action === 'unlock') {
+        postToWorker({
+          type: 'INTENT',
+          intent: { type: 'LOCK_CANVAS_OBJECTS', objectIds: [objectId], locked: action === 'lock' },
+        })
+        setTimeout(closeContextMenu, 0)
+      } else if (action === 'delete') {
+        postToWorker({
+          type: 'INTENT',
+          intent: { type: 'DELETE_CANVAS_OBJECTS', objectIds: [objectId] },
+        })
+        setTimeout(closeContextMenu, 0)
+      } else if (action === 'arrange') {
+        // Show arrange submenu
+        const allObjects = Object.values(currentScene?.canvasObjects ?? {})
+        const zIndexes = allObjects.map((o) => o.zIndex)
+        const minZ = Math.min(...zIndexes, 0)
+        const maxZ = Math.max(...zIndexes, 0)
+        contextMenuEl.innerHTML = [
+          `<button class="context-menu-item" data-action="bring-front" type="button">Bring to Front</button>`,
+          `<button class="context-menu-item" data-action="bring-forward" type="button">Bring Forward</button>`,
+          `<button class="context-menu-item" data-action="send-backward" type="button">Send Backward</button>`,
+          `<button class="context-menu-item" data-action="send-back" type="button">Send to Back</button>`,
+        ].join('')
+        contextMenuEl.querySelectorAll('.context-menu-item').forEach((ab) => {
+          const a = ab as HTMLButtonElement
+          a.addEventListener('click', (ae) => {
+            ae.stopPropagation()
+            let newZ = obj.zIndex
+            if (a.dataset.action === 'bring-front') newZ = maxZ + 1
+            else if (a.dataset.action === 'bring-forward') newZ = obj.zIndex + 1
+            else if (a.dataset.action === 'send-backward') newZ = obj.zIndex - 1
+            else if (a.dataset.action === 'send-back') newZ = minZ - 1
+            postToWorker({
+              type: 'INTENT',
+              intent: { type: 'REORDER_CANVAS_OBJECTS', orders: [{ objectId, zIndex: newZ }] },
+            })
+            setTimeout(closeContextMenu, 0)
+          })
+        })
+      }
+    })
+  })
+
+  setTimeout(() => {
+    activeContextMenuClose = (event: Event): void => {
+      const target = event.target
+      if (target instanceof Node && contextMenuEl.contains(target)) return
+      closeContextMenu()
+    }
+    document.addEventListener('click', activeContextMenuClose)
+    document.addEventListener('contextmenu', activeContextMenuClose)
+  }, 0)
+}
+
 const showCanvasContextMenu = (
   worldX: number,
   worldY: number,
@@ -1945,6 +2028,66 @@ const pixiAdapter = new PixiBoardAdapter(canvasHost, {
   onCanvasContextMenu(worldX, worldY, clientX, clientY) {
     const groupId = pixiAdapter.getGroupIdAtPoint(worldX, worldY)
     showCanvasContextMenu(worldX, worldY, clientX, clientY, groupId)
+  },
+  onCanvasObjectContextMenu(objectId, clientX, clientY) {
+    showCanvasObjectContextMenu(objectId, clientX, clientY)
+  },
+  onMoveCanvasObjects(moves) {
+    postToWorker({ type: 'INTENT', intent: { type: 'MOVE_CANVAS_OBJECTS', moves } })
+  },
+  onResizeCanvasObject(objectId, width, height) {
+    postToWorker({ type: 'INTENT', intent: { type: 'RESIZE_CANVAS_OBJECTS', resizes: [{ objectId, width, height }] } })
+  },
+  async onImageFileDrop(file, worldX, worldY) {
+    try {
+      // Step 1: get upload URL
+      const authHeaders: Record<string, string> = IMAGE_API_KEY
+        ? { Authorization: `Bearer ${IMAGE_API_KEY}` }
+        : {}
+      const res = await fetch(`${IMAGE_WORKER_URL}/upload-url`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders },
+        body: JSON.stringify({ contentType: file.type, filename: file.name }),
+      })
+      if (!res.ok) throw new Error(`Upload URL request failed: ${res.status}`)
+      const { uploadUrl, publicUrl } = await res.json() as { uploadUrl: string; publicUrl: string }
+
+      // Step 2: upload to R2
+      const uploadRes = await fetch(uploadUrl, {
+        method: 'PUT',
+        headers: { 'Content-Type': file.type, ...authHeaders },
+        body: file,
+      })
+      if (!uploadRes.ok) throw new Error(`Upload failed: ${uploadRes.status}`)
+
+      // Step 3: get natural dimensions and scale
+      const dims = await new Promise<{ width: number; height: number }>((resolve, reject) => {
+        const img = new Image()
+        img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight })
+        img.onerror = reject
+        img.src = URL.createObjectURL(file)
+      })
+      const maxW = 800
+      const scale = dims.width > maxW ? maxW / dims.width : 1
+      const width = Math.round(dims.width * scale)
+      const height = Math.round(dims.height * scale)
+
+      // Step 4: add to canvas
+      postToWorker({
+        type: 'INTENT',
+        intent: {
+          type: 'ADD_CANVAS_OBJECT',
+          objectType: 'image',
+          x: worldX - width / 2,
+          y: worldY - height / 2,
+          width,
+          height,
+          data: { type: 'image', url: publicUrl },
+        },
+      })
+    } catch (err) {
+      console.error('Image upload failed:', err)
+    }
   },
   onSegmentClick(segmentId, _nodeId, addToSelection) {
     if (addToSelection) {

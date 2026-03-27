@@ -20,6 +20,8 @@ export const buildUpdateMetaPatch = (scene: SceneVM): Extract<ScenePatch, { type
   groups: scene.groups,
   freeSegments: scene.freeSegments,
   labels: scene.labels,
+  canvasObjects: scene.canvasObjects,
+  selectedCanvasObjectIds: scene.selectedCanvasObjectIds,
   selectedLabelId: scene.selectedLabelId,
 })
 
@@ -59,6 +61,8 @@ export const diffSceneVM = (prev: SceneVM | null, next: SceneVM): ScenePatch[] =
     JSON.stringify(prev.groups) !== JSON.stringify(next.groups) ||
     JSON.stringify(prev.freeSegments) !== JSON.stringify(next.freeSegments) ||
     JSON.stringify(prev.labels) !== JSON.stringify(next.labels) ||
+    JSON.stringify(prev.canvasObjects) !== JSON.stringify(next.canvasObjects) ||
+    JSON.stringify(prev.selectedCanvasObjectIds) !== JSON.stringify(next.selectedCanvasObjectIds) ||
     prev.selectedLabelId !== next.selectedLabelId ||
     (prev.selectedSegmentIds?.length ?? 0) !== (next.selectedSegmentIds?.length ?? 0) ||
     (prev.selectedSegmentIds ?? []).some((id, i) => (next.selectedSegmentIds ?? [])[i] !== id)

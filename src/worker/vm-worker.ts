@@ -133,6 +133,8 @@ let localState: WorkerLocalState = {
   pasteTargetNodeId: null,
   nodeContainment: {},
   labels: {},
+  canvasObjects: {},
+  selectedCanvasObjectIds: [],
   selectedLabelId: null,
 }
 let previousScene: SceneVM | null = null
@@ -314,6 +316,7 @@ function applyServerState(
       nodeTitleOverrides: {},
       nodeContainment: {},
       labels: {},
+      canvasObjects: {},
     }
     deriveWorkingFromServerAndPending()
     recompute()
@@ -1126,7 +1129,7 @@ const applyIntent = (intent: WorkerIntent): void => {
   }
 
   if (intent.type === 'SET_SELECTED_SEGMENTS') {
-    localState = { ...localState, selectedSegmentIds: intent.segmentIds, selectedNodeIds: [], selectedGroupIds: [], selectedLabelIds: [] }
+    localState = { ...localState, selectedSegmentIds: intent.segmentIds, selectedNodeIds: [], selectedGroupIds: [], selectedLabelIds: [], selectedCanvasObjectIds: [] }
     recompute()
     return
   }
@@ -1153,16 +1156,19 @@ const applyIntent = (intent: WorkerIntent): void => {
       const node = new Set(localState.selectedNodeIds)
       const group = new Set(localState.selectedGroupIds)
       const label = new Set(localState.selectedLabelIds)
+      const cobj = new Set(localState.selectedCanvasObjectIds)
       intent.selection.segmentIds.forEach((id) => seg.add(id))
       intent.selection.nodeIds.forEach((id) => node.add(id))
       intent.selection.groupIds.forEach((id) => group.add(id))
       intent.selection.labelIds.forEach((id) => label.add(id))
+      intent.selection.canvasObjectIds.forEach((id) => cobj.add(id))
       localState = {
         ...localState,
         selectedSegmentIds: [...seg],
         selectedNodeIds: [...node],
         selectedGroupIds: [...group],
         selectedLabelIds: [...label],
+        selectedCanvasObjectIds: [...cobj],
         selectedLabelId: [...label][0] ?? localState.selectedLabelId,
       }
     } else {
@@ -1170,7 +1176,8 @@ const applyIntent = (intent: WorkerIntent): void => {
         intent.selection.segmentIds.length === 0 &&
         intent.selection.nodeIds.length === 0 &&
         intent.selection.groupIds.length === 0 &&
-        intent.selection.labelIds.length === 0
+        intent.selection.labelIds.length === 0 &&
+        intent.selection.canvasObjectIds.length === 0
       let nextPasteTarget = localState.pasteTargetNodeId
       if (empty) {
         nextPasteTarget = null
@@ -1178,7 +1185,8 @@ const applyIntent = (intent: WorkerIntent): void => {
         intent.selection.segmentIds.length === 0 &&
         intent.selection.nodeIds.length === 1 &&
         intent.selection.groupIds.length === 0 &&
-        intent.selection.labelIds.length === 0
+        intent.selection.labelIds.length === 0 &&
+        intent.selection.canvasObjectIds.length === 0
       ) {
         nextPasteTarget = intent.selection.nodeIds[0] ?? null
       }
@@ -1188,6 +1196,7 @@ const applyIntent = (intent: WorkerIntent): void => {
         selectedNodeIds: [...intent.selection.nodeIds],
         selectedGroupIds: [...intent.selection.groupIds],
         selectedLabelIds: [...intent.selection.labelIds],
+        selectedCanvasObjectIds: [...intent.selection.canvasObjectIds],
         selectedLabelId: intent.selection.labelIds[0] ?? null,
         pasteTargetNodeId: nextPasteTarget,
       }
@@ -2392,6 +2401,93 @@ const applyIntent = (intent: WorkerIntent): void => {
     return
   }
 
+  // ── Canvas Objects ──────────────────────────────────────────────
+
+  if (intent.type === 'ADD_CANVAS_OBJECT') {
+    const objectId = intent.replay?.objectId ?? createFallbackReplayToken('canvas-obj')
+    const maxZ = Object.values(localState.canvasObjects).reduce((m, o) => Math.max(m, o.zIndex), 0)
+    localState = {
+      ...localState,
+      canvasObjects: {
+        ...localState.canvasObjects,
+        [objectId]: {
+          objectType: intent.objectType,
+          x: intent.x, y: intent.y,
+          width: intent.width, height: intent.height,
+          zIndex: maxZ + 1,
+          locked: false,
+          data: intent.data,
+        },
+      },
+      selectedCanvasObjectIds: [objectId],
+    }
+    recompute()
+    return
+  }
+
+  if (intent.type === 'MOVE_CANVAS_OBJECTS') {
+    const objs = { ...localState.canvasObjects }
+    for (const move of intent.moves) {
+      const existing = objs[move.objectId]
+      if (!existing) continue
+      objs[move.objectId] = { ...existing, x: move.x, y: move.y }
+    }
+    localState = { ...localState, canvasObjects: objs }
+    recompute()
+    return
+  }
+
+  if (intent.type === 'RESIZE_CANVAS_OBJECTS') {
+    const objs = { ...localState.canvasObjects }
+    for (const r of intent.resizes) {
+      const existing = objs[r.objectId]
+      if (!existing) continue
+      objs[r.objectId] = { ...existing, width: r.width, height: r.height }
+    }
+    localState = { ...localState, canvasObjects: objs }
+    recompute()
+    return
+  }
+
+  if (intent.type === 'REORDER_CANVAS_OBJECTS') {
+    const objs = { ...localState.canvasObjects }
+    for (const o of intent.orders) {
+      const existing = objs[o.objectId]
+      if (!existing) continue
+      objs[o.objectId] = { ...existing, zIndex: o.zIndex }
+    }
+    localState = { ...localState, canvasObjects: objs }
+    recompute()
+    return
+  }
+
+  if (intent.type === 'LOCK_CANVAS_OBJECTS') {
+    const objs = { ...localState.canvasObjects }
+    for (const id of intent.objectIds) {
+      const existing = objs[id]
+      if (!existing) continue
+      objs[id] = { ...existing, locked: intent.locked }
+    }
+    localState = { ...localState, canvasObjects: objs }
+    recompute()
+    return
+  }
+
+  if (intent.type === 'DELETE_CANVAS_OBJECTS') {
+    const objs = { ...localState.canvasObjects }
+    const deleteSet = new Set(intent.objectIds)
+    for (const id of intent.objectIds) {
+      delete objs[id]
+    }
+    localState = {
+      ...localState,
+      canvasObjects: objs,
+      selectedCanvasObjectIds: localState.selectedCanvasObjectIds.filter((id) => !deleteSet.has(id)),
+    }
+    recompute()
+    return
+  }
+
   if (intent.type === 'CATALOG_UPSERT_DEFINITION') {
     if (!worldState) return
     const d = intent.definition
@@ -2778,6 +2874,8 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       pasteTargetNodeId: null,
       nodeContainment: {},
       labels: {},
+      canvasObjects: {},
+      selectedCanvasObjectIds: [],
       selectedLabelId: null,
     }
     previousScene = null

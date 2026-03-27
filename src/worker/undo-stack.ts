@@ -120,6 +120,7 @@ export function applyUndoEntry(
     nodeTitleOverrides: selectiveRestore(currentLocal.nodeTitleOverrides, localSource.nodeTitleOverrides, localTarget.nodeTitleOverrides),
     nodeContainment: selectiveRestore(currentLocal.nodeContainment, localSource.nodeContainment, localTarget.nodeContainment),
     labels: selectiveRestore(currentLocal.labels, localSource.labels, localTarget.labels),
+    canvasObjects: selectiveRestore(currentLocal.canvasObjects, localSource.canvasObjects, localTarget.canvasObjects),
     stonesPerRow: localTarget.stonesPerRow,
   }
 

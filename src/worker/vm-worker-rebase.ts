@@ -37,6 +37,8 @@ export const ZERO_EPHEMERAL_LOCAL: WorkerLocalState = {
   pasteTargetNodeId: null,
   nodeContainment: {},
   labels: {},
+  canvasObjects: {},
+  selectedCanvasObjectIds: [],
   selectedLabelId: null,
 }
 
@@ -70,6 +72,7 @@ export function stripEphemeralLocalState(state: WorkerLocalState): PersistedLoca
     selectedGroupIds: _6,
     selectedLabelIds: _7,
     pasteTargetNodeId: _pt,
+    selectedCanvasObjectIds: _9,
     selectedLabelId: _8,
     ...persisted
   } = state
@@ -90,6 +93,7 @@ export function mergeServerLayoutWithEphemeral(
     selectedGroupIds: ephemeralSource.selectedGroupIds,
     selectedLabelIds: ephemeralSource.selectedLabelIds,
     pasteTargetNodeId: ephemeralSource.pasteTargetNodeId,
+    selectedCanvasObjectIds: ephemeralSource.selectedCanvasObjectIds,
     selectedLabelId: ephemeralSource.selectedLabelId,
     nodePositions: layout.nodePositions ?? {},
     groupPositions: layout.groupPositions ?? {},
@@ -110,6 +114,7 @@ export function mergeServerLayoutWithEphemeral(
     nodeTitleOverrides: layout.nodeTitleOverrides ?? {},
     nodeContainment: layout.nodeContainment ?? {},
     labels: layout.labels ?? {},
+    canvasObjects: layout.canvasObjects ?? {},
     stonesPerRow: layout.stonesPerRow ?? ephemeralSource.stonesPerRow,
   }
 }

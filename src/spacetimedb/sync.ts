@@ -35,6 +35,7 @@ function stripEphemeral(state: WorkerLocalState): PersistedLocalState {
     selectedGroupIds: _6,
     selectedLabelIds: _7,
     pasteTargetNodeId: _pt,
+    selectedCanvasObjectIds: _9,
     selectedLabelId: _8,
     ...persisted
   } = state
@@ -143,6 +144,14 @@ export function syncLocalState(
   diffGenericMap(oldP.labels, newP.labels,
     (id, v) => safe(`upsertLabel(${id})`, () => conn.reducers.upsertLabel({ labelId: c(id), text: v.text, x: v.x, y: v.y })),
     (id) => safe(`deleteLabel(${id})`, () => conn.reducers.deleteLabel({ labelId: c(id) })))
+
+  diffGenericMap(oldP.canvasObjects, newP.canvasObjects,
+    (id, v) => safe(`upsertCanvasObject(${id})`, () => (conn.reducers as any).upsertCanvasObject({
+      objectId: c(id), objectType: v.objectType, x: v.x, y: v.y,
+      width: v.width, height: v.height, zIndex: v.zIndex, locked: v.locked,
+      dataJson: JSON.stringify(v.data),
+    })),
+    (id) => safe(`deleteCanvasObject(${id})`, () => (conn.reducers as any).deleteCanvasObject({ objectId: c(id) })))
 
   if (oldP.stonesPerRow !== newP.stonesPerRow) {
     safe('upsertStonesPerRow', () =>

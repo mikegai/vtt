@@ -17,8 +17,8 @@ import { applyDropIntentToState } from '../vm/drop-intent'
 import { buildBoardVM } from '../vm/vm'
 import type { ActorRowVM } from '../vm/vm-types'
 import type { CanonicalState } from '../domain/types'
-import type { DropIntent } from './protocol'
-import type { SceneFreeSegmentVM, SceneGroupVM, SceneNodeVM, SceneVM } from './protocol'
+import type { CanvasObjectData, DropIntent } from './protocol'
+import type { SceneCanvasObjectVM, SceneFreeSegmentVM, SceneGroupVM, SceneNodeVM, SceneVM } from './protocol'
 
 export type WorkerLocalState = {
   readonly hoveredSegmentId: string | null
@@ -49,6 +49,11 @@ export type WorkerLocalState = {
   /** Containment relation: contained node id -> container node id. */
   readonly nodeContainment: Record<string, string>
   readonly labels: Record<string, { text: string; x: number; y: number }>
+  readonly canvasObjects: Record<string, {
+    objectType: string; x: number; y: number; width: number; height: number
+    zIndex: number; locked: boolean; data: CanvasObjectData
+  }>
+  readonly selectedCanvasObjectIds: readonly string[]
   readonly selectedLabelId: string | null
 }
 
@@ -649,6 +654,14 @@ export const buildSceneVM = (worldState: CanonicalState, localState: WorkerLocal
     labels: Object.fromEntries(
       Object.entries(localState.labels).map(([id, l]) => [id, { id, text: l.text, x: l.x, y: l.y }]),
     ),
+    canvasObjects: Object.fromEntries(
+      Object.entries(localState.canvasObjects ?? {}).map(([id, o]) => [id, {
+        id, objectType: o.objectType, x: o.x, y: o.y,
+        width: o.width, height: o.height, zIndex: o.zIndex,
+        locked: o.locked, data: o.data,
+      } satisfies SceneCanvasObjectVM]),
+    ),
+    selectedCanvasObjectIds: (localState.selectedCanvasObjectIds ?? []).filter((id) => !!(localState.canvasObjects ?? {})[id]),
     selectedLabelId: localState.selectedLabelId,
   }
 }

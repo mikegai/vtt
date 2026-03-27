@@ -32,6 +32,8 @@ const baseScene = (free: SceneVM['freeSegments']): SceneVM => ({
   groups: {},
   labels: {},
   selectedLabelId: null,
+  canvasObjects: {},
+  selectedCanvasObjectIds: [],
 })
 
 describe('freeSegmentsLayoutKey', () => {

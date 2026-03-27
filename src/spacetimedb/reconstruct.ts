@@ -271,6 +271,30 @@ export function reconstructLayoutState(conn: DbConnection, context: WorldCanvasC
     labels[labelId] = { text: row.text, x: row.x, y: row.y }
   }
 
+  const canvasObjects: Record<string, {
+    objectType: string; x: number; y: number; width: number; height: number
+    zIndex: number; locked: boolean; data: import('../worker/protocol').CanvasObjectData
+  }> = {}
+  // canvas_objects table may not exist yet if module bindings haven't been regenerated
+  const canvasObjectsTable = (conn.db as any).canvas_objects
+  for (const row of canvasObjectsTable?.iter?.() ?? []) {
+    if (row.worldId !== context.worldId || row.canvasId !== context.canvasId) continue
+    const objectId = withoutPrefix(row.objectId, cp)
+    if (!objectId) continue
+    let data: import('../worker/protocol').CanvasObjectData
+    try {
+      data = JSON.parse(row.dataJson) as import('../worker/protocol').CanvasObjectData
+    } catch {
+      continue
+    }
+    canvasObjects[objectId] = {
+      objectType: row.objectType, x: row.x, y: row.y,
+      width: row.width, height: row.height,
+      zIndex: row.zIndex, locked: row.locked,
+      data,
+    }
+  }
+
   let stonesPerRow: number | undefined
   for (const row of conn.db.settings.iter()) {
     if (row.worldId !== context.worldId || row.canvasId !== context.canvasId) continue
@@ -294,6 +318,7 @@ export function reconstructLayoutState(conn: DbConnection, context: WorldCanvasC
     nodeTitleOverrides,
     nodeContainment,
     labels,
+    canvasObjects,
     ...(stonesPerRow != null ? { stonesPerRow } : {}),
   }
 }

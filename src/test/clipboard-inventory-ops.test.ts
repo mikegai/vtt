@@ -61,6 +61,8 @@ describe('clipboard inventory ops', () => {
       groups: {},
       labels: {},
       selectedLabelId: null,
+      canvasObjects: {},
+      selectedCanvasObjectIds: [],
     }
     const doc = buildInventoryOpsClipboardFromSegments(scene, ['e1'])
     expect(doc).not.toBeNull()

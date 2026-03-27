@@ -508,6 +508,29 @@ const labels = table(
   }
 );
 
+const canvas_objects = table(
+  {
+    name: 'canvas_objects',
+    public: true,
+    indexes: [
+      { accessor: 'byWorldCanvas', name: 'idx_cobj_room', algorithm: 'btree' as const, columns: ['worldId', 'canvasId'] },
+    ],
+  },
+  {
+    objectId: t.string().primaryKey(),
+    worldId: t.string(),
+    canvasId: t.string(),
+    objectType: t.string(),
+    x: t.f64(),
+    y: t.f64(),
+    width: t.f64(),
+    height: t.f64(),
+    zIndex: t.i32(),
+    locked: t.bool(),
+    dataJson: t.string(),
+  }
+);
+
 const settings = table(
   {
     name: 'settings',
@@ -639,6 +662,7 @@ const spacetimedb = schema({
   node_title_overrides,
   node_containment,
   labels,
+  canvas_objects,
   settings,
   users,
   user_presences,
