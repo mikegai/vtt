@@ -31,6 +31,21 @@ export const Actors = __t.object("Actors", {
 });
 export type Actors = __Infer<typeof Actors>;
 
+export const CanvasObjects = __t.object("CanvasObjects", {
+  objectId: __t.string(),
+  worldId: __t.string(),
+  canvasId: __t.string(),
+  objectType: __t.string(),
+  x: __t.f64(),
+  y: __t.f64(),
+  width: __t.f64(),
+  height: __t.f64(),
+  zIndex: __t.i32(),
+  locked: __t.bool(),
+  dataJson: __t.string(),
+});
+export type CanvasObjects = __Infer<typeof CanvasObjects>;
+
 export const CanvasSlugHistory = __t.object("CanvasSlugHistory", {
   id: __t.string(),
   canvasId: __t.string(),

@@ -97,6 +97,7 @@ import UpsertSettingReducer from "./upsert_setting_reducer";
 
 // Import all table schema definitions
 import ActorsRow from "./actors_table";
+import CanvasObjectsRow from "./canvas_objects_table";
 import CanvasSlugHistoryRow from "./canvas_slug_history_table";
 import CanvasesRow from "./canvases_table";
 import CarryGroupsRow from "./carry_groups_table";
@@ -149,6 +150,21 @@ const tablesSchema = __schema({
       { name: 'actors_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, ActorsRow),
+  canvas_objects: __table({
+    name: 'canvas_objects',
+    indexes: [
+      { accessor: 'objectId', name: 'canvas_objects_object_id_idx_btree', algorithm: 'btree', columns: [
+        'objectId',
+      ] },
+      { accessor: 'byWorldCanvas', name: 'canvas_objects_world_id_canvas_id_idx_btree', algorithm: 'btree', columns: [
+        'worldId',
+        'canvasId',
+      ] },
+    ],
+    constraints: [
+      { name: 'canvas_objects_object_id_key', constraint: 'unique', columns: ['objectId'] },
+    ],
+  }, CanvasObjectsRow),
   canvas_slug_history: __table({
     name: 'canvas_slug_history',
     indexes: [
