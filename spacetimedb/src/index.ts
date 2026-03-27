@@ -1490,6 +1490,33 @@ export const delete_label = spacetimedb.reducer(
   }
 );
 
+// ─── Canvas Object Reducers ──────────────────────────────────────────────────
+
+export const upsert_canvas_object = spacetimedb.reducer(
+  {
+    objectId: t.string(), objectType: t.string(),
+    x: t.f64(), y: t.f64(), width: t.f64(), height: t.f64(),
+    zIndex: t.i32(), locked: t.bool(), dataJson: t.string(),
+  },
+  (ctx, args) => {
+    const { worldId, canvasId } = requireCanvasScope(args.objectId, 'canvas_objects');
+    const row = { ...args, worldId, canvasId };
+    const existing = ctx.db.canvas_objects.objectId.find(args.objectId);
+    if (existing) {
+      ctx.db.canvas_objects.objectId.update(row);
+    } else {
+      ctx.db.canvas_objects.insert(row);
+    }
+  }
+);
+
+export const delete_canvas_object = spacetimedb.reducer(
+  { objectId: t.string() },
+  (ctx, { objectId }) => {
+    ctx.db.canvas_objects.objectId.delete(objectId);
+  }
+);
+
 // ─── Settings Reducers ────────────────────────────────────────────────────────
 
 export const upsert_setting = spacetimedb.reducer(

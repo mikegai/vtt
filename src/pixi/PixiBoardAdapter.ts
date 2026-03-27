@@ -2896,6 +2896,7 @@ export class PixiBoardAdapter {
         __groupResizeHandle?: boolean
         __labelHandleId?: string
         __labelId?: string
+        __canvasObjectId?: string
       }
       if (
         c.__segmentContext ||
@@ -2904,7 +2905,8 @@ export class PixiBoardAdapter {
         c.__groupHandle ||
         c.__groupResizeHandle ||
         c.__labelHandleId ||
-        c.__labelId
+        c.__labelId ||
+        c.__canvasObjectId
       )
         return true
       cur = cur.parent
@@ -5277,21 +5279,49 @@ export class PixiBoardAdapter {
     ;(root as Container & { __canvasObjectId?: string }).__canvasObjectId = obj.id
     root.eventMode = 'static'
     root.cursor = obj.locked ? 'default' : 'move'
+    root.hitArea = new Rectangle(0, 0, obj.width, obj.height)
 
     let sprite: Sprite | undefined
     let lockIcon: Graphics | undefined
     let resizeHandle: Graphics | undefined
 
     if (obj.data.type === 'image') {
-      // Placeholder rect while loading
+      // Loading placeholder — visible while image downloads
       const placeholder = new Graphics()
+      placeholder.eventMode = 'none'
       placeholder.rect(0, 0, obj.width, obj.height)
-      placeholder.fill({ color: 0x1a2a44, alpha: 0.5 })
-      placeholder.stroke({ width: 1, color: 0x3a5a84, alpha: 0.6 })
+      placeholder.fill({ color: 0x1e3050, alpha: 0.6 })
+      placeholder.stroke({ width: 2, color: 0x5090cc })
+      // Diagonal lines pattern
+      const step = 20
+      for (let i = -obj.height; i < obj.width; i += step) {
+        placeholder.moveTo(Math.max(0, i), Math.max(0, -i))
+        placeholder.lineTo(
+          Math.min(obj.width, i + obj.height),
+          Math.min(obj.height, obj.height - Math.max(0, -i)),
+        )
+      }
+      placeholder.stroke({ width: 0.5, color: 0x5090cc, alpha: 0.3 })
+      // Center icon: image/landscape glyph
+      const iconSz = Math.min(36, obj.width * 0.2, obj.height * 0.2)
+      if (iconSz >= 12) {
+        const cx = obj.width / 2, cy = obj.height / 2
+        placeholder.roundRect(cx - iconSz * 0.6, cy - iconSz * 0.5, iconSz * 1.2, iconSz, 2)
+        placeholder.stroke({ width: 1.5, color: 0x88bbdd, alpha: 0.8 })
+        placeholder.circle(cx + iconSz * 0.25, cy - iconSz * 0.2, iconSz * 0.1)
+        placeholder.fill({ color: 0x88bbdd, alpha: 0.7 })
+      }
       root.addChild(placeholder)
 
-      Assets.load(obj.data.url).then((texture: Texture) => {
+      const imageUrl = obj.data.url
+      console.log(`[CanvasObject] Loading image for ${obj.id}: ${imageUrl}`)
+      Assets.load(imageUrl).then((texture: Texture) => {
         if (root.destroyed) return
+        if (!texture || texture.width < 1 || texture.height < 1) {
+          console.warn(`[CanvasObject] Bad texture for ${obj.id}`, texture)
+          return
+        }
+        console.log(`[CanvasObject] Loaded ${obj.id}: ${texture.width}x${texture.height}`)
         sprite = new Sprite(texture)
         sprite.width = obj.width
         sprite.height = obj.height
@@ -5299,13 +5329,13 @@ export class PixiBoardAdapter {
         root.removeChild(placeholder)
         placeholder.destroy()
         root.addChildAt(sprite, 0)
-        // Store sprite ref on view for resize
         const view = this.canvasObjectViews.get(obj.id)
         if (view && !view.sprite) {
           this.canvasObjectViews.set(obj.id, { ...view, sprite })
         }
-      }).catch(() => {
-        // Keep placeholder on load failure
+      }).catch((err) => {
+        console.warn(`[CanvasObject] Image load failed for ${obj.id}:`, err)
+        // Placeholder stays visible
       })
     }
 
@@ -5975,6 +6005,18 @@ export class PixiBoardAdapter {
     this.rebuildFreeSegments(scene)
   }
 
+  private rebuildCanvasObjects(scene: SceneVM): void {
+    for (const [, view] of this.canvasObjectViews) {
+      this.canvasObjectLayer.removeChild(view.root)
+      view.root.destroy({ children: true })
+    }
+    this.canvasObjectViews.clear()
+    const selectedCanvasObjIds = new Set(scene.selectedCanvasObjectIds ?? [])
+    Object.values(scene.canvasObjects ?? {}).forEach((obj) => {
+      this.canvasObjectViews.set(obj.id, this.createCanvasObject(obj, selectedCanvasObjIds.has(obj.id)))
+    })
+  }
+
   private rebuildFreeSegments(scene: SceneVM): void {
     for (const [, view] of this.freeSegmentViews) {
       view.root.parent?.removeChild(view.root)
@@ -6589,6 +6631,8 @@ export class PixiBoardAdapter {
           scene.selectedSegmentIds ?? [],
         )
       }
+      // Rebuild canvas objects (they arrive via UPDATE_META patches)
+      this.rebuildCanvasObjects(scene)
       this.pendingDragNodeMoveCommit = false
       this.updateSelectionOverlay()
       this.startSpringTicker()

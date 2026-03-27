@@ -35,14 +35,19 @@ export default {
         return unauthorized()
       }
 
-      const body = await request.json<{ contentType?: string; filename?: string }>()
+      const body = await request.json<{ contentType?: string; filename?: string; hash?: string }>()
       const contentType = body.contentType || 'application/octet-stream'
       const ext = extensionFromContentType(contentType)
-      const objectKey = `${crypto.randomUUID()}${ext}`
+      // Use content hash as key for dedup, fall back to UUID
+      const objectKey = body.hash ? `${body.hash}${ext}` : `${crypto.randomUUID()}${ext}`
 
-      // We use a two-step flow: client PUTs to our /upload/:key endpoint,
-      // which proxies to R2. This avoids needing R2 presigned URLs (which
-      // require the S3 API compatibility layer) and keeps the Worker simple.
+      // Check if object already exists (dedup)
+      const existing = body.hash ? await env.IMAGES.head(objectKey) : null
+      if (existing) {
+        const publicUrl = `${url.origin}/image/${objectKey}`
+        return json({ uploadUrl: '', publicUrl, objectKey, contentType, skipped: true })
+      }
+
       const uploadUrl = `${url.origin}/upload/${objectKey}`
       const publicUrl = `${url.origin}/image/${objectKey}`
 
@@ -68,8 +73,8 @@ export default {
       return json({ publicUrl, objectKey })
     }
 
-    // GET /image/:key — serve image from R2
-    if (request.method === 'GET' && url.pathname.startsWith('/image/')) {
+    // GET or HEAD /image/:key — serve image from R2
+    if ((request.method === 'GET' || request.method === 'HEAD') && url.pathname.startsWith('/image/')) {
       const objectKey = url.pathname.slice('/image/'.length)
       if (!objectKey) return json({ error: 'Missing object key' }, 400)
 
@@ -83,6 +88,10 @@ export default {
       headers.set('Cache-Control', 'public, max-age=31536000, immutable')
       headers.set('ETag', object.httpEtag)
 
+      if (request.method === 'HEAD') {
+        headers.set('Content-Length', String(object.size))
+        return new Response(null, { headers })
+      }
       return new Response(object.body, { headers })
     }
 

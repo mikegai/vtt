@@ -24,3 +24,5 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+/.wrangler/
+/cf-worker/.wrangler/

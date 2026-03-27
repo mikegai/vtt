@@ -275,9 +275,7 @@ export function reconstructLayoutState(conn: DbConnection, context: WorldCanvasC
     objectType: string; x: number; y: number; width: number; height: number
     zIndex: number; locked: boolean; data: import('../worker/protocol').CanvasObjectData
   }> = {}
-  // canvas_objects table may not exist yet if module bindings haven't been regenerated
-  const canvasObjectsTable = (conn.db as any).canvas_objects
-  for (const row of canvasObjectsTable?.iter?.() ?? []) {
+  for (const row of conn.db.canvas_objects.iter()) {
     if (row.worldId !== context.worldId || row.canvasId !== context.canvasId) continue
     const objectId = withoutPrefix(row.objectId, cp)
     if (!objectId) continue

@@ -2040,25 +2040,33 @@ const pixiAdapter = new PixiBoardAdapter(canvasHost, {
   },
   async onImageFileDrop(file, worldX, worldY) {
     try {
-      // Step 1: get upload URL
       const authHeaders: Record<string, string> = IMAGE_API_KEY
         ? { Authorization: `Bearer ${IMAGE_API_KEY}` }
         : {}
+
+      // Step 1: compute content hash for dedup
+      const arrayBuf = await file.arrayBuffer()
+      const hashBuf = await crypto.subtle.digest('SHA-256', arrayBuf)
+      const hashHex = Array.from(new Uint8Array(hashBuf)).map(b => b.toString(16).padStart(2, '0')).join('')
+
+      // Step 2: get upload URL (pass hash as desired key)
       const res = await fetch(`${IMAGE_WORKER_URL}/upload-url`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...authHeaders },
-        body: JSON.stringify({ contentType: file.type, filename: file.name }),
+        body: JSON.stringify({ contentType: file.type, filename: file.name, hash: hashHex }),
       })
       if (!res.ok) throw new Error(`Upload URL request failed: ${res.status}`)
-      const { uploadUrl, publicUrl } = await res.json() as { uploadUrl: string; publicUrl: string }
+      const { uploadUrl, publicUrl, skipped } = await res.json() as { uploadUrl: string; publicUrl: string; skipped?: boolean }
 
-      // Step 2: upload to R2
-      const uploadRes = await fetch(uploadUrl, {
-        method: 'PUT',
-        headers: { 'Content-Type': file.type, ...authHeaders },
-        body: file,
-      })
-      if (!uploadRes.ok) throw new Error(`Upload failed: ${uploadRes.status}`)
+      // Step 3: upload to R2 (skip if server says it already exists)
+      if (!skipped) {
+        const uploadRes = await fetch(uploadUrl, {
+          method: 'PUT',
+          headers: { 'Content-Type': file.type, ...authHeaders },
+          body: arrayBuf,
+        })
+        if (!uploadRes.ok) throw new Error(`Upload failed: ${uploadRes.status}`)
+      }
 
       // Step 3: get natural dimensions and scale
       const dims = await new Promise<{ width: number; height: number }>((resolve, reject) => {

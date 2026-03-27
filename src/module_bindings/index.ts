@@ -36,6 +36,7 @@ import {
 // Import all reducer arg schemas
 import ClearAllTablesReducer from "./clear_all_tables_reducer";
 import DeleteActorReducer from "./delete_actor_reducer";
+import DeleteCanvasObjectReducer from "./delete_canvas_object_reducer";
 import DeleteCarryGroupReducer from "./delete_carry_group_reducer";
 import DeleteCustomGroupReducer from "./delete_custom_group_reducer";
 import DeleteFreeSegmentPositionReducer from "./delete_free_segment_position_reducer";
@@ -71,6 +72,7 @@ import SetWorldStateReducer from "./set_world_state_reducer";
 import UpdateCameraReducer from "./update_camera_reducer";
 import UpdateCursorReducer from "./update_cursor_reducer";
 import UpsertActorReducer from "./upsert_actor_reducer";
+import UpsertCanvasObjectReducer from "./upsert_canvas_object_reducer";
 import UpsertCarryGroupReducer from "./upsert_carry_group_reducer";
 import UpsertCustomGroupReducer from "./upsert_custom_group_reducer";
 import UpsertFreeSegmentPositionReducer from "./upsert_free_segment_position_reducer";
@@ -638,6 +640,7 @@ const tablesSchema = __schema({
 const reducersSchema = __reducers(
   __reducerSchema("clear_all_tables", ClearAllTablesReducer),
   __reducerSchema("delete_actor", DeleteActorReducer),
+  __reducerSchema("delete_canvas_object", DeleteCanvasObjectReducer),
   __reducerSchema("delete_carry_group", DeleteCarryGroupReducer),
   __reducerSchema("delete_custom_group", DeleteCustomGroupReducer),
   __reducerSchema("delete_free_segment_position", DeleteFreeSegmentPositionReducer),
@@ -673,6 +676,7 @@ const reducersSchema = __reducers(
   __reducerSchema("update_camera", UpdateCameraReducer),
   __reducerSchema("update_cursor", UpdateCursorReducer),
   __reducerSchema("upsert_actor", UpsertActorReducer),
+  __reducerSchema("upsert_canvas_object", UpsertCanvasObjectReducer),
   __reducerSchema("upsert_carry_group", UpsertCarryGroupReducer),
   __reducerSchema("upsert_custom_group", UpsertCustomGroupReducer),
   __reducerSchema("upsert_free_segment_position", UpsertFreeSegmentPositionReducer),
