@@ -9,7 +9,7 @@ import { groupSixthsByStone } from '../domain/segment-sixths-layout'
 import type { Actor, CanonicalState, CoinDenom, InventoryEntry, ItemCatalogRow, ItemDefinition, ItemKind } from '../domain/types'
 import { getWieldOptions, isTwoHandedOnly } from '../domain/weapon-metadata'
 import { parseNodeId, segmentIdToEntryId } from '../vm/drop-intent'
-import { droppedGroupIdForActor, ensureDroppedGroup } from '../vm/dropped-ground'
+import { droppedGroupIdForActor, ensureDroppedGroup, resolveRenderableDropActorId } from '../vm/dropped-ground'
 import { createInventoryEntryId } from '../vm/inventory-ids'
 import {
   applyMoveNodeInGroup,
@@ -1078,6 +1078,35 @@ function collectCoinageConsolidation(
   }
 }
 
+/** Lay out free segments in a grid starting from (originX, originY), like inventory stones. */
+const layoutFreeSegmentsAsGrid = (
+  segments: readonly { id: string; segment: { sizeSixths: number } }[],
+  originX: number,
+  originY: number,
+): Record<string, { x: number; y: number }> => {
+  const positions: Record<string, { x: number; y: number }> = {}
+  const colLimit = 6 // stones per row, matching default node width
+  let col = 0
+  let row = 0
+  for (const seg of segments) {
+    const stoneSpan = Math.max(1, Math.ceil(seg.segment.sizeSixths / 6))
+    // Wrap if this item would exceed the row
+    if (col > 0 && col + stoneSpan > colLimit) {
+      col = 0
+      row += 1
+    }
+    const x = originX + col * (STONE_W + STONE_GAP)
+    const y = originY + row * (STONE_H + STONE_ROW_GAP)
+    positions[seg.id] = { x, y }
+    col += stoneSpan
+    if (col >= colLimit) {
+      col = 0
+      row += 1
+    }
+  }
+  return positions
+}
+
 const applyIntent = (intent: WorkerIntent): void => {
   if (!inReplay && isSyncIntent(intent)) {
     const shouldCaptureUndo = !suppressUndoCapture && isUndoableIntent(intent) && worldState
@@ -1896,12 +1925,38 @@ const applyIntent = (intent: WorkerIntent): void => {
     if (worldState) {
       pendingSnapFromInventoryBeforeIntent = new Set(Object.keys(worldState.inventoryEntries))
     }
+    const dropToCanvas = intent.x != null && intent.y != null && !intent.targetNodeId
+    let resolvedTargetNodeId = intent.targetNodeId
+
+    // For canvas/group drops, resolve the target actor upfront so SPAWN_ITEM_INSTANCE
+    // doesn't need x,y (which would cause all segments to get the same stacked position).
+    if (dropToCanvas && worldState && localState) {
+      const scene = buildSceneVM(worldState, localState)
+      const nearest = Object.values(scene.nodes).reduce<{ id: string; distSq: number } | null>((best, node) => {
+        const cx = node.x + node.width / 2
+        const cy = node.y + node.height / 2
+        const d = (cx - intent.x!) ** 2 + (cy - intent.y!) ** 2
+        if (!best || d < best.distSq) return { id: node.id, distSq: d }
+        return best
+      }, null)
+      if (nearest) {
+        const parsed = parseNodeId(nearest.id)
+        if (parsed.actorId && worldState.actors[parsed.actorId]) {
+          const actorId = resolveRenderableDropActorId(worldState, parsed.actorId)
+          worldState = ensureDroppedGroup(worldState, actorId)
+          const carryGroupId = droppedGroupIdForActor(actorId)
+          resolvedTargetNodeId = `${actorId}:dropped:${carryGroupId}`
+        }
+      }
+    }
+
+    const entryIdsBefore = worldState ? new Set(Object.keys(worldState.inventoryEntries)) : new Set<string>()
     const replayByItem = intent.replay?.spawnEntryIdsByItem ?? []
     runIntentBatch(intent.items.map((item, idx) => ({
       type: 'SPAWN_ITEM_INSTANCE' as const,
       itemDefId: item.itemDefId,
       quantity: item.quantity,
-      targetNodeId: intent.targetNodeId,
+      targetNodeId: resolvedTargetNodeId,
       itemName: item.itemName,
       sixthsPerUnit: item.sixthsPerUnit,
       itemKind: item.itemKind,
@@ -1915,6 +1970,47 @@ const applyIntent = (intent: WorkerIntent): void => {
       sixthsPerBundle: item.sixthsPerBundle,
       replay: replayByItem[idx] ? { entryIds: replayByItem[idx] } : undefined,
     })))
+
+    // Lay out newly created free segments in a grid at the click point
+    if (dropToCanvas && worldState && localState) {
+      const newEntryIds = new Set(
+        Object.keys(worldState.inventoryEntries).filter((id) => !entryIdsBefore.has(id)),
+      )
+      if (newEntryIds.size > 0) {
+        const scene = buildSceneVM(worldState, localState)
+        const newFreeSegments = Object.values(scene.freeSegments).filter((f) =>
+          newEntryIds.has(segmentIdToEntryId(f.id)),
+        )
+        if (newFreeSegments.length > 0) {
+          // For groups, positions are relative to the group origin
+          let originX = intent.x!
+          let originY = intent.y!
+          if (intent.groupId && scene.groups[intent.groupId]) {
+            const group = scene.groups[intent.groupId]
+            originX -= group.x
+            originY -= group.y
+          }
+
+          const positions = layoutFreeSegmentsAsGrid(newFreeSegments, originX, originY)
+          if (intent.groupId) {
+            const groupPositions = { ...localState.groupFreeSegmentPositions }
+            const existing = { ...(groupPositions[intent.groupId] ?? {}) }
+            for (const [segId, pos] of Object.entries(positions)) {
+              existing[segId] = pos
+            }
+            groupPositions[intent.groupId] = existing
+            localState = { ...localState, groupFreeSegmentPositions: groupPositions }
+          } else {
+            const freePositions = { ...localState.freeSegmentPositions }
+            for (const [segId, pos] of Object.entries(positions)) {
+              freePositions[segId] = pos
+            }
+            localState = { ...localState, freeSegmentPositions: freePositions }
+          }
+          recompute()
+        }
+      }
+    }
     return
   }
 

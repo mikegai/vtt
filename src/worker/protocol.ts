@@ -310,7 +310,10 @@ export type WorkerIntent =
     }
   | {
       readonly type: 'APPLY_ADD_ITEMS_OP'
-      readonly targetNodeId: string
+      readonly targetNodeId: string | null
+      readonly x?: number
+      readonly y?: number
+      readonly groupId?: string
       readonly items: readonly {
         readonly itemDefId: string
         readonly itemName: string

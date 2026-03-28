@@ -1313,6 +1313,7 @@ const showGroupContextMenu = (groupId: string, clientX: number, clientY: number)
   closeContextMenu()
 
   contextMenuEl.innerHTML = [
+    `<button class="context-menu-item" data-action="add-items" type="button">Add Items</button>`,
     `<button class="context-menu-item context-menu-item-danger" data-action="delete-group" type="button">Delete Group</button>`,
   ].join('')
   contextMenuEl.hidden = false
@@ -1327,7 +1328,10 @@ const showGroupContextMenu = (groupId: string, clientX: number, clientY: number)
     const b = btn as HTMLButtonElement
     b.addEventListener('click', (e) => {
       e.stopPropagation()
-      if (b.dataset.action === 'delete-group') {
+      if (b.dataset.action === 'add-items') {
+        const world = pixiAdapter.getWorldPosition(clientX, clientY)
+        showAddItemsDialogAtPoint(world.x, world.y, groupId)
+      } else if (b.dataset.action === 'delete-group') {
         postToWorker({ type: 'INTENT', intent: { type: 'DELETE_GROUP', groupId } })
       }
       setTimeout(closeContextMenu, 0)
@@ -1480,6 +1484,7 @@ const showCanvasContextMenu = (
   closeContextMenu()
 
   contextMenuEl.innerHTML = [
+    `<button class="context-menu-item" data-action="add-items" type="button">Add Items</button>`,
     `<button class="context-menu-item" data-action="add-inventory-node" type="button">Add Inventory Node</button>`,
     `<button class="context-menu-item" data-action="add-group" type="button">Add Group</button>`,
   ].join('')
@@ -1495,7 +1500,9 @@ const showCanvasContextMenu = (
     const b = btn as HTMLButtonElement
     b.addEventListener('click', (e) => {
       e.stopPropagation()
-      if (b.dataset.action === 'add-inventory-node') {
+      if (b.dataset.action === 'add-items') {
+        showAddItemsDialogAtPoint(worldX, worldY, groupId)
+      } else if (b.dataset.action === 'add-inventory-node') {
         postToWorker({
           type: 'INTENT',
           intent: { type: 'ADD_INVENTORY_NODE', x: worldX, y: worldY, groupId },
@@ -1650,6 +1657,9 @@ let activeParsedDrag: {
   enteredCanvas: boolean
 } | null = null
 let addItemsTargetNodeId: string | null = null
+let addItemsWorldX: number | null = null
+let addItemsWorldY: number | null = null
+let addItemsGroupId: string | null = null
 let addItemsRows: ParsedAddItemsRow[] = []
 let addItemsError: string | null = null
 let addItemsJson = ''
@@ -2743,7 +2753,11 @@ const buildApplyAddItemsPayload = (
   })
 }
 
-const postApplyAddItemsOp = (targetNodeId: string, rows: readonly ParsedAddItemsRow[]): void => {
+const postApplyAddItemsOp = (
+  targetNodeId: string | null,
+  rows: readonly ParsedAddItemsRow[],
+  point?: { x: number; y: number; groupId?: string | null },
+): void => {
   const items = buildApplyAddItemsPayload(rows)
   postToWorker({
     type: 'INTENT',
@@ -2751,6 +2765,7 @@ const postApplyAddItemsOp = (targetNodeId: string, rows: readonly ParsedAddItems
       type: 'APPLY_ADD_ITEMS_OP',
       targetNodeId,
       items,
+      ...(point ? { x: point.x, y: point.y, ...(point.groupId ? { groupId: point.groupId } : {}) } : {}),
     },
   })
 }
@@ -2760,8 +2775,12 @@ const applyAddItemsRowsToNode = (
   mode: 'auto' | 'manual',
   options?: { readonly closeDialog?: boolean },
 ): void => {
-  if (!addItemsTargetNodeId) return
-  postApplyAddItemsOp(addItemsTargetNodeId, rows)
+  if (!addItemsTargetNodeId && addItemsWorldX == null) return
+  const point =
+    addItemsWorldX != null && addItemsWorldY != null
+      ? { x: addItemsWorldX, y: addItemsWorldY, groupId: addItemsGroupId }
+      : undefined
+  postApplyAddItemsOp(addItemsTargetNodeId, rows, point)
   if (options?.closeDialog !== false) {
     addItemsDialog.close(mode === 'auto' ? 'auto' : 'manual')
   }
@@ -2896,12 +2915,11 @@ const refreshAddItemsParsed = (): void => {
   renderAddItemsRows()
 }
 
-const showAddItemsDialog = (nodeId: string, nodeTitle: string): void => {
+const resetAddItemsState = (): void => {
   if (addItemsLiveDebounce != null) {
     clearTimeout(addItemsLiveDebounce)
     addItemsLiveDebounce = null
   }
-  addItemsTargetNodeId = nodeId
   addItemsRows = []
   addItemsError = null
   addItemsJson = ''
@@ -2909,13 +2927,35 @@ const showAddItemsDialog = (nodeId: string, nodeTitle: string): void => {
   addItemsLivePreviewRows = []
   Object.keys(addItemsDisambiguationOverrides).forEach((k) => delete addItemsDisambiguationOverrides[k])
   Object.keys(addItemsLiveOverrides).forEach((k) => delete addItemsLiveOverrides[k])
+}
 
+const showAddItemsDialogAtPoint = (worldX: number, worldY: number, groupId: string | null): void => {
+  const groupTitle = groupId && currentScene?.groups[groupId]?.title
+  const title = groupTitle ? `Group: ${groupTitle}` : 'Canvas'
+  resetAddItemsState()
+  addItemsTargetNodeId = null
+  addItemsWorldX = worldX
+  addItemsWorldY = worldY
+  addItemsGroupId = groupId
+  showAddItemsDialogUI(title)
+}
+
+const showAddItemsDialog = (nodeId: string, nodeTitle: string): void => {
+  resetAddItemsState()
+  addItemsTargetNodeId = nodeId
+  addItemsWorldX = null
+  addItemsWorldY = null
+  addItemsGroupId = null
+  showAddItemsDialogUI(nodeTitle)
+}
+
+const showAddItemsDialogUI = (targetTitle: string): void => {
   addItemsDialog.innerHTML = `
     <form method="dialog" class="add-items-form">
       <div class="add-items-header">
         <div>
           <div class="add-items-title">Add Items</div>
-          <div class="add-items-subtitle">Target: ${escapeHtml(nodeTitle)}</div>
+          <div class="add-items-subtitle">Target: ${escapeHtml(targetTitle)}</div>
         </div>
         <button type="button" class="tool-button" id="add-items-close">Close</button>
       </div>
