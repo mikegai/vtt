@@ -1,7 +1,6 @@
 import './style.css'
 import { parseInventoryImportPlan } from './domain/inventory-import-plan'
 import {
-  extractQuantityAndName,
   parseInventoryText,
   splitInventoryClauses,
   type ParsedInventoryChunk,
@@ -1780,36 +1779,33 @@ const parseAddItemsRowsFromJson = (
   const rows: ParsedAddItemsRow[] = []
   addOps.forEach((op, opIndex) => {
     op.items.forEach((item: InventoryItemInput, itemIndex: number) => {
-      const clauses = splitInventoryClauses(item.text)
-      const useProto =
-        item.prototypeName?.trim() && clauses.length === 1 ? item.prototypeName.trim() : undefined
-      clauses.forEach((clause, chunkIndex) => {
-        const extracted = extractQuantityAndName(clause)
-        const match = resolveAddItemsCatalogMatch(extracted.candidateName, useProto, catalogRows)
-        const alts = match.alternatives.map((a) => ({ itemId: a.itemId, itemName: a.itemName }))
-        const rowKey = normalizeRowKey(opIndex, itemIndex, chunkIndex)
-        const resolved = resolveParsedItem(
-          clause,
-          extracted.candidateName,
-          (item.quantity ?? 1) * extracted.quantity,
-          match.confidence,
-          match.status,
-          match.resolvedItemId,
-          match.resolvedItemName,
-          alts,
-          rowKey,
-          catalogById,
-          item.encumbranceStone ?? extracted.stoneOverride,
-          item.wornClothing,
-          item.zoneHint,
-        )
-        rows.push({
-          ...resolved,
-          opIndex,
-          overrideKey: rowKey,
-          ...(item.prototypeName?.trim() ? { prototypeName: item.prototypeName.trim() } : {}),
-          ...(item.valueGp != null && Number.isFinite(item.valueGp) ? { valueGp: item.valueGp } : {}),
-        })
+      const useProto = item.prototypeName?.trim() || undefined
+      const candidateName = useProto ?? item.text.trim()
+      const quantity = item.quantity ?? 1
+      const match = resolveAddItemsCatalogMatch(candidateName, useProto, catalogRows)
+      const alts = match.alternatives.map((a) => ({ itemId: a.itemId, itemName: a.itemName }))
+      const rowKey = normalizeRowKey(opIndex, itemIndex, 0)
+      const resolved = resolveParsedItem(
+        item.text,
+        candidateName,
+        quantity,
+        match.confidence,
+        match.status,
+        match.resolvedItemId,
+        match.resolvedItemName,
+        alts,
+        rowKey,
+        catalogById,
+        item.encumbranceStone,
+        item.wornClothing,
+        item.zoneHint,
+      )
+      rows.push({
+        ...resolved,
+        opIndex,
+        overrideKey: rowKey,
+        ...(useProto ? { prototypeName: useProto } : {}),
+        ...(item.valueGp != null && Number.isFinite(item.valueGp) ? { valueGp: item.valueGp } : {}),
       })
     })
   })
