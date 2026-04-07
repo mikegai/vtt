@@ -2913,6 +2913,19 @@ const refreshAddItemsParsed = (): void => {
   addItemsError = parsed.error
   addItemsRows = parsed.rows
   renderAddItemsRows()
+
+  // Auto-apply: if every op is auto-if-clean and every row resolved, skip the preview
+  if (
+    !parsed.error &&
+    parsed.rows.length > 0 &&
+    parsed.ops.length > 0 &&
+    parsed.ops.every((op) => op.applyMode === 'auto-if-clean') &&
+    parsed.rows.every((row) => !!row.itemDefId)
+  ) {
+    addItemsJson = ''
+    addItemsRows = []
+    applyAddItemsRowsToNode(parsed.rows, 'auto')
+  }
 }
 
 const resetAddItemsState = (): void => {
